@@ -1,0 +1,9 @@
+# dsh-profile-stats bundle patch。
+#
+# 单包双面：宿主半区（index.js）读会话日志折叠用量，并注册两个只读路由
+#   GET  /api/dsh-profile-stats/snapshot
+#   POST /api/dsh-profile-stats/refresh
+# 浏览器半区（client.js）在左侧图标栏挂「个人主页」入口，主区渲染用量页。
+- insert:
+    - id: dsh-profile-stats
+      name: dsh-profile-stats

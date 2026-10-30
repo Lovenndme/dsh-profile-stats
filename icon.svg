@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Profile and token stats">
+  <defs>
+    <linearGradient id="dps-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3d7bfd"/>
+      <stop offset="1" stop-color="#12325f"/>
+    </linearGradient>
+    <linearGradient id="dps-bar" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#9cc4ff"/>
+      <stop offset="1" stop-color="#ffffff"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#dps-bg)"/>
+  <circle cx="128" cy="96" r="34" fill="none" stroke="#ffffff" stroke-width="13" stroke-linecap="round"/>
+  <path d="M60 200c6-31 34-49 68-49s62 18 68 49" fill="none" stroke="#ffffff" stroke-width="13" stroke-linecap="round"/>
+  <rect x="172" y="138" width="14" height="26" rx="7" fill="url(#dps-bar)" opacity="0.85"/>
+  <rect x="192" y="122" width="14" height="42" rx="7" fill="url(#dps-bar)" opacity="0.9"/>
+  <rect x="212" y="104" width="14" height="60" rx="7" fill="url(#dps-bar)"/>
+</svg>
