@@ -42,6 +42,27 @@ function cacheFile() {
   return path.join(dshHome(), 'dsh-profile-stats', 'cache.json')
 }
 
+/** 用户可编辑的身份覆盖文件：{ "name": "...", "handle": "@...", "avatar": "M" } */
+function identityFile() {
+  return path.join(dshHome(), 'dsh-profile-stats', 'profile.json')
+}
+
+function readIdentityOverride() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(identityFile(), 'utf8'))
+    if (!parsed || typeof parsed !== 'object') return null
+    const name = typeof parsed.name === 'string' ? parsed.name.trim() : ''
+    let handle = typeof parsed.handle === 'string' ? parsed.handle.trim() : ''
+    const avatar = typeof parsed.avatar === 'string' ? parsed.avatar.trim() : ''
+    if (!name && !handle && !avatar) return null
+    if (handle && !handle.startsWith('@')) handle = `@${handle}`
+    return { name, handle, avatar }
+  } catch {
+    // 文件不存在或写坏了都当作「没有覆盖」，回落到系统账户名。
+    return null
+  }
+}
+
 function toNumber(value) {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
@@ -556,8 +577,13 @@ export function apply(ctx) {
     } catch {
       host = ''
     }
-    const handle = (user || 'local').toLowerCase().replace(/\s+/g, '')
-    return { name: user || 'DSH 用户', handle: `@${handle}`, host }
+    // 优先级：profile.json 覆盖 → 系统账户名 → 兜底文案。
+    const override = readIdentityOverride()
+    const fallbackName = user || 'DSH 用户'
+    const name = (override && override.name) || fallbackName
+    const handle = (override && override.handle) || `@${(user || 'local').toLowerCase().replace(/\s+/g, '')}`
+    const avatar = String((override && override.avatar) || name || 'D').trim().charAt(0).toUpperCase() || 'D'
+    return { name, handle, avatar, source: override ? 'file' : 'os', host, file: identityFile() }
   }
 
   const snapshotBody = () => {

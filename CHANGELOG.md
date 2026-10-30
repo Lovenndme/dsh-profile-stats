@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.1.0 — 2026-10-31
+
+- 身份可覆盖：`$DSH_HOME/dsh-profile-stats/profile.json` 支持 `{"name","handle","avatar"}`，
+  优先级为 profile.json → 系统账户名 → 兜底文案；快照里的 `identity` 增加 `avatar` / `source` / `file`。
+
 ## 1.0.0 — 2026-10-31
 
 首次公开发布。

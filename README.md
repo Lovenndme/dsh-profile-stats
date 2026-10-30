@@ -62,13 +62,32 @@ plugin_manager(action: "install_bundle", target: "dsh-profile-stats")
 After installing, a **Profile** row appears in the left sidebar (person icon). Click it; the page
 renders immediately from a cached snapshot and rescans in the background.
 
+## Who is shown (name / handle / avatar)
+
+The identity block is read from this machine, not from any account. Precedence:
+
+1. **`$DSH_HOME/dsh-profile-stats/profile.json`** — optional, written by you:
+
+   ```json
+   { "name": "Mike", "handle": "@lovenndme", "avatar": "M" }
+   ```
+
+   `handle` gets a leading `@` if you omit it, `avatar` is optional (defaults to the first letter of
+   `name`). The file is re-read on every snapshot request, so editing it needs no restart.
+2. **The operating-system account name** (`os.userInfo().username`), handle `@<lowercased name>`.
+3. Fallback text `DSH 用户` / `@local` when the account name is unavailable.
+
+The snapshot reports `identity.source` (`file` or `os`) and `identity.file` (the exact path), so you can
+always tell which rule applied.
+
 ## Uninstall
 
-Disable or remove the bundle in **Plugins**. The plugin only writes one cache file; delete it if you
-want a clean slate:
+Disable or remove the bundle in **Plugins**. The plugin only writes two files; delete them if you want a
+clean slate:
 
 ```
 $DSH_HOME/dsh-profile-stats/cache.json      # default: ~/.dsh/dsh-profile-stats/cache.json
+$DSH_HOME/dsh-profile-stats/profile.json    # optional display-name override
 ```
 
 ## Data flow

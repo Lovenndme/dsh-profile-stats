@@ -760,7 +760,7 @@ window.__ModuleLoader__.load({
       const progress = snapshot && snapshot.progress ? snapshot.progress : { done: 0, total: 0 }
       const generatedAt = snapshot && snapshot.generatedAt ? new Date(snapshot.generatedAt) : null
 
-      const initial = String(identity.name || 'D').trim().charAt(0).toUpperCase() || 'D'
+      const initial = String(identity.avatar || identity.name || 'D').trim().charAt(0).toUpperCase() || 'D'
 
       const hasAnySession = Boolean(totals && totals.calls > 0)
       const daily = snapshot && Array.isArray(snapshot.daily) ? snapshot.daily : []
