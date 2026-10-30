@@ -40,13 +40,24 @@ minutes older). Use the provider breakdown to compare one billing route at a tim
 
 ## Install
 
-From the Harness UI: **Plugins → Discover**, search `dsh-profile-stats`, install.
+Three equivalent ways — use whichever your setup allows:
 
-Or with the plugin manager CLI/tool against your profile:
+**1. From this repository** (works today, no npm account or marketplace entry needed):
+
+```
+plugin_manager(action: "install_bundle", target: "github:Lovenndme/dsh-profile-stats")
+```
+
+which is the same as `dsh plugin add github:Lovenndme/dsh-profile-stats`. pnpm fetches the repo and
+installs the packed files; there is no build step and no dependency to approve.
+
+**2. From npm**, once published:
 
 ```
 plugin_manager(action: "install_bundle", target: "dsh-profile-stats")
 ```
+
+**3. From the marketplace**: **Plugins → Discover**, search `dsh-profile-stats`, install.
 
 After installing, a **Profile** row appears in the left sidebar (person icon). Click it; the page
 renders immediately from a cached snapshot and rescans in the background.
