@@ -345,7 +345,25 @@ window.__ModuleLoader__.load({
       let windowTokens = 0
       for (const cell of cells) windowTokens += cell.tokens
 
-      return { cells, months, levelOf, windowTokens, columns: column }
+      // 月份标签按列定位，列距只有 14px，而「10月」这类标签约 25px 宽：
+      // 起点若是被截断的残月（只覆盖几天），就会和下一个整月挤在一起。
+      // 这里按估算宽度做一次排布：和下一个标签抢位置时让位（丢掉的总是残月）。
+      const labelWidth = (label) => {
+        let units = 0
+        for (const char of String(label)) units += /[\u2e80-\u9fff\uff00-\uffef]/.test(char) ? 1.7 : 1
+        return units * 6.6
+      }
+      const spacedMonths = []
+      for (let index = 0; index < months.length; index += 1) {
+        const current = months[index]
+        const next = months[index + 1]
+        if (next && (next.column - current.column) * CELL_PITCH < labelWidth(current.label) + 6) continue
+        const previous = spacedMonths[spacedMonths.length - 1]
+        if (previous && (current.column - previous.column) * CELL_PITCH < labelWidth(previous.label) + 6) continue
+        spacedMonths.push(current)
+      }
+
+      return { cells, months: spacedMonths, levelOf, windowTokens, columns: column }
     }
 
     function heatBackground(level) {
