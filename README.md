@@ -1,116 +1,109 @@
 # dsh-profile-stats
 
-A personal usage profile page for the **DeepSeek Harness Web UI** (dsh). It adds one entry to the
-left sidebar — *Profile / 个人主页* — with the numbers people actually ask about:
+A personal usage profile page for the **DeepSeek Harness Web UI** (dsh). It adds one entry to the left
+sidebar — *Profile* — with the numbers people actually ask about.
 
-- **Cumulative tokens** with an input / output / cache-hit split, drawn as a donut chart
-- **Peak day** (plus peak step and peak session)
+**English** · [简体中文](README.zh.md)
+
+![The profile page](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/overview.png)
+
+| Token mix | Usage by model |
+|---|---|
+| ![Token mix donut](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/mix.png) | ![Tokens by model over time](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/model-chart.png) |
+
+| Activity heatmap | Billing route |
+|---|---|
+| ![12-month heatmap](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/heatmap.png) | ![Provider breakdown](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/providers.png) |
+
+## What it shows
+
+- **Cumulative tokens** as an input / output / cache-hit donut
+- **Today's tokens**
 - **Longest task** (longest `turn/start` → `turn/end` span)
-- **Longest streak / current streak** of active days
-- **Token activity heatmap** for the last 12 months with three scopes — **daily / weekly / cumulative**
-  (weekly fills a whole column; cumulative is the running total through that week). Hover shows only the
-  date and the abbreviated value; the weekly and cumulative scopes word the date as `week of …` /
-  `cumulative through the week of …` with a year-qualified date.
-- **Token by model** (last 14 days / all time) — vertical bars over time, one series per model, read from each step's `message.source.model`
+- **Longest / current streak** of active days
+- **Activity heatmap** for the last 12 months in three scopes — daily, weekly, and the running total —
+  with the date and the bucket's usage on hover
+- **Tokens by model** over time (last 14 days per day, all time per week), split into the Flash and Pro
+  families from each step's `message.source.model`
 - **Provider breakdown** (today / all time) — which billing route each token went through
 
-Everything is folded from **this machine's own session logs**. No network calls, no telemetry,
-no credentials, no upload.
+Everything is folded from **this machine's own session logs**.
 
 ## What each number means
 
 | Card | Definition |
 |---|---|
-| Cumulative tokens | Per `assistant/message` step: `max(totalTokens, input + output)` summed over all sessions. `totalTokens` from the provider already equals input + output + cache, so cache is counted once. |
-| Peak day | Highest single-day total. Peak step / peak session are recorded too and are available in the snapshot. |
-| Longest task | Longest span between a `turn/start` and its `turn/end` (turns interrupted without `turn/end` are not counted). |
-| Streaks | Active day = a local calendar day with at least one token. Current streak ends today (or yesterday, if today has no activity yet). |
-| Token mix | Input / output / cache-hit totals over the selected scope. |
+| Cumulative tokens | Per `assistant/message` step: `max(totalTokens, input + output)`, summed over all sessions. The provider's `totalTokens` already equals input + output + cache, so cache is counted once. |
+| Today's tokens | The same per-step sum restricted to today's local calendar day. |
+| Longest task | Longest span between a `turn/start` and its `turn/end`. Turns interrupted without a `turn/end` are not counted. |
+| Streaks | An active day has at least one token. The current streak ends today, or yesterday when today has no activity yet. |
+| Token mix | Input / output / cache-hit totals. **Input counts only uncached prompt tokens**; cache hits are separate, so input + cache-hit is the full prompt. |
+| Model split | Model class is a substring match on the model id: names containing `pro` count as Pro, names containing `flash` as Flash, everything else as Other. A bar labelled with the current model name therefore aggregates older variants of that family. |
 | Provider breakdown | Per-step `data.message.source.provider`, e.g. `wincode`, `arkcli-coding-plan`, `myapi`, `deepseek-account`. |
 
-### Why provider breakdown matters
+### Why the provider breakdown exists
 
-Gateway consoles often show `input + cache-hit + output` as a single “total tokens” figure. Since
-`cache-hit` is a **subset of** `input`, that sum counts the cache twice. On a real machine (measured
-2026-10-30) the gateway card said 340.15M for one token while `input + output` was 173.02M — and this
-plugin's number for that same provider was 172.21M (0.5% apart, explained by the scan being a few
-minutes older). Use the provider breakdown to compare one billing route at a time.
+Gateway consoles often show `input + cache-hit + output` as one "total tokens" figure. Because cache-hit
+is a **subset of** input, that sum counts the cache twice. On a measured machine (2026-10-30) a gateway
+card said 340.15M for one route while `input + output` was 173.02M; this plugin's own number for the same
+route was 172.21M (0.5% apart, explained by the scan being a few minutes older). Compare one billing route
+at a time and the totals line up.
 
 ## Requirements
 
 - DeepSeek Harness with the Web UI (desktop app or `dsh web`), **dsh >= 0.2.1-rc.5 < 0.3.0**.
-- No other plugin is required. Light/dark themes both supported (theme tokens only).
+- No other plugin required. Light and dark themes are both supported (theme tokens only).
 
 ## Install
 
-Three equivalent ways — use whichever your setup allows:
+Three ways; use whichever your setup allows.
 
-**1. From this repository** (works today, no npm account or marketplace entry needed):
-
-```
-plugin_manager(action: "install_bundle", target: "github:Lovenndme/dsh-profile-stats")
-```
-
-which is the same as `dsh plugin add github:Lovenndme/dsh-profile-stats`. pnpm fetches the repo and
-installs the packed files; there is no build step and no dependency to approve.
-
-**2. From npm**, once published:
+**1. From npm** (the one to pick if you want automatic or in-panel updates):
 
 ```
 plugin_manager(action: "install_bundle", target: "dsh-profile-stats")
 ```
 
+which is the same as `dsh plugin add dsh-profile-stats`.
+
+**2. From this repository** (no npm release needed):
+
+```
+plugin_manager(action: "install_bundle", target: "github:Lovenndme/dsh-profile-stats")
+```
+
 **3. From the marketplace**: **Plugins → Discover**, search `dsh-profile-stats`, install.
 
-After installing, a **Profile** row appears in the left sidebar (person icon). Click it; the page
-renders immediately from a cached snapshot and rescans in the background.
+After installing, a **Profile** row appears in the left sidebar (person icon). The page renders
+immediately from a cached snapshot and rescans in the background. The first scan of a large log corpus
+takes a couple of seconds; the cards show `—` and a `done/total` counter while it runs.
 
-### If the update fails
+## Updating
 
-The button asks the host to remove this bundle and then reinstall the requested version. If the reinstall
-fails (no network, a registry hiccup), the panel disappears with the bundle: reopen **Plugins** and install
-`dsh-profile-stats` again. Your data is untouched — the cache and `profile.json` live in ``,
-outside the package.
-## In-panel update button
+**In-panel button.** When the package was installed from the registry, the panel reads its own `latest`
+version from npm once every six hours and shows an `Update to x.y.z` button in the footer. Clicking it asks
+the host to remove and reinstall the bundle; the page reloads by itself once the new version is in place.
 
-The panel itself checks npm for a newer release (once per six hours, through the profile's plugin
-manager) and, when the package was installed **from the registry**, shows an `Update to x.y.z` button in
-the footer. Clicking it asks the host to remove and reinstall this bundle; the page reloads by itself once
-the new version is in place.
+**Third-party updaters.** An install from the registry can also be followed by a plugin such as
+`@sueleven/dsh-auto-update`, which lists outdated enabled packages on launch and updates them after you
+confirm. Both paths need a restart on the desktop profile.
 
-Two limits are deliberate:
+Two deliberate limits:
 
-- Installations from a git, tarball, or `link:` spec never show the button — a self-update there would
-  rewrite how you installed it.
-- On the **desktop** profile, the `dsh plugin` CLI and CLI-driven updaters are refused
-  (`profile "desktop" is managed exclusively by the Electron application`), so this button is the only
-  one-click path there. Web profiles can also use a third-party updater.
-## Keeping it up to date (for users)
+- Installations from a git, tarball, or `link:` spec never show the button, and registry updaters skip
+  them too — a self-update there would rewrite how you installed it. Install from npm if you want
+  automatic updates.
+- On the **desktop** profile the `dsh plugin` CLI is refused (`profile "desktop" is managed exclusively by
+  the Electron application`), so CLI-driven updaters cannot work there; the in-panel button can.
 
-DSH itself has no built-in bundle updater, and this plugin deliberately never phones home, so an
-installed copy only changes when you replace it. Two ways, in order of convenience:
+**If an update fails** after the old copy was removed, the panel disappears with the bundle: reopen
+**Plugins** and install `dsh-profile-stats` again. Your data is untouched — the cache and `profile.json`
+live in `$DSH_HOME`, outside the package.
 
-1. **Install once from npm, then let a third-party updater do the rest.** A package installed from the
-   registry (dependency spec `dsh-profile-stats` or `dsh-profile-stats@<range>`) can be checked and
-   replaced automatically by a plugin such as `@sueleven/dsh-auto-update`: on launch it lists installed,
-   enabled registry packages that have a newer version, asks for confirmation, then updates through the
-   official `dsh plugin --profile <name> add <pkg>@<version>` channel. **Restart DSH afterwards** — the
-   running module generation is only replaced on start.
-2. **Update by hand**: remove the bundle in **Plugins**, then install it again. The npm `latest` tag
-   resolves to the newest release, so re-installing is the update.
-
-Two things to know:
-
-- Installations from a **git or file spec** (`github:owner/repo`, a tarball, `link:`, a local folder) are
-  **not** covered by registry updaters — only npm installs are. If you want automatic updates, install
-  from npm rather than from this repository.
-- pnpm 11 holds back packages published very recently (`minimumReleaseAge`). Updaters that shell out to
-  `dsh plugin add` pass `--config.minimum-release-age=0`; when updating manually right after a release,
-  expect the new version to be held back for a few hours unless you disable that gate.
 ## Who is shown (name / handle / avatar)
 
-Nothing is hardcoded and nothing is read from an account: **a fresh install shows your own operating-system
-account name**. For example, a user whose OS account is `alice` sees `alice` and `@alice`. Precedence:
+Nothing is hardcoded and nothing is read from an account: **a fresh install shows your own
+operating-system account name**. Precedence:
 
 1. **`$DSH_HOME/dsh-profile-stats/profile.json`** — optional, written by you only if you want something
    other than the OS account name:
@@ -119,42 +112,35 @@ account name**. For example, a user whose OS account is `alice` sees `alice` and
    { "name": "Your Name", "handle": "@your-handle", "avatar": "Y" }
    ```
 
-   `handle` gets a leading `@` if you omit it, `avatar` is optional (defaults to the first letter of
-   `name`). The file is re-read on every snapshot request, so editing it needs no restart. This file lives
-   in your `$DSH_HOME`, is never shipped inside the package and never appears in this repository.
-2. **The operating-system account name** (`os.userInfo().username`), handle `@<lowercased name>` — the
-   default for everyone who installs the plugin.
+   `handle` gets a leading `@` if you omit it; `avatar` defaults to the first letter of `name`. The file is
+   re-read on every snapshot request, so editing it needs no restart. It lives in your `$DSH_HOME`, is
+   never shipped inside the package, and never appears in this repository.
+2. **The operating-system account name** (`os.userInfo().username`), handle `@<lowercased name>`.
 3. Fallback text `DSH 用户` / `@local` when the account name is unavailable.
 
 The snapshot reports `identity.source` (`file` or `os`) and `identity.file` (the exact path), so you can
 always tell which rule applied.
 
-## Uninstall
-
-Disable or remove the bundle in **Plugins**. The plugin only writes two files; delete them if you want a
-clean slate:
-
-```
-$DSH_HOME/dsh-profile-stats/cache.json      # default: ~/.dsh/dsh-profile-stats/cache.json
-$DSH_HOME/dsh-profile-stats/profile.json    # optional display-name override
-```
-
-## Data flow
+## Data flow and network surface
 
 Host half (`index.js`):
 
 - `GET  /api/dsh-profile-stats/snapshot` — current snapshot; `scanning: true` carries `progress`
 - `POST /api/dsh-profile-stats/refresh` — request a background rescan
-- Reads sessions through `ctx.sessionQuery` (`listSessions`, `readSession`), folds them per session and
-  caches the fold. Only sessions that are **still running** or **never folded** get re-read; finished
-  sessions reuse the cache.
-- Fork/seed sessions copy their source events into the log header (`inheritedEventCount`). Those copies
-  are excluded — unless the source session is gone from this machine, in which case the copies are the
-  only record and are counted.
+- `POST /api/dsh-profile-stats/update` — request the in-panel update (registry installs only)
+- Reads sessions through `ctx.sessionQuery` (`listSessions`, `readSession`), folds each session and caches
+  the fold; only sessions that are still running or were never folded get re-read.
+- Fork/seed sessions copy their source events into the log header (`inheritedEventCount`). Those copies are
+  excluded — unless the source session is gone from this machine, in which case the copies are the only
+  record and are counted.
 
-Client half (`client.js`): registers into `sidebar.panellist` (id `profile`) and the `main` slot
-(key `profile`), styles with theme tokens, and routes all visible text through the locale service
-(`en`, `zh`).
+Client half (`client.js`) registers into `sidebar.panellist` (id `profile`) and the `main` slot (key
+`profile`), styles with theme tokens, and routes all visible text through the locale service (`en`, `zh`).
+
+**The only outbound request** is `GET https://registry.npmjs.org/dsh-profile-stats/latest`, made at most
+once every six hours by the host to know whether a newer release exists. It sends no identifiers and no
+usage data, and a failure is silent. No telemetry, no credentials, nothing uploaded. Session logs never
+leave the machine.
 
 Snapshot fields:
 
@@ -162,17 +148,29 @@ Snapshot fields:
 totals:  tokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, calls,
          sessions, activeDays, firstDay, lastDay,
          peakDay {date, tokens}, peakStepTokens, peakSessionTokens, longestTurnMs,
-         longestStreak, currentStreak, byProvider {}
-daily[]: date, tokens, calls, inputTokens, outputTokens, cacheTokens, byProvider {}
+         longestStreak, currentStreak, byProvider {}, byModel {}
+daily[]: date, tokens, calls, inputTokens, outputTokens, cacheTokens, byProvider {}, byModel {}
+update:  installed, latest, available, canUpdate, running, lastResult
+```
+
+## Uninstall
+
+Disable or remove the bundle in **Plugins**. The plugin writes only these, both outside the package:
+
+```
+$DSH_HOME/dsh-profile-stats/cache.json      # default: ~/.dsh/dsh-profile-stats/cache.json
+$DSH_HOME/dsh-profile-stats/profile.json    # optional display-name override
+$DSH_HOME/dsh-profile-stats/update.json     # last in-panel update result
 ```
 
 ## Limitations
 
 - Local machine only: usage from other devices or other tools never enters these logs.
-- Numbers move while a session is active (the log has no fixed end); expect sub-1% drift between two
-  scans a few minutes apart.
+- Numbers move while a session is active (the log has no fixed end); expect sub-1% drift between two scans
+  a few minutes apart.
 - A day is bucketed by the host's local timezone; moving machines shifts historical buckets.
 - A session whose log cannot be read is counted in `failedSessions` and skipped, never guessed.
+- Model classes are substring matches, so a Pro/Flash label describes a family, not a single model id.
 
 ## Development
 
@@ -188,47 +186,9 @@ pwsh tools/release.ps1            # patch bump -> test -> commit -> push -> publ
 pwsh tools/release.ps1 minor      # or: minor / major / an explicit version / none
 ```
 
-The script never stores credentials: it reads a granular npm token (bypass 2FA, read/write on this
-package) from `` or `C:\Users\lenovo/.dsh/.npm-publish-token`.
+The script never stores credentials in the repository: it reads a granular npm token (bypass 2FA,
+read/write on this package) from `$env:NPM_TOKEN` or `$HOME/.dsh/.npm-publish-token`.
+
 ## License
 
 MIT © 2026 Lovenndme
-
----
-
-# 中文说明
-
-给 DeepSeek Harness Web UI 加一个**个人主页**面板：左侧图标栏多一个「个人主页」入口，主区显示
-
-- **累计 Token 数**（输入 / 输出 / 缓存命中拆分，环形图展示）
-- **单日峰值**（另记单次调用峰值、单会话峰值）
-- **最长任务用时**（同一 turn 内 `turn/start` → `turn/end` 的最大跨度）
-- **最长连续天数 / 当前连续天数**（活跃日按本机时区）
-- **Token 活动热力图**（近 12 个月，三档：**每天 / 每周 / 累计总量**；每周按整列聚合、累计为截至该周的累计值。
-  悬浮只显示「日期 + 缩写用量」；每周档文案为「{日期} 起的一周」，累计档为「累计至 {日期} 起的一周」（日期带年份））
-- **模型分布**（近 14 天 / 全部，按时间分桶的竖向柱状图，两个模型分色；模型名取自 message.source.model）
-- **供应商拆分**（今日 / 累计），按每一步的 `data.message.source.provider` 分组
-
-**数据全部来自本机会话日志**：不联网、不上报、不碰任何凭据。删掉缓存文件只会让下次重扫，数字不会和日志不一致。
-
-### 为什么需要「供应商拆分」
-
-很多网关面板的「总 Token」是 `输入 + 缓存命中 + 输出` 三列相加，而「缓存命中」本身就包含在「输入」里，等于把缓存算了两次。
-实测（2026-10-30）某网关对单个令牌显示 3.4 亿，而 `输入 + 输出` 只有 1.73 亿；本插件对同一 provider 的统计是 1.72 亿（差 0.5%，来自扫描时刻不同）。
-所以对账时请按 provider 逐家比较，不要直接和「总 Token」相减。
-
-### 安装
-
-在 Harness 里打开 **插件 → 发现**，搜索 `dsh-profile-stats` 安装；或用 `plugin_manager(action: "install_bundle", target: "dsh-profile-stats")`。
-装好后左侧出现「个人主页」一行，点开即用（先出缓存快照，再后台补扫）。
-
-### 要求
-
-DeepSeek Harness Web UI，**dsh >= 0.2.1-rc.5 < 0.3.0**。无其它插件依赖，明暗主题均支持（只用主题 token）。
-
-### 已知边界
-
-- 只统计本机日志：其它设备、其它工具的用量不在这里。
-- 会话进行中数字会动，两次扫描间隔几分钟通常有 1% 内的差异。
-- 按主机本地时区分日，换时区会让历史分档平移。
-- 日志读不出来的会话会计入 `failedSessions` 并跳过，不会瞎猜。
