@@ -307,6 +307,14 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** 周一为一周起点的当地日期。 */
+    function startOfWeek(date) {
+      const copy = startOfDay(date)
+      const weekday = (copy.getDay() + 6) % 7
+      copy.setDate(copy.getDate() - weekday)
+      return copy
+    }
+
     function localDateKey(date) {
       const year = date.getFullYear()
       const month = String(date.getMonth() + 1).padStart(2, '0')
@@ -520,10 +528,11 @@ window.__ModuleLoader__.load({
 .dps-chart-plot{position:relative;height:220px;min-width:0;padding-bottom:18px}
 .dps-chart-tick{position:absolute;left:0;right:0;border-top:1px dashed var(--dsw-alias-border-l2);pointer-events:none}
 .dps-chart-tick > span{position:absolute;right:0;top:-8px;font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;padding-left:4px;background:var(--dsw-alias-bg-layer-1)}
-.dps-chart-bars{position:absolute;left:0;right:0;top:0;bottom:18px;display:flex;align-items:flex-end;gap:4px}
+.dps-chart-scroll{position:absolute;left:0;right:0;top:0;bottom:18px;overflow-x:auto;overflow-y:hidden}
+.dps-chart-bars{position:relative;height:100%;display:flex;align-items:flex-end;gap:2px}
 .dps-chart-bucket{flex:1 1 0;min-width:0;height:100%;display:flex;flex-direction:column;justify-content:flex-end;position:relative}
 .dps-chart-pair{display:flex;align-items:flex-end;justify-content:center;gap:2px;width:100%;height:100%}
-.dps-chart-bar{width:45%;max-width:16px;border-radius:2px 2px 0 0;transition:opacity .12s ease-out}
+.dps-chart-bar{width:45%;max-width:10px;min-width:2px;border-radius:2px 2px 0 0;transition:opacity .12s ease-out}
 .dps-chart-bucket:hover .dps-chart-bar{opacity:.8}
 .dps-chart-label{position:absolute;top:100%;left:50%;transform:translateX(-50%);font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap;padding-top:4px}
 .dps-tip-row{display:flex;align-items:center;gap:6px;font-size:12px;white-space:nowrap}
@@ -881,58 +890,80 @@ window.__ModuleLoader__.load({
     ]
 
     /**
-     * 按时间的竖向柱状图：每个时间桶一组柱，按模型分色；顶部图例给出模型名与合计。
-     * 鼠标悬浮某个桶时，显示该时间点每个模型的 token 用量。
+     * 按时间的竖向柱状图：时间轴连续（没有数据的日期也占位），
+     * 近 14 天按天分桶、全部按周汇总，避免柱子互相挤压。
+     * 图例合计只统计当前范围内可见的桶；范围内为 0 的模型不出现。
      */
     function ModelChart(props) {
       const [range, setRange] = useState('recent')
       const [tip, setTip] = useState(null)
       const daily = props.daily || []
-      const totals = props.totals || {}
 
-      // 时间桶：按天聚合（沿用宿主的 daily.byModel），补齐空缺的日期。
       const byDate = new Map()
       for (const entry of daily) {
         if (entry && typeof entry.date === 'string') byDate.set(entry.date, entry)
       }
+
+      const today = startOfDay(new Date())
+      const todayKey = localDateKey(today)
+      const dayMs = DAY_MS
+      const dateFromKey = (key) =>
+        new Date(Number(key.slice(0, 4)), Number(key.slice(5, 7)) - 1, Number(key.slice(8, 10)))
+
+      // 起点：近 14 天固定回溯 13 天；全部则回到最早有数据的那天。
+      const keys = [...byDate.keys()].sort()
+      const firstDataKey = keys.length > 0 ? keys[0] : todayKey
+      const startKey =
+        range === 'recent' ? localDateKey(new Date(today.getTime() - 13 * dayMs)) : firstDataKey
+      if (dateFromKey(startKey).getTime() > today.getTime()) return null
+
+      // 先铺满连续的「天」，再按范围决定是否折叠成「周」。
       const days = []
-      const todayKey = localDateKey(startOfDay(new Date()))
-      const parsed = [...byDate.keys()].sort()
-      const firstKey = parsed.length > 0 ? parsed[0] : todayKey
-      const limit = range === 'recent' ? 14 : 0
-      const startKey = limit > 0 ? localDateKey(startOfDay(new Date(Date.now() - (limit - 1) * DAY_MS))) : firstKey
-      const cursor = new Date(
-        Number(startKey.slice(0, 4)),
-        Number(startKey.slice(5, 7)) - 1,
-        Number(startKey.slice(8, 10)),
-      )
-      for (let guard = 0; guard < 400; guard += 1) {
+      const cursor = dateFromKey(startKey)
+      for (let guard = 0; guard < 800; guard += 1) {
         const key = localDateKey(cursor)
         const entry = byDate.get(key)
-        days.push({
-          key,
-          label: key.slice(5).replace('-', '/'),
-          values: MODEL_SERIES.map((series) => toNumber(entry && entry.byModel && entry.byModel[series.key])),
-        })
-        if (key >= todayKey) break
+        days.push({ key, entry })
+        if (cursor.getTime() >= today.getTime()) break
         cursor.setDate(cursor.getDate() + 1)
       }
 
+      const bucketsMap = new Map()
+      for (const day of days) {
+        const bucketKey =
+          range === 'recent'
+            ? day.key
+            : localDateKey(startOfWeek(dateFromKey(day.key)))
+        const bucket = bucketsMap.get(bucketKey) || { key: bucketKey, values: MODEL_SERIES.map(() => 0) }
+        MODEL_SERIES.forEach((series, index) => {
+          const value = toNumber(day.entry && day.entry.byModel && day.entry.byModel[series.key])
+          if (value > 0) bucket.values[index] += value
+        })
+        bucketsMap.set(bucketKey, bucket)
+      }
+      const buckets = [...bucketsMap.values()].sort((left, right) => (left.key < right.key ? -1 : 1))
+
+      // 图例合计只算当前范围，且只保留有量的模型。
+      const totalsInRange = MODEL_SERIES.map((_, index) =>
+        buckets.reduce((sum, bucket) => sum + bucket.values[index], 0),
+      )
+      const series = MODEL_SERIES.filter((_, index) => totalsInRange[index] > 0)
+      if (series.length === 0) return null
+
       let max = 0
-      for (const day of days) for (const value of day.values) if (value > max) max = value
+      for (const bucket of buckets) {
+        for (const value of bucket.values) if (value > max) max = value
+      }
       if (max <= 0) return null
 
-      const buckets = days.filter((day) => day.values.some((value) => value > 0))
-      if (buckets.length === 0) return null
-
-      // X 轴标签抽稀：宽度有限，最多约 8 个。
       const stride = Math.max(1, Math.ceil(buckets.length / 8))
+      const labelOf = (key) => key.slice(5).replace('-', '/')
 
       const showTip = (bucket) => (event) => {
         const target = event && event.currentTarget
         if (!target || typeof target.getBoundingClientRect !== 'function') return
         const rect = target.getBoundingClientRect()
-        const halfWidth = 110
+        const halfWidth = 120
         const centerX = rect.left + rect.width / 2
         const viewportWidth = typeof window !== 'undefined' && window.innerWidth ? window.innerWidth : 1200
         setTip({
@@ -962,6 +993,20 @@ window.__ModuleLoader__.load({
         ),
       )
 
+      const legend = h(
+        'div',
+        { className: 'dps-chart-legend' },
+        series.map((item, index) =>
+          h(
+            'span',
+            { className: 'dps-chart-legend-item', key: item.key },
+            h('span', { className: 'dps-dot', style: { background: item.color } }),
+            item.name,
+            h('span', { className: 'dps-chart-legend-total' }, formatTokens(totalsInRange[MODEL_SERIES.indexOf(item)])),
+          ),
+        ),
+      )
+
       const ticks = [1, 0.75, 0.5, 0.25]
       const plot = h(
         'div',
@@ -975,41 +1020,36 @@ window.__ModuleLoader__.load({
         ),
         h(
           'div',
-          { className: 'dps-chart-bars' },
-          buckets.map((bucket, index) =>
-            h(
-              'div',
-              { className: 'dps-chart-bucket', key: bucket.key, onMouseEnter: showTip(bucket), onMouseLeave: () => setTip(null) },
+          { className: 'dps-chart-scroll' },
+          h(
+            'div',
+            { className: 'dps-chart-bars', style: { minWidth: `${buckets.length * 14}px` } },
+            buckets.map((bucket, index) =>
               h(
                 'div',
-                { className: 'dps-chart-pair' },
-                bucket.values.map((value, seriesIndex) =>
-                  h('div', {
-                    key: MODEL_SERIES[seriesIndex].key,
-                    className: 'dps-chart-bar',
-                    style: {
-                      height: `${max > 0 ? (value / max) * 100 : 0}%`,
-                      background: MODEL_SERIES[seriesIndex].color,
-                    },
-                  }),
+                {
+                  className: 'dps-chart-bucket',
+                  key: bucket.key,
+                  onMouseEnter: showTip(bucket),
+                  onMouseLeave: () => setTip(null),
+                },
+                h(
+                  'div',
+                  { className: 'dps-chart-pair' },
+                  series.map((item) =>
+                    h('div', {
+                      key: item.key,
+                      className: 'dps-chart-bar',
+                      style: {
+                        height: `${max > 0 ? (bucket.values[MODEL_SERIES.indexOf(item)] / max) * 100 : 0}%`,
+                        background: item.color,
+                      },
+                    }),
+                  ),
                 ),
+                index % stride === 0 ? h('div', { className: 'dps-chart-label' }, labelOf(bucket.key)) : null,
               ),
-              index % stride === 0 ? h('div', { className: 'dps-chart-label' }, bucket.label) : null,
             ),
-          ),
-        ),
-      )
-
-      const legend = h(
-        'div',
-        { className: 'dps-chart-legend' },
-        MODEL_SERIES.map((series) =>
-          h(
-            'span',
-            { className: 'dps-chart-legend-item', key: series.key },
-            h('span', { className: 'dps-dot', style: { background: series.color } }),
-            series.name,
-            h('span', { className: 'dps-chart-legend-total' }, formatTokens(toNumber(totals.byModel && totals.byModel[series.key]))),
           ),
         ),
       )
@@ -1018,18 +1058,18 @@ window.__ModuleLoader__.load({
         ? h(
             'div',
             { className: 'dps-tip', style: { left: `${tip.x}px`, top: `${tip.y}px`, transform: 'translate(-50%, -100%)' } },
-            h('div', { className: 'dps-tip-date' }, tip.bucket.key),
-            MODEL_SERIES.map((series, index) =>
-              tip.bucket.values[index] > 0
-                ? h(
-                    'div',
-                    { className: 'dps-tip-row', key: series.key },
-                    h('span', { className: 'dps-dot', style: { background: series.color } }),
-                    h('span', null, series.name),
-                    h('span', { className: 'dps-tip-value' }, formatTokens(tip.bucket.values[index])),
-                  )
-                : null,
-            ),
+            h('div', { className: 'dps-tip-date' }, range === 'recent' ? tip.bucket.key : `${tip.bucket.key} 起的一周`),
+            series.map((item) => {
+              const value = tip.bucket.values[MODEL_SERIES.indexOf(item)]
+              if (!(value > 0)) return null
+              return h(
+                'div',
+                { className: 'dps-tip-row', key: item.key },
+                h('span', { className: 'dps-dot', style: { background: item.color } }),
+                h('span', null, item.name),
+                h('span', { className: 'dps-tip-value' }, formatTokens(value)),
+              )
+            }),
           )
         : null
 
