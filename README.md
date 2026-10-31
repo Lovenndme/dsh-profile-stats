@@ -64,17 +64,21 @@ renders immediately from a cached snapshot and rescans in the background.
 
 ## Who is shown (name / handle / avatar)
 
-The identity block is read from this machine, not from any account. Precedence:
+Nothing is hardcoded and nothing is read from an account: **a fresh install shows your own operating-system
+account name**. For example, a user whose OS account is `alice` sees `alice` and `@alice`. Precedence:
 
-1. **`$DSH_HOME/dsh-profile-stats/profile.json`** — optional, written by you:
+1. **`$DSH_HOME/dsh-profile-stats/profile.json`** — optional, written by you only if you want something
+   other than the OS account name:
 
    ```json
-   { "name": "Mike", "handle": "@lovenndme", "avatar": "M" }
+   { "name": "Your Name", "handle": "@your-handle", "avatar": "Y" }
    ```
 
    `handle` gets a leading `@` if you omit it, `avatar` is optional (defaults to the first letter of
-   `name`). The file is re-read on every snapshot request, so editing it needs no restart.
-2. **The operating-system account name** (`os.userInfo().username`), handle `@<lowercased name>`.
+   `name`). The file is re-read on every snapshot request, so editing it needs no restart. This file lives
+   in your `$DSH_HOME`, is never shipped inside the package and never appears in this repository.
+2. **The operating-system account name** (`os.userInfo().username`), handle `@<lowercased name>` — the
+   default for everyone who installs the plugin.
 3. Fallback text `DSH 用户` / `@local` when the account name is unavailable.
 
 The snapshot reports `identity.source` (`file` or `os`) and `identity.file` (the exact path), so you can
