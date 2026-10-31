@@ -138,6 +138,15 @@ daily[]: date, tokens, calls, inputTokens, outputTokens, cacheTokens, byProvider
 - Client changes only need a page refresh.
 - `index.js` exports `apply` / `inject` only; `client.js` registers through `window.__ModuleLoader__`.
 
+## Release (maintainer)
+
+```
+pwsh tools/release.ps1            # patch bump -> test -> commit -> push -> publish -> verify
+pwsh tools/release.ps1 minor      # or: minor / major / an explicit version / none
+```
+
+The script never stores credentials: it reads a granular npm token (bypass 2FA, read/write on this
+package) from `` or `C:\Users\lenovo/.dsh/.npm-publish-token`.
 ## License
 
 MIT © 2026 Lovenndme
