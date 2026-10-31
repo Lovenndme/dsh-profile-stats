@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.2 — 2026-10-31
+
+- README 增补「用户如何保持最新」：仅 registry 安装可被第三方 updater 检测；更新走官方 add 通道；需重启生效；pnpm 11 minimumReleaseAge 的注意点。
+
 ## 1.3.1 — 2026-10-31
 
 - 移除 Token 构成下方的口径说明文字（界面不再出现解释性文案）。

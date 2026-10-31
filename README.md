@@ -64,6 +64,28 @@ plugin_manager(action: "install_bundle", target: "dsh-profile-stats")
 After installing, a **Profile** row appears in the left sidebar (person icon). Click it; the page
 renders immediately from a cached snapshot and rescans in the background.
 
+## Keeping it up to date (for users)
+
+DSH itself has no built-in bundle updater, and this plugin deliberately never phones home, so an
+installed copy only changes when you replace it. Two ways, in order of convenience:
+
+1. **Install once from npm, then let a third-party updater do the rest.** A package installed from the
+   registry (dependency spec `dsh-profile-stats` or `dsh-profile-stats@<range>`) can be checked and
+   replaced automatically by a plugin such as `@sueleven/dsh-auto-update`: on launch it lists installed,
+   enabled registry packages that have a newer version, asks for confirmation, then updates through the
+   official `dsh plugin --profile <name> add <pkg>@<version>` channel. **Restart DSH afterwards** — the
+   running module generation is only replaced on start.
+2. **Update by hand**: remove the bundle in **Plugins**, then install it again. The npm `latest` tag
+   resolves to the newest release, so re-installing is the update.
+
+Two things to know:
+
+- Installations from a **git or file spec** (`github:owner/repo`, a tarball, `link:`, a local folder) are
+  **not** covered by registry updaters — only npm installs are. If you want automatic updates, install
+  from npm rather than from this repository.
+- pnpm 11 holds back packages published very recently (`minimumReleaseAge`). Updaters that shell out to
+  `dsh plugin add` pass `--config.minimum-release-age=0`; when updating manually right after a release,
+  expect the new version to be held back for a few hours unless you disable that gate.
 ## Who is shown (name / handle / avatar)
 
 Nothing is hardcoded and nothing is read from an account: **a fresh install shows your own operating-system
