@@ -43,7 +43,6 @@ window.__ModuleLoader__.load({
       'breakdown.input': 'Input',
       'breakdown.output': 'Output',
       'breakdown.cache': 'Cache hit',
-      'breakdown.note': 'Input counts only uncached prompt tokens; cache hits are listed separately - together they are the full prompt.',
       'tip.none': 'No activity',
       'tip.tokens': '{value} tokens',
       'tip.week': 'Week of {date}',
@@ -91,7 +90,6 @@ window.__ModuleLoader__.load({
       'breakdown.input': '输入',
       'breakdown.output': '输出',
       'breakdown.cache': '缓存命中',
-      'breakdown.note': '输入只算未命中的 prompt；缓存命中单独计列，二者相加才是完整 prompt。',
       'tip.none': '无活动',
       'tip.tokens': '{value} tokens',
       'tip.week': '{date} 起的一周',
@@ -753,7 +751,6 @@ window.__ModuleLoader__.load({
           'div',
           { className: 'dps-mix-legend' },
           rows,
-          h('div', { className: 'dps-section-note', style: { marginTop: '4px' } }, t('breakdown.note')),
         ),
       )
     }
