@@ -47,7 +47,7 @@ window.__ModuleLoader__.load({
       'tip.tokens': '{value} tokens',
       'tip.calls': '{count} requests',
       'tip.week': 'Week of {date}',
-      'tip.cumulative': 'Cumulative through {date}',
+      'tip.cumulative': 'Cumulative through the week of {date}',
       'mode.day': 'Daily',
       'mode.week': 'Weekly',
       'mode.total': 'Cumulative',
@@ -94,8 +94,8 @@ window.__ModuleLoader__.load({
       'tip.none': '无活动',
       'tip.tokens': '{value} tokens',
       'tip.calls': '{count} 次请求',
-      'tip.week': '{date} 起一周',
-      'tip.cumulative': '累计至 {date}',
+      'tip.week': '{date} 起的一周',
+      'tip.cumulative': '累计至 {date} 起的一周',
       'mode.day': '每天',
       'mode.week': '每周',
       'mode.total': '累计总量',
@@ -266,6 +266,19 @@ window.__ModuleLoader__.load({
       const copy = new Date(date.getTime())
       copy.setHours(0, 0, 0, 0)
       return copy
+    }
+
+    /** 'YYYY-MM-DD' → 本地化的完整日期（总是带年份），周/累计档的悬浮提示用。 */
+    function formatCellDateFull(key) {
+      const parts = String(key || '').split('-')
+      if (parts.length !== 3) return String(key || '')
+      const date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]))
+      if (Number.isNaN(date.getTime())) return String(key)
+      try {
+        return new Intl.DateTimeFormat(currentLocaleId(), { year: 'numeric', month: 'long', day: 'numeric' }).format(date)
+      } catch {
+        return String(key)
+      }
     }
 
     /** 'YYYY-MM-DD' → 本地化的「月日」（跨年时带年份），热力图悬浮提示用。 */
@@ -611,7 +624,7 @@ window.__ModuleLoader__.load({
         if (mode === 'week') {
           const value = toNumber(tip.week.weekTokens)
           return [
-            h('div', { className: 'dps-tip-date', key: 'd' }, t('tip.week', { date: formatCellDate(tip.week.startKey) })),
+            h('div', { className: 'dps-tip-date', key: 'd' }, t('tip.week', { date: formatCellDateFull(tip.week.startKey) })),
             h(
               'div',
               { className: 'dps-tip-value', key: 'v' },
@@ -626,7 +639,7 @@ window.__ModuleLoader__.load({
         if (mode === 'total') {
           const value = toNumber(tip.week.cumulativeTokens)
           return [
-            h('div', { className: 'dps-tip-date', key: 'd' }, t('tip.cumulative', { date: formatCellDate(tip.week.endKey) })),
+            h('div', { className: 'dps-tip-date', key: 'd' }, t('tip.cumulative', { date: formatCellDateFull(tip.week.startKey) })),
             h(
               'div',
               { className: 'dps-tip-value', key: 'v' },
