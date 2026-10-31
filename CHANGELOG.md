@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.1 — 2026-10-31
+
+- 精简版式：去掉热力图的「少/多」色阶图例，去掉「供应商拆分」左侧的口径说明（今日/累计切换保留）。
+
 ## 1.1.0 — 2026-10-31
 
 - 身份可覆盖：`$DSH_HOME/dsh-profile-stats/profile.json` 支持 `{"name","handle","avatar"}`，

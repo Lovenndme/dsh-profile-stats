@@ -40,8 +40,6 @@ window.__ModuleLoader__.load({
       'section.breakdown': 'Token mix',
       'note.range': 'last 12 months',
       'note.total': '{value} in total',
-      'legend.less': 'Less',
-      'legend.more': 'More',
       'breakdown.input': 'Input',
       'breakdown.output': 'Output',
       'breakdown.cache': 'Cache hit',
@@ -72,8 +70,6 @@ window.__ModuleLoader__.load({
       'provider.deepseek-modlens': 'DeepSeek ModLens',
       'provider.unknown': 'Unknown',
       'provider.other': 'Other',
-      'provider.basis.today': 'Grouped by billing route for {date}',
-      'provider.basis.all': 'Grouped by billing route, all time',
     }
 
     const ZH = {
@@ -87,8 +83,6 @@ window.__ModuleLoader__.load({
       'section.breakdown': 'Token 构成',
       'note.range': '近 12 个月',
       'note.total': '共 {value}',
-      'legend.less': '少',
-      'legend.more': '多',
       'breakdown.input': '输入',
       'breakdown.output': '输出',
       'breakdown.cache': '缓存命中',
@@ -119,8 +113,6 @@ window.__ModuleLoader__.load({
       'provider.deepseek-modlens': 'DeepSeek ModLens',
       'provider.unknown': '未知来源',
       'provider.other': '其他',
-      'provider.basis.today': '{date} 按网关计费口径分组',
-      'provider.basis.all': '全部历史按网关计费口径分组',
     }
 
     const localeBridge = {
@@ -436,7 +428,7 @@ window.__ModuleLoader__.load({
 .dps-tip-value{font-size:12px;line-height:1.5;font-weight:600;font-variant-numeric:tabular-nums}
 .dps-tip-exact{font-size:10px;line-height:1.4;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
 .dps-prov-card{display:flex;flex-direction:column;gap:12px}
-.dps-prov-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.dps-prov-head{display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap}
 .dps-prov{display:flex;flex-direction:column;gap:9px}
 .dps-prov-row{display:grid;grid-template-columns:132px minmax(60px,1fr) auto 48px;gap:10px;align-items:center;font-size:12px}
 .dps-prov-name{color:var(--dsw-alias-label-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -448,9 +440,6 @@ window.__ModuleLoader__.load({
 .dps-switch button{appearance:none;border:none;background:transparent;color:var(--dsw-alias-label-secondary);font-size:11px;padding:4px 10px;cursor:pointer;font-family:inherit}
 .dps-switch button[data-active="true"]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
 .dps-month{position:absolute;top:0;white-space:nowrap}
-.dps-heat-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--dsw-alias-label-secondary)}
-.dps-legend{display:flex;align-items:center;gap:6px}
-.dps-legend-cell{width:11px;height:11px;border-radius:2.5px;background:var(--dsw-alias-bg-layer-2);box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l1)}
 .dps-bar{display:flex;height:8px;border-radius:999px;overflow:hidden;background:var(--dsw-alias-bg-layer-2);margin:12px 0 14px}
 .dps-bar-seg{height:100%}
 .dps-bar-legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--dsw-alias-label-secondary)}
@@ -572,20 +561,6 @@ window.__ModuleLoader__.load({
         ),
       )
 
-      const legend = h(
-        'div',
-        { className: 'dps-legend' },
-        h('span', null, t('legend.less')),
-        [0, 1, 2, 3, 4].map((level) =>
-          h('span', {
-            key: level,
-            className: 'dps-legend-cell',
-            style: level > 0 ? { background: heatBackground(level), boxShadow: 'none' } : undefined,
-          }),
-        ),
-        h('span', null, t('legend.more')),
-      )
-
       return h(
         'div',
         { className: 'dps-card dps-heat' },
@@ -596,7 +571,6 @@ window.__ModuleLoader__.load({
           h('span', { className: 'dps-section-note' }, t('note.total', { value: formatTokens(heat.windowTokens) })),
         ),
         h('div', null, h('div', { className: 'dps-heat-grid' }, cells), h('div', { className: 'dps-months' }, monthNodes)),
-        h('div', { className: 'dps-heat-foot' }, legend),
         tooltip,
       )
     }
@@ -731,15 +705,10 @@ window.__ModuleLoader__.load({
         ),
       )
 
-      const basis =
-        scope === 'today'
-          ? t('provider.basis.today', { date: (today && today.date) || '' })
-          : t('provider.basis.all')
-
       return h(
         'div',
         { className: 'dps-card dps-prov-card' },
-        h('div', { className: 'dps-prov-head' }, h('span', { className: 'dps-section-note' }, basis), toggle),
+        h('div', { className: 'dps-prov-head' }, toggle),
         list,
       )
     }
