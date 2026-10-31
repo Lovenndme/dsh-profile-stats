@@ -3,7 +3,7 @@
 A personal usage profile page for the **DeepSeek Harness Web UI** (dsh). It adds one entry to the
 left sidebar — *Profile / 个人主页* — with the numbers people actually ask about:
 
-- **Cumulative tokens** with an input / output / cache-hit split
+- **Cumulative tokens** with an input / output / cache-hit split, drawn as a donut chart
 - **Peak day** (plus peak step and peak session)
 - **Longest task** (longest `turn/start` → `turn/end` span)
 - **Longest streak / current streak** of active days
@@ -148,7 +148,7 @@ MIT © 2026 Lovenndme
 
 给 DeepSeek Harness Web UI 加一个**个人主页**面板：左侧图标栏多一个「个人主页」入口，主区显示
 
-- **累计 Token 数**（输入 / 输出 / 缓存命中拆分）
+- **累计 Token 数**（输入 / 输出 / 缓存命中拆分，环形图展示）
 - **单日峰值**（另记单次调用峰值、单会话峰值）
 - **最长任务用时**（同一 turn 内 `turn/start` → `turn/end` 的最大跨度）
 - **最长连续天数 / 当前连续天数**（活跃日按本机时区）

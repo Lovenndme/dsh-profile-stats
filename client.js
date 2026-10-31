@@ -43,6 +43,7 @@ window.__ModuleLoader__.load({
       'breakdown.input': 'Input',
       'breakdown.output': 'Output',
       'breakdown.cache': 'Cache hit',
+      'breakdown.note': 'Input counts only uncached prompt tokens; cache hits are listed separately - together they are the full prompt.',
       'tip.none': 'No activity',
       'tip.tokens': '{value} tokens',
       'tip.week': 'Week of {date}',
@@ -90,6 +91,7 @@ window.__ModuleLoader__.load({
       'breakdown.input': '输入',
       'breakdown.output': '输出',
       'breakdown.cache': '缓存命中',
+      'breakdown.note': '输入只算未命中的 prompt；缓存命中单独计列，二者相加才是完整 prompt。',
       'tip.none': '无活动',
       'tip.tokens': '{value} tokens',
       'tip.week': '{date} 起的一周',
@@ -505,9 +507,13 @@ window.__ModuleLoader__.load({
 .dps-switch button{appearance:none;border:none;background:transparent;color:var(--dsw-alias-label-secondary);font-size:11px;padding:4px 10px;cursor:pointer;font-family:inherit}
 .dps-switch button[data-active="true"]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
 .dps-month{position:absolute;top:0;white-space:nowrap}
-.dps-bar{display:flex;height:8px;border-radius:999px;overflow:hidden;background:var(--dsw-alias-bg-layer-2);margin:12px 0 14px}
-.dps-bar-seg{height:100%}
-.dps-bar-legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--dsw-alias-label-secondary)}
+.dps-mix{display:flex;align-items:center;gap:22px;flex-wrap:wrap}
+.dps-mix-chart{flex:0 0 auto;line-height:0}
+.dps-mix-legend{flex:1 1 240px;display:flex;flex-direction:column;gap:7px;font-size:12px}
+.dps-mix-row{display:grid;grid-template-columns:10px 1fr auto 52px;gap:8px;align-items:center}
+.dps-mix-label{color:var(--dsw-alias-label-secondary)}
+.dps-mix-value{font-weight:600;font-variant-numeric:tabular-nums}
+.dps-mix-share{color:var(--dsw-alias-label-secondary);text-align:right;font-variant-numeric:tabular-nums}
 .dps-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:1px}
 .dps-value{color:var(--dsw-alias-label-primary);font-variant-numeric:tabular-nums}
 .dps-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--dsw-alias-label-secondary)}
@@ -667,6 +673,53 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** 环形图：用 stroke-dasharray 画弧，三段（输入/输出/缓存）各自成扇形。 */
+    function DonutChart(props) {
+      const segments = props.segments || []
+      const size = props.size || 120
+      const thickness = props.thickness || 16
+      const total = segments.reduce((sum, segment) => sum + toNumber(segment.value), 0)
+      const radius = (size - thickness) / 2
+      const circumference = 2 * Math.PI * radius
+      const center = size / 2
+      let offset = 0
+      const arcs = []
+      for (const segment of segments) {
+        const value = toNumber(segment.value)
+        if (!(value > 0) || total <= 0) continue
+        const length = (value / total) * circumference
+        arcs.push(
+          h('circle', {
+            key: segment.key,
+            cx: center,
+            cy: center,
+            r: radius,
+            fill: 'none',
+            stroke: segment.color,
+            strokeWidth: thickness,
+            strokeLinecap: 'butt',
+            strokeDasharray: `${Math.max(length - 1, 0.5)} ${circumference}`,
+            strokeDashoffset: -offset,
+            transform: `rotate(-90 ${center} ${center})`,
+          }),
+        )
+        offset += length
+      }
+      return h(
+        'svg',
+        { width: size, height: size, viewBox: `0 0 ${size} ${size}`, role: 'img', 'aria-label': props.label || '' },
+        h('circle', {
+          cx: center,
+          cy: center,
+          r: radius,
+          fill: 'none',
+          stroke: 'var(--dsw-alias-bg-layer-2)',
+          strokeWidth: thickness,
+        }),
+        arcs,
+      )
+    }
+
     function Breakdown(props) {
       const totals = props.totals
       const segments = [
@@ -681,37 +734,28 @@ window.__ModuleLoader__.load({
       ]
       const sum = segments.reduce((total, segment) => total + segment.value, 0)
 
-      const bar = h(
-        'div',
-        { className: 'dps-bar', role: 'presentation' },
-        segments.map((segment) =>
-          h('div', {
-            key: segment.key,
-            className: 'dps-bar-seg',
-            style: {
-              width: `${sum > 0 ? (segment.value / sum) * 100 : 0}%`,
-              background: segment.color,
-            },
-            title: `${segment.label} · ${formatTokens(segment.value)}`,
-          }),
+      const rows = segments.map((segment) =>
+        h(
+          'div',
+          { className: 'dps-mix-row', key: segment.key },
+          h('span', { className: 'dps-dot', style: { background: segment.color } }),
+          h('span', { className: 'dps-mix-label' }, segment.label),
+          h('span', { className: 'dps-mix-value' }, formatTokens(segment.value)),
+          h('span', { className: 'dps-mix-share' }, `${sum > 0 ? ((segment.value / sum) * 100).toFixed(1) : '0.0'}%`),
         ),
       )
 
-      const legend = h(
+      return h(
         'div',
-        { className: 'dps-bar-legend' },
-        segments.map((segment) =>
-          h(
-            'span',
-            { key: segment.key },
-            h('span', { className: 'dps-dot', style: { background: segment.color } }),
-            `${segment.label} `,
-            h('span', { className: 'dps-value' }, formatTokens(segment.value)),
-          ),
+        { className: 'dps-card dps-mix' },
+        h('div', { className: 'dps-mix-chart' }, h(DonutChart, { segments, size: 124, thickness: 18, label: t('section.breakdown') })),
+        h(
+          'div',
+          { className: 'dps-mix-legend' },
+          rows,
+          h('div', { className: 'dps-section-note', style: { marginTop: '4px' } }, t('breakdown.note')),
         ),
       )
-
-      return h('div', { className: 'dps-card' }, bar, legend)
     }
 
     const PROVIDER_COLORS = [
@@ -837,15 +881,29 @@ window.__ModuleLoader__.load({
       const stats = h(
         'div',
         { className: 'dps-stats' },
-        h(StatCard, { label: t('stat.tokens'), value: totals ? formatTokens(totals.tokens) : '—' }),
-        h(StatCard, { label: t('stat.peak'), value: totals ? formatTokens(totals.peakDay ? totals.peakDay.tokens : 0) : '—', sub: peakSub }),
+        h(StatCard, { label: t('stat.tokens'), value: hasAnySession ? formatTokens(totals.tokens) : '—' }),
+        h(StatCard, {
+          label: t('stat.peak'),
+          value: hasAnySession ? formatTokens(totals.peakDay ? totals.peakDay.tokens : 0) : '—',
+          sub: hasAnySession ? peakSub : undefined,
+        }),
         h(StatCard, {
           label: t('stat.longestTurn'),
-          value: totals ? formatDuration(totals.longestTurnMs) : '—',
+          value: hasAnySession ? formatDuration(totals.longestTurnMs) : '—',
         }),
-        h(StatCard, { label: t('stat.longestStreak'), value: totals ? formatDays(totals.longestStreak) : '—' }),
-        h(StatCard, { label: t('stat.currentStreak'), value: totals ? formatDays(totals.currentStreak) : '—' }),
+        h(StatCard, { label: t('stat.longestStreak'), value: hasAnySession ? formatDays(totals.longestStreak) : '—' }),
+        h(StatCard, { label: t('stat.currentStreak'), value: hasAnySession ? formatDays(totals.currentStreak) : '—' }),
       )
+
+      // 首次统计期间卡片显示「—」而不是一堆 0，并在下方给出进度，避免看起来像没数据。
+      const scanningHint =
+        scanning && !hasAnySession
+          ? h(
+              'div',
+              { className: 'dps-section-note', style: { marginTop: '-16px', textAlign: 'center' } },
+              progress.total > 0 ? `${t('status.loading')} ${progress.done}/${progress.total}` : t('status.loading'),
+            )
+          : null
 
       let statusLine
       if (scanning) {
@@ -906,6 +964,7 @@ window.__ModuleLoader__.load({
             h('div', { className: 'dps-handle' }, identity.handle || '@local'),
           ),
           stats,
+          scanningHint,
           errorBlock,
           emptyBlock,
           h(

@@ -516,23 +516,41 @@ export function apply(ctx) {
         pending.sort((left, right) => Number(right.live) - Number(left.live))
 
         state.progress = { done: 0, total: pending.length }
-        for (let index = 0; index < pending.length; index += 1) {
-          const target = pending[index]
-          try {
-            const snapshot = await ctx.sessionQuery.readSession(target.id)
-            state.cache.sessions[target.id] = foldSnapshot(snapshot)
-            delete state.errors[target.id]
-          } catch (error) {
-            state.errors[target.id] = error && error.message ? String(error.message) : String(error)
-            console.warn(
-              `[dsh-profile-stats] 会话 ${target.id} 折叠失败：`,
-              error && error.message ? error.message : error,
-            )
+        // 并行读几个会话（zstd 解压 + JSON 解析有 I/O 成分，串行会让冷启动白等），
+        // 同时每 4 个会话才重建一次聚合，避免 O(n²) 的重复合并。
+        const CONCURRENCY = Math.min(4, Math.max(1, pending.length))
+        let cursor = 0
+        let done = 0
+        const worker = async () => {
+          for (;;) {
+            const index = cursor
+            cursor += 1
+            if (index >= pending.length) return
+            const target = pending[index]
+            try {
+              const snapshot = await ctx.sessionQuery.readSession(target.id)
+              state.cache.sessions[target.id] = foldSnapshot(snapshot)
+              delete state.errors[target.id]
+            } catch (error) {
+              state.errors[target.id] = error && error.message ? String(error.message) : String(error)
+              console.warn(
+                `[dsh-profile-stats] 会话 ${target.id} 折叠失败：`,
+                error && error.message ? error.message : error,
+              )
+            }
+            done += 1
+            state.progress = { done, total: pending.length }
+            if (done % 4 === 0) rebuild()
+            // 每 16 个会话落一次盘：首次全量扫描被打断（关应用/崩溃）时，
+            // 下次启动只需补扫剩下的部分，不必从头再来。
+            if (done % 16 === 0) {
+              state.cache.generatedAt = Date.now()
+              writeCache(state.cache)
+            }
+            await yieldToLoop()
           }
-          state.progress = { done: index + 1, total: pending.length }
-          rebuild()
-          if (index % 3 === 2) await yieldToLoop()
         }
+        await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()))
 
         state.generatedAt = Date.now()
         state.cache.generatedAt = state.generatedAt
