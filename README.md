@@ -64,6 +64,12 @@ plugin_manager(action: "install_bundle", target: "dsh-profile-stats")
 After installing, a **Profile** row appears in the left sidebar (person icon). Click it; the page
 renders immediately from a cached snapshot and rescans in the background.
 
+### If the update fails
+
+The button asks the host to remove this bundle and then reinstall the requested version. If the reinstall
+fails (no network, a registry hiccup), the panel disappears with the bundle: reopen **Plugins** and install
+`dsh-profile-stats` again. Your data is untouched — the cache and `profile.json` live in ``,
+outside the package.
 ## In-panel update button
 
 The panel itself checks npm for a newer release (once per six hours, through the profile's plugin

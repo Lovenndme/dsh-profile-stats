@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.2 — 2026-10-31
+
+- README 补充自更新失败的恢复步骤（remove 成功但 install 失败时插件会消失，需在插件页重装；数据不受影响）。
+
 ## 1.4.1 — 2026-10-31
 
 - 修复版本探测：改用 registry 的 `/<name>/latest` 读最新版（`pluginManager.inspect` 对已安装的包一律返回 already-installed，问不出新版本）。
