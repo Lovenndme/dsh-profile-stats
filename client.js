@@ -656,13 +656,16 @@ window.__ModuleLoader__.load({
       const hideTip = () => setTip(null)
 
       const cells = heat.cells.map((cell) => {
-        const level = cell.future
-          ? 0
-          : mode === 'week'
+        // 只有「每天」这一档尊重未来日期（今天之后留白）；
+        // 「每周 / 累计」是按整列聚合的，整列同色才看得出这一周的份量。
+        const level =
+          mode === 'week'
             ? heat.levels.week(weekOf(cell).weekTokens)
             : mode === 'total'
               ? heat.levels.total(weekOf(cell).cumulativeTokens)
-              : heat.levels.day(cell.tokens)
+              : cell.future
+                ? 0
+                : heat.levels.day(cell.tokens)
         return h('div', {
           key: cell.key,
           className: 'dps-cell',
