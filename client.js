@@ -526,9 +526,9 @@ window.__ModuleLoader__.load({
 .dps-chart-legend-item{display:inline-flex;align-items:center;gap:6px}
 .dps-chart-legend-total{color:var(--dsw-alias-label-primary);font-variant-numeric:tabular-nums}
 .dps-chart-plot{position:relative;height:220px;min-width:0;padding-bottom:18px}
-.dps-chart-tick{position:absolute;left:0;right:0;border-top:1px dashed var(--dsw-alias-border-l2);pointer-events:none}
-.dps-chart-tick > span{position:absolute;right:0;top:-8px;font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;padding-left:4px;background:var(--dsw-alias-bg-layer-1)}
-.dps-chart-scroll{position:absolute;left:0;right:0;top:0;bottom:18px;overflow-x:auto;overflow-y:hidden}
+.dps-chart-tick{position:absolute;left:64px;right:0;border-top:1px dashed var(--dsw-alias-border-l2);pointer-events:none}
+.dps-chart-tick > span{position:absolute;left:-64px;top:-7px;width:60px;text-align:right;font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;padding-right:6px;background:var(--dsw-alias-bg-layer-1)}
+.dps-chart-scroll{position:absolute;left:64px;right:0;top:0;bottom:18px;overflow-x:auto;overflow-y:hidden}
 .dps-chart-bars{position:relative;height:100%;display:flex;align-items:flex-end;gap:2px}
 .dps-chart-bucket{flex:1 1 0;min-width:0;height:100%;display:flex;flex-direction:column;justify-content:flex-end;position:relative}
 .dps-chart-pair{display:flex;align-items:flex-end;justify-content:center;gap:2px;width:100%;height:100%}
