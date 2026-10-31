@@ -242,6 +242,23 @@ window.__ModuleLoader__.load({
       return number.toLocaleString(currentLocaleId())
     }
 
+    /** 纵轴刻度文案：去掉多余的 .0（1.0 亿 → 1 亿）。 */
+    function formatAxis(value) {
+      const number = toNumber(value)
+      if (number <= 0) return '0'
+      return formatTokens(number).replace(/\.0(?=\s)/, '')
+    }
+
+    /** 纵轴步长取整齐值：1 / 2 / 2.5 / 5 × 10ⁿ，让刻度落在好读的数字上。 */
+    function niceStep(max) {
+      if (!(max > 0)) return 1
+      const rough = max / 4
+      const magnitude = Math.pow(10, Math.floor(Math.log10(rough)))
+      const normalized = rough / magnitude
+      const multiplier = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 2.5 ? 2.5 : normalized <= 5 ? 5 : 10
+      return multiplier * magnitude
+    }
+
     function formatDuration(ms) {
       const value = toNumber(ms)
       if (value <= 0) return t('unit.none')
@@ -1010,18 +1027,23 @@ window.__ModuleLoader__.load({
         ),
       )
 
-      const ticks = [1, 0.75, 0.5, 0.25]
+      // 纵轴：步长取整齐值，轴顶向上取整到步长的整数倍。
+      const step = niceStep(max)
+      const axisMax = Math.max(step, Math.ceil(max / step) * step)
+      const tickValues = []
+      for (let value = 0; value <= axisMax + step / 1000; value += step) tickValues.push(value)
+
       const plot = h(
         'div',
         { className: 'dps-chart-plot' },
         h(
           'div',
           { className: 'dps-chart-ticks' },
-          ticks.map((ratio) =>
+          tickValues.map((value) =>
             h(
               'div',
-              { className: 'dps-chart-tick', key: ratio, style: { bottom: `${ratio * 100}%` } },
-              h('span', null, formatTokens(max * ratio)),
+              { className: 'dps-chart-tick', key: value, style: { bottom: `${(value / axisMax) * 100}%` } },
+              h('span', null, formatAxis(value)),
             ),
           ),
         ),
@@ -1048,7 +1070,7 @@ window.__ModuleLoader__.load({
                       key: item.key,
                       className: 'dps-chart-bar',
                       style: {
-                        height: `${max > 0 ? (bucket.values[MODEL_SERIES.indexOf(item)] / max) * 100 : 0}%`,
+                        height: `${max > 0 ? (bucket.values[MODEL_SERIES.indexOf(item)] / axisMax) * 100 : 0}%`,
                         background: item.color,
                       },
                     }),
