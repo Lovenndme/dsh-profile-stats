@@ -675,15 +675,26 @@ export function apply(ctx) {
     /* 没有上一次的更新结果 */
   }
 
-  const updateInfo = () => ({
+  const updateInfo = () => {
+    // 升级结果是「重装之后」才写盘的，新实例启动时读不到；这里按需补读一次。
+    if (!updateState.lastResult) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(updateResultFile(), 'utf8'))
+        if (raw && typeof raw === 'object') updateState.lastResult = raw
+      } catch {
+        /* 还没有升级结果 */
+      }
+    }
+    return {
     installed: updateState.installed,
     latest: updateState.latest,
     available: updateState.available,
     canUpdate: updateState.canUpdate,
     checking: updateState.checking,
     running: updateState.running,
-    lastResult: updateState.lastResult,
-  })
+      lastResult: updateState.lastResult,
+    }
+  }
 
   const readInstalledFromManager = async (manager) => {
     try {
