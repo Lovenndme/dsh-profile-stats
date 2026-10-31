@@ -26,7 +26,7 @@ window.__ModuleLoader__.load({
     const PANEL_ID = 'profile'
     const DAY_MS = 86400000
     const HEAT_WEEKS = 53
-    const CELL_PITCH = 16
+    const CELL_PITCH = 14
 
     /* -------------------------------------------------------------- 文案字典 */
 
@@ -472,72 +472,61 @@ window.__ModuleLoader__.load({
 
     const STYLE_ID = 'dsh-profile-stats-style'
     const CSS = `
-.dps-root{
---dps-fs-title:24px;--dps-fs-section:16px;--dps-fs-kpi:30px;--dps-fs-body:14px;--dps-fs-small:12px;
---dps-gap:12px;--dps-pad:24px;--dps-section:56px;--dps-card:8px;--dps-control:6px;
-height:100%;min-height:0;overflow-y:auto;box-sizing:border-box;
-background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);
-font-size:var(--dps-fs-body);line-height:1.5;
-}
-.dps-page{max-width:1120px;margin:0 auto;padding:40px 24px 72px;display:flex;flex-direction:column;gap:var(--dps-section)}
-.dps-identity{display:flex;align-items:center;gap:16px}
-.dps-avatar{width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:600;flex:0 0 auto;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
-.dps-id-text{display:flex;flex-direction:column;gap:2px;min-width:0}
-.dps-name{font-size:var(--dps-fs-title);font-weight:600;line-height:1.2;letter-spacing:-.01em}
-.dps-handle{font-size:var(--dps-fs-small);color:var(--dsw-alias-label-secondary)}
-.dps-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--dps-gap);background:var(--dsw-alias-bg-layer-1);border-radius:var(--dps-card);padding:var(--dps-pad)}
-.dps-stat{display:flex;flex-direction:column;gap:4px;min-width:0}
-.dps-stat-value{font-size:var(--dps-fs-kpi);font-weight:500;line-height:1.1;letter-spacing:-.02em;font-variant-numeric:tabular-nums;white-space:nowrap}
-.dps-stat-label{font-size:var(--dps-fs-small);color:var(--dsw-alias-label-secondary)}
-.dps-stat-sub{font-size:var(--dps-fs-small);color:var(--dsw-alias-label-secondary);opacity:.78}
-.dps-section{display:flex;flex-direction:column;gap:16px}
-.dps-section-head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
-.dps-section-title{font-size:var(--dps-fs-section);font-weight:600;letter-spacing:-.005em}
-.dps-section-note{font-size:var(--dps-fs-small);color:var(--dsw-alias-label-secondary)}
-.dps-card{background:var(--dsw-alias-bg-layer-1);border-radius:var(--dps-card);padding:var(--dps-pad)}
-.dps-heat{display:flex;flex-direction:column;gap:16px;overflow-x:auto}
-.dps-heat-grid{display:grid;grid-auto-flow:column;grid-template-rows:repeat(7,13px);grid-auto-columns:13px;gap:3px}
-.dps-cell{width:13px;height:13px;border-radius:3px;background:var(--dsw-alias-bg-layer-2)}
-.dps-cell[data-future="true"]{opacity:.3}
-.dps-months{position:relative;height:16px;font-size:var(--dps-fs-small);color:var(--dsw-alias-label-secondary)}
+.dps-root{height:100%;min-height:0;overflow-y:auto;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);box-sizing:border-box}
+.dps-page{max-width:880px;margin:0 auto;padding:56px 28px 80px;display:flex;flex-direction:column;gap:30px;box-sizing:border-box}
+.dps-identity{display:flex;flex-direction:column;align-items:center;gap:12px;text-align:center}
+.dps-avatar{width:84px;height:84px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:34px;font-weight:600;color:#fff;background:linear-gradient(140deg,var(--dsw-alias-brand-primary),color-mix(in srgb,var(--dsw-alias-brand-primary) 45%,#101418));box-shadow:0 8px 24px color-mix(in srgb,var(--dsw-alias-brand-primary) 24%,transparent)}
+.dps-name{font-size:24px;font-weight:600;line-height:1.2}
+.dps-handle{font-size:13px;color:var(--dsw-alias-label-secondary)}
+.dps-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));border:1px solid var(--dsw-alias-border-l1);border-radius:14px;overflow:hidden;background:var(--dsw-alias-bg-layer-1)}
+.dps-stat{padding:16px 10px;display:flex;flex-direction:column;gap:6px;align-items:center;justify-content:center;border-right:1px solid var(--dsw-alias-border-l1);min-height:72px}
+.dps-stat:last-child{border-right:none}
+.dps-stat-value{font-size:20px;font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums}
+.dps-stat-label{font-size:12px;color:var(--dsw-alias-label-secondary)}
+.dps-stat-sub{font-size:11px;color:var(--dsw-alias-label-secondary);opacity:.85}
+.dps-section{display:flex;flex-direction:column;gap:14px}
+.dps-section-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.dps-section-title{font-size:14px;font-weight:600}
+.dps-section-note{font-size:12px;color:var(--dsw-alias-label-secondary)}
+.dps-card{padding:18px 16px;border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-layer-1)}
+.dps-heat{display:flex;flex-direction:column;gap:12px;overflow-x:auto}
+.dps-heat-grid{display:grid;grid-auto-flow:column;grid-template-rows:repeat(7,11px);grid-auto-columns:11px;gap:3px}
+.dps-cell{width:11px;height:11px;border-radius:2.5px;background:var(--dsw-alias-bg-layer-2);box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l1)}
+.dps-cell[data-future="true"]{opacity:.35}
+.dps-months{position:relative;height:14px;font-size:10px;color:var(--dsw-alias-label-secondary)}
+.dps-tip{position:fixed;z-index:9999;pointer-events:none;transform:translate(-50%,-100%);background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:6px 10px;box-shadow:0 10px 28px rgba(0,0,0,.28);white-space:nowrap;text-align:left}
+.dps-tip-date{font-size:10px;line-height:1.5;color:var(--dsw-alias-label-secondary)}
+.dps-tip-value{font-size:12px;line-height:1.5;font-weight:600;font-variant-numeric:tabular-nums}
+.dps-prov-card{display:flex;flex-direction:column;gap:12px}
+.dps-prov-head{display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap}
+.dps-prov{display:flex;flex-direction:column;gap:9px}
+.dps-prov-row{display:grid;grid-template-columns:132px minmax(60px,1fr) auto 48px;gap:10px;align-items:center;font-size:12px}
+.dps-prov-name{color:var(--dsw-alias-label-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dps-prov-bar{height:6px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);overflow:hidden;display:block}
+.dps-prov-bar > span{display:block;height:100%;border-radius:999px}
+.dps-prov-value{font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap}
+.dps-prov-share{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary);text-align:right}
+.dps-switch{display:inline-flex;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;overflow:hidden}
+.dps-switch button{appearance:none;border:none;background:transparent;color:var(--dsw-alias-label-secondary);font-size:11px;padding:4px 10px;cursor:pointer;font-family:inherit}
+.dps-switch button[data-active="true"]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
 .dps-month{position:absolute;top:0;white-space:nowrap}
-.dps-mix{display:flex;align-items:center;gap:32px;flex-wrap:wrap}
+.dps-mix{display:flex;align-items:center;gap:22px;flex-wrap:wrap}
 .dps-mix-chart{flex:0 0 auto;line-height:0}
-.dps-mix-legend{flex:1 1 260px;display:grid;grid-template-columns:1fr auto auto;gap:10px 16px;align-items:baseline;font-size:var(--dps-fs-body)}
-.dps-mix-row{display:contents}
-.dps-mix-label{display:flex;align-items:center;gap:8px;color:var(--dsw-alias-label-primary)}
-.dps-mix-value{font-variant-numeric:tabular-nums;text-align:right}
-.dps-mix-share{font-size:var(--dps-fs-small);color:var(--dsw-alias-label-secondary);text-align:right;min-width:44px}
-.dps-dot{width:8px;height:8px;border-radius:2px;flex:0 0 auto}
-.dps-prov-card{display:flex;flex-direction:column;gap:16px}
-.dps-prov{display:flex;flex-direction:column;gap:10px}
-.dps-prov-head{display:flex;align-items:center;justify-content:flex-end;gap:12px}
-.dps-prov-row{display:grid;grid-template-columns:minmax(120px,180px) 1fr auto auto;gap:8px 16px;align-items:center;font-size:var(--dps-fs-body)}
-.dps-prov-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dps-prov-bar{height:4px;border-radius:2px;background:var(--dsw-alias-bg-layer-2);overflow:hidden;display:block}
-.dps-prov-bar > span{display:block;height:100%;border-radius:2px}
-.dps-prov-value{font-variant-numeric:tabular-nums;text-align:right}
-.dps-prov-share{font-size:var(--dps-fs-small);color:var(--dsw-alias-label-secondary);text-align:right;min-width:44px}
-.dps-switch{display:inline-flex;gap:2px;background:var(--dsw-alias-bg-layer-2);border-radius:var(--dps-control);padding:2px}
-.dps-switch button{appearance:none;border:0;background:transparent;color:var(--dsw-alias-label-secondary);font-size:var(--dps-fs-small);font-family:inherit;padding:5px 10px;border-radius:4px;cursor:pointer}
-.dps-switch button[data-active="true"]{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-weight:500}
-.dps-button{appearance:none;border:0;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font-size:var(--dps-fs-small);font-family:inherit;font-weight:500;height:32px;padding:0 14px;border-radius:var(--dps-control);cursor:pointer}
-.dps-button:hover{background:var(--dsw-alias-bg-layer-1)}
-.dps-button-primary{background:var(--dsw-alias-label-primary);color:var(--dsw-alias-bg-base)}
-.dps-tip{position:fixed;z-index:9999;pointer-events:none;transform:translate(-50%,-100%);background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);border-radius:var(--dps-control);padding:8px 12px;white-space:nowrap;/* taste-skill-ignore shadow: tooltip is a real overlay */box-shadow:0 8px 24px rgba(0,0,0,.24)}
-.dps-tip-date{color:var(--dsw-alias-label-secondary)}
-.dps-tip-value{font-size:var(--dps-fs-body);font-weight:500;font-variant-numeric:tabular-nums}
-.dps-footer{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;font-size:var(--dps-fs-small);color:var(--dsw-alias-label-secondary)}
-.dps-placeholder{color:var(--dsw-alias-label-secondary)}
-.dps-error{display:flex;flex-direction:column;gap:8px;font-size:var(--dps-fs-body);color:var(--dsw-alias-state-error-primary)}
-.dps-error-title{font-weight:600}
-@keyframes dps-rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-.dps-page > *{animation:dps-rise .28s ease-out both}
-.dps-page > *:nth-child(2){animation-delay:.04s}
-.dps-page > *:nth-child(3){animation-delay:.08s}
-.dps-page > *:nth-child(4){animation-delay:.12s}
-.dps-page > *:nth-child(5){animation-delay:.16s}
-@media (prefers-reduced-motion:reduce){.dps-page > *{animation:none}}
+.dps-mix-legend{flex:1 1 240px;display:flex;flex-direction:column;gap:7px;font-size:12px}
+.dps-mix-row{display:grid;grid-template-columns:10px 1fr auto 52px;gap:8px;align-items:center}
+.dps-mix-label{color:var(--dsw-alias-label-secondary)}
+.dps-mix-value{font-weight:600;font-variant-numeric:tabular-nums}
+.dps-mix-share{color:var(--dsw-alias-label-secondary);text-align:right;font-variant-numeric:tabular-nums}
+.dps-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:1px}
+.dps-value{color:var(--dsw-alias-label-primary);font-variant-numeric:tabular-nums}
+.dps-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--dsw-alias-label-secondary)}
+.dps-button{appearance:none;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:12px;padding:6px 14px;border-radius:8px;cursor:pointer;font-family:inherit}
+.dps-button:hover{border-color:var(--dsw-alias-border-l2)}
+.dps-button:active{transform:translateY(1px)}
+.dps-placeholder{font-size:13px;color:var(--dsw-alias-label-secondary);line-height:1.7}
+.dps-error{border:1px solid var(--dsw-alias-state-error-primary);border-radius:12px;padding:14px 16px;font-size:13px;display:flex;flex-direction:column;gap:6px}
+.dps-error-title{color:var(--dsw-alias-state-error-primary);font-weight:600}
+.dps-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 `
 
     /* ------------------------------------------------------------------ 组件 */
@@ -737,13 +726,13 @@ font-size:var(--dps-fs-body);line-height:1.5;
     function Breakdown(props) {
       const totals = props.totals
       const segments = [
-        { key: 'input', label: t('breakdown.input'), value: toNumber(totals.inputTokens), color: 'var(--dsw-alias-label-primary)' },
-        { key: 'output', label: t('breakdown.output'), value: toNumber(totals.outputTokens), color: 'var(--dsw-alias-label-secondary)' },
+        { key: 'input', label: t('breakdown.input'), value: toNumber(totals.inputTokens), color: 'var(--dsw-alias-brand-primary)' },
+        { key: 'output', label: t('breakdown.output'), value: toNumber(totals.outputTokens), color: 'var(--dsw-alias-state-success-primary)' },
         {
           key: 'cache',
           label: t('breakdown.cache'),
           value: toNumber(totals.cacheReadTokens) + toNumber(totals.cacheWriteTokens),
-          color: 'var(--dsw-alias-brand-primary)',
+          color: 'var(--dsw-alias-state-warn-primary)',
         },
       ]
       const sum = segments.reduce((total, segment) => total + segment.value, 0)
@@ -771,14 +760,13 @@ font-size:var(--dps-fs-body);line-height:1.5;
       )
     }
 
-    // 发牌要求「整屏只有一束色相」：供应商条只用一个品牌色，用明度分档表达排名。
     const PROVIDER_COLORS = [
       'var(--dsw-alias-brand-primary)',
-      'color-mix(in srgb, var(--dsw-alias-brand-primary) 74%, var(--dsw-alias-bg-layer-1))',
-      'color-mix(in srgb, var(--dsw-alias-brand-primary) 56%, var(--dsw-alias-bg-layer-1))',
-      'color-mix(in srgb, var(--dsw-alias-brand-primary) 42%, var(--dsw-alias-bg-layer-1))',
-      'color-mix(in srgb, var(--dsw-alias-brand-primary) 30%, var(--dsw-alias-bg-layer-1))',
-      'color-mix(in srgb, var(--dsw-alias-brand-primary) 20%, var(--dsw-alias-bg-layer-1))',
+      'var(--dsw-alias-state-success-primary)',
+      'var(--dsw-alias-state-warn-primary)',
+      'var(--dsw-alias-state-error-primary)',
+      'var(--dsw-alias-state-idle-primary)',
+      'var(--dsw-alias-label-secondary)',
     ]
 
     function providerLabel(id) {
@@ -901,18 +889,18 @@ font-size:var(--dps-fs-body);line-height:1.5;
       const stats = h(
         'div',
         { className: 'dps-stats' },
-        h(StatCard, { label: t('stat.tokens'), value: hasAnySession ? formatTokens(totals.tokens) : '' }),
+        h(StatCard, { label: t('stat.tokens'), value: hasAnySession ? formatTokens(totals.tokens) : '—' }),
         h(StatCard, {
           label: t('stat.peak'),
-          value: hasAnySession ? formatTokens(totals.peakDay ? totals.peakDay.tokens : 0) : '',
+          value: hasAnySession ? formatTokens(totals.peakDay ? totals.peakDay.tokens : 0) : '—',
           sub: hasAnySession ? peakSub : undefined,
         }),
         h(StatCard, {
           label: t('stat.longestTurn'),
-          value: hasAnySession ? formatDuration(totals.longestTurnMs) : '',
+          value: hasAnySession ? formatDuration(totals.longestTurnMs) : '—',
         }),
-        h(StatCard, { label: t('stat.longestStreak'), value: hasAnySession ? formatDays(totals.longestStreak) : '' }),
-        h(StatCard, { label: t('stat.currentStreak'), value: hasAnySession ? formatDays(totals.currentStreak) : '' }),
+        h(StatCard, { label: t('stat.longestStreak'), value: hasAnySession ? formatDays(totals.longestStreak) : '—' }),
+        h(StatCard, { label: t('stat.currentStreak'), value: hasAnySession ? formatDays(totals.currentStreak) : '—' }),
       )
 
       useEffect(() => {
@@ -985,12 +973,8 @@ font-size:var(--dps-fs-body);line-height:1.5;
             'div',
             { className: 'dps-identity' },
             h('div', { className: 'dps-avatar', 'aria-hidden': true }, initial),
-            h(
-              'div',
-              { className: 'dps-id-text' },
-              h('div', { className: 'dps-name' }, identity.name || 'DSH'),
-              h('div', { className: 'dps-handle' }, identity.handle || '@local'),
-            ),
+            h('div', { className: 'dps-name' }, identity.name || 'DSH'),
+            h('div', { className: 'dps-handle' }, identity.handle || '@local'),
           ),
           stats,
           scanningHint,
@@ -1055,7 +1039,7 @@ font-size:var(--dps-fs-body);line-height:1.5;
                     'button',
                     {
                       type: 'button',
-                      className: 'dps-button dps-button-primary',
+                      className: 'dps-button',
                       onClick: async () => {
                         const target = updateInfo.latest
                         setUpdating(true)

@@ -16,15 +16,6 @@ left sidebar — *Profile / 个人主页* — with the numbers people actually a
 Everything is folded from **this machine's own session logs**. No network calls, no telemetry,
 no credentials, no upload.
 
-## Design
-
-The interface follows the dealt direction **Achromatic ledger** from
-design-taste-frontend / tasteskill v2 (draw.mjs --app --kind analytics): ink-only chrome, one hue and only
-on the data itself, tabular figures, an 8/6 radius pair, 12px spacing rhythm, 24px card padding, and no
-gradients or shadows at rest. Redrawn from the sheet where this host requires it: the typeface is the
-host's own stack instead of a webfont (no external font loading), Geist Mono is dropped (the host ships no
-mono face), and every hex value maps to a DSH theme token so light and dark both hold. Checked with
-	asteskill lint — 0 failures.
 ## What each number means
 
 | Card | Definition |
