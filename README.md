@@ -11,7 +11,7 @@ left sidebar — *Profile / 个人主页* — with the numbers people actually a
   (weekly fills a whole column; cumulative is the running total through that week). Hover shows only the
   date and the abbreviated value; the weekly and cumulative scopes word the date as `week of …` /
   `cumulative through the week of …` with a year-qualified date.
-- **Model split** (today / all time) — tokens per model class (Flash / Pro), read from each step's `message.source.model`
+- **Token by model** (last 14 days / all time) — vertical bars over time, one series per model, read from each step's `message.source.model`
 - **Provider breakdown** (today / all time) — which billing route each token went through
 
 Everything is folded from **this machine's own session logs**. No network calls, no telemetry,
@@ -206,7 +206,7 @@ MIT © 2026 Lovenndme
 - **最长连续天数 / 当前连续天数**（活跃日按本机时区）
 - **Token 活动热力图**（近 12 个月，三档：**每天 / 每周 / 累计总量**；每周按整列聚合、累计为截至该周的累计值。
   悬浮只显示「日期 + 缩写用量」；每周档文案为「{日期} 起的一周」，累计档为「累计至 {日期} 起的一周」（日期带年份））
-- **模型分布**（今日 / 累计，按 message.source.model 归为 Flash / Pro 两类，柱状图）
+- **模型分布**（近 14 天 / 全部，按时间分桶的竖向柱状图，两个模型分色；模型名取自 message.source.model）
 - **供应商拆分**（今日 / 累计），按每一步的 `data.message.source.provider` 分组
 
 **数据全部来自本机会话日志**：不联网、不上报、不碰任何凭据。删掉缓存文件只会让下次重扫，数字不会和日志不一致。

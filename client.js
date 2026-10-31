@@ -67,10 +67,9 @@ window.__ModuleLoader__.load({
       'unit.none': '—',
       'value.tokensTooltip': '{date} · {value} tokens',
       'section.provider': 'Provider breakdown',
-      'section.model': 'Model split',
-      'model.flash': 'DeepSeek Flash',
-      'model.pro': 'DeepSeek Pro',
-      'model.other': 'Other',
+      'section.model': 'Token by model',
+      'range.recent': 'Last 14 days',
+      'range.all': 'All time',
       'toggle.today': 'Today',
       'toggle.all': 'All time',
       'provider.wincode': 'WinCode relay',
@@ -121,9 +120,8 @@ window.__ModuleLoader__.load({
       'value.tokensTooltip': '{date} · {value} tokens',
       'section.provider': '供应商拆分',
       'section.model': '模型分布',
-      'model.flash': 'DeepSeek Flash',
-      'model.pro': 'DeepSeek Pro',
-      'model.other': '其他',
+      'range.recent': '近 14 天',
+      'range.all': '全部',
       'toggle.today': '今日',
       'toggle.all': '累计',
       'provider.wincode': '卫宁中转 WinCode',
@@ -514,6 +512,23 @@ window.__ModuleLoader__.load({
 .dps-prov-bar > span{display:block;height:100%;border-radius:999px}
 .dps-prov-value{font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap}
 .dps-prov-share{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary);text-align:right}
+.dps-chart{display:flex;flex-direction:column;gap:18px}
+.dps-chart-head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.dps-chart-legend{display:flex;align-items:center;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--dsw-alias-label-secondary)}
+.dps-chart-legend-item{display:inline-flex;align-items:center;gap:6px}
+.dps-chart-legend-total{color:var(--dsw-alias-label-primary);font-variant-numeric:tabular-nums}
+.dps-chart-plot{position:relative;height:220px;min-width:0;padding-bottom:18px}
+.dps-chart-tick{position:absolute;left:0;right:0;border-top:1px dashed var(--dsw-alias-border-l2);pointer-events:none}
+.dps-chart-tick > span{position:absolute;right:0;top:-8px;font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;padding-left:4px;background:var(--dsw-alias-bg-layer-1)}
+.dps-chart-bars{position:absolute;left:0;right:0;top:0;bottom:18px;display:flex;align-items:flex-end;gap:4px}
+.dps-chart-bucket{flex:1 1 0;min-width:0;height:100%;display:flex;flex-direction:column;justify-content:flex-end;position:relative}
+.dps-chart-pair{display:flex;align-items:flex-end;justify-content:center;gap:2px;width:100%;height:100%}
+.dps-chart-bar{width:45%;max-width:16px;border-radius:2px 2px 0 0;transition:opacity .12s ease-out}
+.dps-chart-bucket:hover .dps-chart-bar{opacity:.8}
+.dps-chart-label{position:absolute;top:100%;left:50%;transform:translateX(-50%);font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap;padding-top:4px}
+.dps-tip-row{display:flex;align-items:center;gap:6px;font-size:12px;white-space:nowrap}
+.dps-tip-row .dps-dot{width:8px;height:8px;border-radius:2px;flex:0 0 auto}
+.dps-tip-row .dps-tip-value{margin-left:auto;padding-left:12px}
 .dps-switch{display:inline-flex;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;overflow:hidden}
 .dps-switch button{appearance:none;border:none;background:transparent;color:var(--dsw-alias-label-secondary);font-size:11px;padding:4px 10px;cursor:pointer;font-family:inherit}
 .dps-switch button[data-active="true"]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
@@ -859,73 +874,166 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /**
-     * 按模型大类（Flash / Pro / 其他）统计的柱状图。
-     * 柱长相对「最大项」编码，右侧同时给占比，和供应商拆分共用同一套视觉。
-     */
-    function ModelBreakdown(props) {
-      const [scope, setScope] = useState('all')
-      const totals = props.totals
-      const today = props.today
-      const source = scope === 'today' ? ((today && today.byModel) || {}) : ((totals && totals.byModel) || {})
-      const rows = [
-        { id: 'flash', label: t('model.flash'), tokens: toNumber(source.flash), color: 'var(--dsw-alias-brand-primary)' },
-        { id: 'pro', label: t('model.pro'), tokens: toNumber(source.pro), color: 'var(--dsw-alias-state-success-primary)' },
-        { id: 'other', label: t('model.other'), tokens: toNumber(source.other), color: 'var(--dsw-alias-state-warn-primary)' },
-      ].filter((row) => row.tokens > 0 || row.id !== 'other')
-      if (rows.every((row) => row.tokens <= 0)) return null
+    /** 模型名（用户指定的具体名称）+ 分类键。 */
+    const MODEL_SERIES = [
+      { key: 'flash', name: 'Deepseek-V4.1-Flash-1017', color: 'var(--dsw-alias-brand-primary)' },
+      { key: 'pro', name: 'Deepseek-V4-Pro', color: 'var(--dsw-alias-state-success-primary)' },
+    ]
 
-      const sum = rows.reduce((total, row) => total + row.tokens, 0)
-      const max = rows.reduce((top, row) => Math.max(top, row.tokens), 0)
+    /**
+     * 按时间的竖向柱状图：每个时间桶一组柱，按模型分色；顶部图例给出模型名与合计。
+     * 鼠标悬浮某个桶时，显示该时间点每个模型的 token 用量。
+     */
+    function ModelChart(props) {
+      const [range, setRange] = useState('recent')
+      const [tip, setTip] = useState(null)
+      const daily = props.daily || []
+      const totals = props.totals || {}
+
+      // 时间桶：按天聚合（沿用宿主的 daily.byModel），补齐空缺的日期。
+      const byDate = new Map()
+      for (const entry of daily) {
+        if (entry && typeof entry.date === 'string') byDate.set(entry.date, entry)
+      }
+      const days = []
+      const todayKey = localDateKey(startOfDay(new Date()))
+      const parsed = [...byDate.keys()].sort()
+      const firstKey = parsed.length > 0 ? parsed[0] : todayKey
+      const limit = range === 'recent' ? 14 : 0
+      const startKey = limit > 0 ? localDateKey(startOfDay(new Date(Date.now() - (limit - 1) * DAY_MS))) : firstKey
+      const cursor = new Date(
+        Number(startKey.slice(0, 4)),
+        Number(startKey.slice(5, 7)) - 1,
+        Number(startKey.slice(8, 10)),
+      )
+      for (let guard = 0; guard < 400; guard += 1) {
+        const key = localDateKey(cursor)
+        const entry = byDate.get(key)
+        days.push({
+          key,
+          label: key.slice(5).replace('-', '/'),
+          values: MODEL_SERIES.map((series) => toNumber(entry && entry.byModel && entry.byModel[series.key])),
+        })
+        if (key >= todayKey) break
+        cursor.setDate(cursor.getDate() + 1)
+      }
+
+      let max = 0
+      for (const day of days) for (const value of day.values) if (value > max) max = value
+      if (max <= 0) return null
+
+      const buckets = days.filter((day) => day.values.some((value) => value > 0))
+      if (buckets.length === 0) return null
+
+      // X 轴标签抽稀：宽度有限，最多约 8 个。
+      const stride = Math.max(1, Math.ceil(buckets.length / 8))
+
+      const showTip = (bucket) => (event) => {
+        const target = event && event.currentTarget
+        if (!target || typeof target.getBoundingClientRect !== 'function') return
+        const rect = target.getBoundingClientRect()
+        const halfWidth = 110
+        const centerX = rect.left + rect.width / 2
+        const viewportWidth = typeof window !== 'undefined' && window.innerWidth ? window.innerWidth : 1200
+        setTip({
+          bucket,
+          x: Math.min(Math.max(centerX, halfWidth), Math.max(halfWidth, viewportWidth - halfWidth)),
+          y: rect.top - 8,
+        })
+      }
 
       const toggle = h(
         'div',
         { className: 'dps-switch' },
         [
-          { id: 'today', label: t('toggle.today') },
-          { id: 'all', label: t('toggle.all') },
+          { id: 'recent', label: t('range.recent') },
+          { id: 'all', label: t('range.all') },
         ].map((option) =>
           h(
             'button',
             {
               key: option.id,
               type: 'button',
-              'data-active': scope === option.id ? 'true' : 'false',
-              onClick: () => setScope(option.id),
+              'data-active': range === option.id ? 'true' : 'false',
+              onClick: () => setRange(option.id),
             },
             option.label,
           ),
         ),
       )
 
-      return h(
+      const ticks = [1, 0.75, 0.5, 0.25]
+      const plot = h(
         'div',
-        { className: 'dps-card dps-prov-card' },
-        h('div', { className: 'dps-prov-head' }, toggle),
+        { className: 'dps-chart-plot' },
+        ticks.map((ratio) =>
+          h(
+            'div',
+            { className: 'dps-chart-tick', key: ratio, style: { bottom: `${ratio * 100}%` } },
+            h('span', null, formatTokens(max * ratio)),
+          ),
+        ),
         h(
           'div',
-          { className: 'dps-prov' },
-          rows.map((row) =>
+          { className: 'dps-chart-bars' },
+          buckets.map((bucket, index) =>
             h(
               'div',
-              { className: 'dps-prov-row', key: row.id },
-              h('span', { className: 'dps-prov-name' }, row.label),
+              { className: 'dps-chart-bucket', key: bucket.key, onMouseEnter: showTip(bucket), onMouseLeave: () => setTip(null) },
               h(
-                'span',
-                { className: 'dps-prov-bar' },
-                h('span', {
-                  style: {
-                    width: `${max > 0 ? (row.tokens / max) * 100 : 0}%`,
-                    background: row.color,
-                  },
-                }),
+                'div',
+                { className: 'dps-chart-pair' },
+                bucket.values.map((value, seriesIndex) =>
+                  h('div', {
+                    key: MODEL_SERIES[seriesIndex].key,
+                    className: 'dps-chart-bar',
+                    style: {
+                      height: `${max > 0 ? (value / max) * 100 : 0}%`,
+                      background: MODEL_SERIES[seriesIndex].color,
+                    },
+                  }),
+                ),
               ),
-              h('span', { className: 'dps-prov-value' }, formatTokens(row.tokens)),
-              h('span', { className: 'dps-prov-share' }, `${sum > 0 ? ((row.tokens / sum) * 100).toFixed(1) : '0.0'}%`),
+              index % stride === 0 ? h('div', { className: 'dps-chart-label' }, bucket.label) : null,
             ),
           ),
         ),
       )
+
+      const legend = h(
+        'div',
+        { className: 'dps-chart-legend' },
+        MODEL_SERIES.map((series) =>
+          h(
+            'span',
+            { className: 'dps-chart-legend-item', key: series.key },
+            h('span', { className: 'dps-dot', style: { background: series.color } }),
+            series.name,
+            h('span', { className: 'dps-chart-legend-total' }, formatTokens(toNumber(totals.byModel && totals.byModel[series.key]))),
+          ),
+        ),
+      )
+
+      const tooltip = tip
+        ? h(
+            'div',
+            { className: 'dps-tip', style: { left: `${tip.x}px`, top: `${tip.y}px`, transform: 'translate(-50%, -100%)' } },
+            h('div', { className: 'dps-tip-date' }, tip.bucket.key),
+            MODEL_SERIES.map((series, index) =>
+              tip.bucket.values[index] > 0
+                ? h(
+                    'div',
+                    { className: 'dps-tip-row', key: series.key },
+                    h('span', { className: 'dps-dot', style: { background: series.color } }),
+                    h('span', null, series.name),
+                    h('span', { className: 'dps-tip-value' }, formatTokens(tip.bucket.values[index])),
+                  )
+                : null,
+            ),
+          )
+        : null
+
+      return h('div', { className: 'dps-card dps-chart' }, h('div', { className: 'dps-chart-head' }, legend, toggle), plot, tooltip)
     }
     function ProfilePage() {
       useLocaleRevision()
@@ -1100,7 +1208,7 @@ window.__ModuleLoader__.load({
                 'div',
                 { className: 'dps-section' },
                 h('div', { className: 'dps-section-head' }, h('span', { className: 'dps-section-title' }, t('section.model'))),
-                h(ModelBreakdown, { today: todayEntry, totals }),
+                h(ModelChart, { daily, totals }),
                 h('div', { className: 'dps-section-head' }, h('span', { className: 'dps-section-title' }, t('section.provider'))),
                 h(ProviderBreakdown, { today: todayEntry, totals }),
               )
