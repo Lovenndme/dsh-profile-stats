@@ -520,22 +520,24 @@ window.__ModuleLoader__.load({
 .dps-prov-bar > span{display:block;height:100%;border-radius:999px}
 .dps-prov-value{font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap}
 .dps-prov-share{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary);text-align:right}
-.dps-chart{display:flex;flex-direction:column;gap:18px}
+.dps-chart{display:flex;flex-direction:column;gap:14px}
 .dps-chart-head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
-.dps-chart-legend{display:flex;align-items:center;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--dsw-alias-label-secondary)}
+.dps-chart-title{display:flex;align-items:baseline;gap:8px;font-size:14px;font-weight:600;color:var(--dsw-alias-label-primary)}
+.dps-chart-total{font-size:12px;font-weight:400;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
+.dps-chart-legend{display:flex;align-items:center;justify-content:center;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--dsw-alias-label-secondary)}
 .dps-chart-legend-item{display:inline-flex;align-items:center;gap:6px}
 .dps-chart-legend-total{color:var(--dsw-alias-label-primary);font-variant-numeric:tabular-nums}
-.dps-chart-plot{position:relative;height:220px;min-width:0;padding-bottom:18px}
-.dps-chart-ticks{position:absolute;left:64px;right:0;top:0;bottom:16px;pointer-events:none}
-.dps-chart-tick{position:absolute;left:0;right:0;border-top:1px dashed var(--dsw-alias-border-l2)}
-.dps-chart-tick > span{position:absolute;left:-64px;top:-7px;width:60px;text-align:right;font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;padding-right:6px;background:var(--dsw-alias-bg-layer-1)}
-.dps-chart-scroll{position:absolute;left:64px;right:0;top:0;bottom:0;overflow-x:auto;overflow-y:hidden}
-.dps-chart-bars{position:relative;height:100%;display:flex;align-items:flex-end;gap:2px}
+.dps-chart-plot{position:relative;height:240px;min-width:0}
+.dps-chart-ticks{position:absolute;left:0;right:0;top:0;bottom:18px;pointer-events:none}
+.dps-chart-tick{position:absolute;left:0;right:0;border-top:1px solid var(--dsw-alias-border-l2);opacity:.55}
+.dps-chart-tick > span{position:absolute;left:0;top:-8px;font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;padding-right:6px}
+.dps-chart-scroll{position:absolute;left:40px;right:0;top:0;bottom:0;overflow-x:auto;overflow-y:hidden}
+.dps-chart-bars{position:relative;height:100%;display:flex;align-items:stretch;gap:6px}
 .dps-chart-bucket{flex:1 1 0;min-width:0;height:100%;display:flex;flex-direction:column}
 .dps-chart-pair{display:flex;align-items:flex-end;justify-content:center;gap:2px;width:100%;flex:1 1 auto;min-height:0}
-.dps-chart-bar{width:45%;max-width:10px;min-width:2px;border-radius:2px 2px 0 0;transition:opacity .12s ease-out}
+.dps-chart-bar{width:100%;border-radius:2px 2px 0 0;transition:opacity .12s ease-out}
 .dps-chart-bucket:hover .dps-chart-bar{opacity:.8}
-.dps-chart-label{height:16px;line-height:16px;text-align:center;font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap;overflow:hidden}
+.dps-chart-label{height:18px;line-height:18px;text-align:center;font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap;overflow:hidden}
 .dps-tip-row{display:flex;align-items:center;gap:6px;font-size:12px;white-space:nowrap}
 .dps-tip-row .dps-dot{width:8px;height:8px;border-radius:2px;flex:0 0 auto}
 .dps-tip-row .dps-tip-value{margin-left:auto;padding-left:12px}
@@ -994,16 +996,16 @@ window.__ModuleLoader__.load({
         ),
       )
 
+      const rangeTotal = totalsInRange.reduce((sum, value) => sum + value, 0)
       const legend = h(
         'div',
         { className: 'dps-chart-legend' },
-        series.map((item, index) =>
+        series.map((item) =>
           h(
             'span',
             { className: 'dps-chart-legend-item', key: item.key },
             h('span', { className: 'dps-dot', style: { background: item.color } }),
             item.name,
-            h('span', { className: 'dps-chart-legend-total' }, formatTokens(totalsInRange[MODEL_SERIES.indexOf(item)])),
           ),
         ),
       )
@@ -1078,7 +1080,24 @@ window.__ModuleLoader__.load({
           )
         : null
 
-      return h('div', { className: 'dps-card dps-chart' }, h('div', { className: 'dps-chart-head' }, legend, toggle), plot, tooltip)
+      return h(
+        'div',
+        { className: 'dps-card dps-chart' },
+        h(
+          'div',
+          { className: 'dps-chart-head' },
+          h(
+            'div',
+            { className: 'dps-chart-title' },
+            t('section.model'),
+            h('span', { className: 'dps-chart-total' }, formatTokens(rangeTotal)),
+          ),
+          toggle,
+        ),
+        plot,
+        legend,
+        tooltip,
+      )
     }
     function ProfilePage() {
       useLocaleRevision()
@@ -1251,7 +1270,6 @@ window.__ModuleLoader__.load({
             ? h(
                 'div',
                 { className: 'dps-section' },
-                h('div', { className: 'dps-section-head' }, h('span', { className: 'dps-section-title' }, t('section.model'))),
                 h(ModelChart, { daily, totals }),
                 h('div', { className: 'dps-section-head' }, h('span', { className: 'dps-section-title' }, t('section.provider'))),
                 h(ProviderBreakdown, { today: todayEntry, totals }),
