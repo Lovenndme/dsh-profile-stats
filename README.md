@@ -7,14 +7,6 @@ sidebar — *Profile* — with the numbers people actually ask about.
 
 ![The profile page](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/overview.png)
 
-| Token mix | Usage by model |
-|---|---|
-| ![Token mix donut](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/mix.png) | ![Tokens by model over time](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/model-chart.png) |
-
-| Activity heatmap | Billing route |
-|---|---|
-| ![12-month heatmap](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/heatmap.png) | ![Provider breakdown](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/providers.png) |
-
 ## What it shows
 
 - **Cumulative tokens** as an input / output / cache-hit donut

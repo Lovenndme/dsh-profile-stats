@@ -6,14 +6,6 @@
 
 ![个人主页整页](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/overview.png)
 
-| Token 构成 | 模型分布 |
-|---|---|
-| ![Token 构成环形图](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/mix.png) | ![按时间与模型分桶的柱状图](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/model-chart.png) |
-
-| 活动热力图 | 供应商拆分 |
-|---|---|
-| ![近 12 个月活动热力图](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/heatmap.png) | ![供应商账单拆分](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/providers.png) |
-
 ## 页面里有什么
 
 - **累计 Token 数**：输入 / 输出 / 缓存命中三项的环形图
