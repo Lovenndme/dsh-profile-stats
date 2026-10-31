@@ -67,6 +67,10 @@ window.__ModuleLoader__.load({
       'unit.none': '—',
       'value.tokensTooltip': '{date} · {value} tokens',
       'section.provider': 'Provider breakdown',
+      'section.model': 'Model split',
+      'model.flash': 'DeepSeek Flash',
+      'model.pro': 'DeepSeek Pro',
+      'model.other': 'Other',
       'toggle.today': 'Today',
       'toggle.all': 'All time',
       'provider.wincode': 'WinCode relay',
@@ -116,6 +120,10 @@ window.__ModuleLoader__.load({
       'unit.none': '—',
       'value.tokensTooltip': '{date} · {value} tokens',
       'section.provider': '供应商拆分',
+      'section.model': '模型分布',
+      'model.flash': 'DeepSeek Flash',
+      'model.pro': 'DeepSeek Pro',
+      'model.other': '其他',
       'toggle.today': '今日',
       'toggle.all': '累计',
       'provider.wincode': '卫宁中转 WinCode',
@@ -851,6 +859,74 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * 按模型大类（Flash / Pro / 其他）统计的柱状图。
+     * 柱长相对「最大项」编码，右侧同时给占比，和供应商拆分共用同一套视觉。
+     */
+    function ModelBreakdown(props) {
+      const [scope, setScope] = useState('all')
+      const totals = props.totals
+      const today = props.today
+      const source = scope === 'today' ? ((today && today.byModel) || {}) : ((totals && totals.byModel) || {})
+      const rows = [
+        { id: 'flash', label: t('model.flash'), tokens: toNumber(source.flash), color: 'var(--dsw-alias-brand-primary)' },
+        { id: 'pro', label: t('model.pro'), tokens: toNumber(source.pro), color: 'var(--dsw-alias-state-success-primary)' },
+        { id: 'other', label: t('model.other'), tokens: toNumber(source.other), color: 'var(--dsw-alias-state-warn-primary)' },
+      ].filter((row) => row.tokens > 0 || row.id !== 'other')
+      if (rows.every((row) => row.tokens <= 0)) return null
+
+      const sum = rows.reduce((total, row) => total + row.tokens, 0)
+      const max = rows.reduce((top, row) => Math.max(top, row.tokens), 0)
+
+      const toggle = h(
+        'div',
+        { className: 'dps-switch' },
+        [
+          { id: 'today', label: t('toggle.today') },
+          { id: 'all', label: t('toggle.all') },
+        ].map((option) =>
+          h(
+            'button',
+            {
+              key: option.id,
+              type: 'button',
+              'data-active': scope === option.id ? 'true' : 'false',
+              onClick: () => setScope(option.id),
+            },
+            option.label,
+          ),
+        ),
+      )
+
+      return h(
+        'div',
+        { className: 'dps-card dps-prov-card' },
+        h('div', { className: 'dps-prov-head' }, toggle),
+        h(
+          'div',
+          { className: 'dps-prov' },
+          rows.map((row) =>
+            h(
+              'div',
+              { className: 'dps-prov-row', key: row.id },
+              h('span', { className: 'dps-prov-name' }, row.label),
+              h(
+                'span',
+                { className: 'dps-prov-bar' },
+                h('span', {
+                  style: {
+                    width: `${max > 0 ? (row.tokens / max) * 100 : 0}%`,
+                    background: row.color,
+                  },
+                }),
+              ),
+              h('span', { className: 'dps-prov-value' }, formatTokens(row.tokens)),
+              h('span', { className: 'dps-prov-share' }, `${sum > 0 ? ((row.tokens / sum) * 100).toFixed(1) : '0.0'}%`),
+            ),
+          ),
+        ),
+      )
+    }
     function ProfilePage() {
       useLocaleRevision()
       const { snapshot, error, refresh } = useSnapshot()
@@ -1023,6 +1099,8 @@ window.__ModuleLoader__.load({
             ? h(
                 'div',
                 { className: 'dps-section' },
+                h('div', { className: 'dps-section-head' }, h('span', { className: 'dps-section-title' }, t('section.model'))),
+                h(ModelBreakdown, { today: todayEntry, totals }),
                 h('div', { className: 'dps-section-head' }, h('span', { className: 'dps-section-title' }, t('section.provider'))),
                 h(ProviderBreakdown, { today: todayEntry, totals }),
               )
