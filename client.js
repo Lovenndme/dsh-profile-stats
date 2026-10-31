@@ -45,7 +45,6 @@ window.__ModuleLoader__.load({
       'breakdown.cache': 'Cache hit',
       'tip.none': 'No activity',
       'tip.tokens': '{value} tokens',
-      'tip.calls': '{count} requests',
       'tip.week': 'Week of {date}',
       'tip.cumulative': 'Cumulative through the week of {date}',
       'mode.day': 'Daily',
@@ -93,7 +92,6 @@ window.__ModuleLoader__.load({
       'breakdown.cache': '缓存命中',
       'tip.none': '无活动',
       'tip.tokens': '{value} tokens',
-      'tip.calls': '{count} 次请求',
       'tip.week': '{date} 起的一周',
       'tip.cumulative': '累计至 {date} 起的一周',
       'mode.day': '每天',
@@ -337,20 +335,17 @@ window.__ModuleLoader__.load({
       while (cursor.getTime() <= today.getTime()) {
         const weekStart = new Date(cursor.getTime())
         let weekTokens = 0
-        let weekCalls = 0
         let weekEnd = weekStart
         for (let row = 0; row < 7; row += 1) {
           const key = localDateKey(cursor)
           const future = cursor.getTime() > today.getTime()
           const day = future ? null : totals.get(key)
           const tokens = day ? day.tokens : 0
-          const calls = day ? day.calls : 0
           if (!future) {
             weekTokens += tokens
-            weekCalls += calls
             weekEnd = new Date(cursor.getTime())
           }
-          cells.push({ key, tokens, calls, future, column, date: new Date(cursor.getTime()) })
+          cells.push({ key, tokens, future, column, date: new Date(cursor.getTime()) })
           cursor.setDate(cursor.getDate() + 1)
         }
         cumulative += weekTokens
@@ -359,7 +354,6 @@ window.__ModuleLoader__.load({
           startKey: localDateKey(weekStart),
           endKey: localDateKey(weekEnd),
           weekTokens,
-          weekCalls,
           cumulativeTokens: cumulative,
         })
         const month = weekStart.getMonth()
@@ -498,7 +492,6 @@ window.__ModuleLoader__.load({
 .dps-tip{position:fixed;z-index:9999;pointer-events:none;transform:translate(-50%,-100%);background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:6px 10px;box-shadow:0 10px 28px rgba(0,0,0,.28);white-space:nowrap;text-align:left}
 .dps-tip-date{font-size:10px;line-height:1.5;color:var(--dsw-alias-label-secondary)}
 .dps-tip-value{font-size:12px;line-height:1.5;font-weight:600;font-variant-numeric:tabular-nums}
-.dps-tip-exact{font-size:10px;line-height:1.4;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
 .dps-prov-card{display:flex;flex-direction:column;gap:12px}
 .dps-prov-head{display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap}
 .dps-prov{display:flex;flex-direction:column;gap:9px}
@@ -581,7 +574,7 @@ window.__ModuleLoader__.load({
       const [tip, setTip] = useState(null)
 
       /** 某一列（一周）的聚合值：周合计或累计值；每天模式不用它。 */
-      const weekOf = (cell) => heat.weeks[cell.column] || { weekTokens: 0, weekCalls: 0, cumulativeTokens: 0 }
+      const weekOf = (cell) => heat.weeks[cell.column] || { weekTokens: 0, cumulativeTokens: 0 }
 
       const showTip = (cell) => (event) => {
         const target = event && event.currentTarget
@@ -619,46 +612,28 @@ window.__ModuleLoader__.load({
         })
       })
 
+      // 悬浮浮层只保留「时间 + 缩写用量」两行：精确数字与请求数不再展示。
       const tipLines = (() => {
         if (!tip) return null
+        let label
+        let value
         if (mode === 'week') {
-          const value = toNumber(tip.week.weekTokens)
-          return [
-            h('div', { className: 'dps-tip-date', key: 'd' }, t('tip.week', { date: formatCellDateFull(tip.week.startKey) })),
-            h(
-              'div',
-              { className: 'dps-tip-value', key: 'v' },
-              value > 0 ? t('tip.tokens', { value: formatTokens(value) }) : t('tip.none'),
-            ),
-            value > 0 ? h('div', { className: 'dps-tip-exact', key: 'e' }, value.toLocaleString(currentLocaleId())) : null,
-            toNumber(tip.week.weekCalls) > 0
-              ? h('div', { className: 'dps-tip-exact', key: 'c' }, t('tip.calls', { count: toNumber(tip.week.weekCalls) }))
-              : null,
-          ]
-        }
-        if (mode === 'total') {
-          const value = toNumber(tip.week.cumulativeTokens)
-          return [
-            h('div', { className: 'dps-tip-date', key: 'd' }, t('tip.cumulative', { date: formatCellDateFull(tip.week.startKey) })),
-            h(
-              'div',
-              { className: 'dps-tip-value', key: 'v' },
-              value > 0 ? t('tip.tokens', { value: formatTokens(value) }) : t('tip.none'),
-            ),
-            value > 0 ? h('div', { className: 'dps-tip-exact', key: 'e' }, value.toLocaleString(currentLocaleId())) : null,
-          ]
+          label = t('tip.week', { date: formatCellDateFull(tip.week.startKey) })
+          value = toNumber(tip.week.weekTokens)
+        } else if (mode === 'total') {
+          label = t('tip.cumulative', { date: formatCellDateFull(tip.week.startKey) })
+          value = toNumber(tip.week.cumulativeTokens)
+        } else {
+          label = formatCellDate(tip.cell.key)
+          value = toNumber(tip.cell.tokens)
         }
         return [
-          h('div', { className: 'dps-tip-date', key: 'd' }, formatCellDate(tip.cell.key)),
+          h('div', { className: 'dps-tip-date', key: 'd' }, label),
           h(
             'div',
             { className: 'dps-tip-value', key: 'v' },
-            tip.cell.tokens > 0 ? t('tip.tokens', { value: formatTokens(tip.cell.tokens) }) : t('tip.none'),
+            value > 0 ? t('tip.tokens', { value: formatTokens(value) }) : t('tip.none'),
           ),
-          tip.cell.tokens > 0
-            ? h('div', { className: 'dps-tip-exact', key: 'e' }, toNumber(tip.cell.tokens).toLocaleString(currentLocaleId()))
-            : null,
-          tip.cell.calls > 0 ? h('div', { className: 'dps-tip-exact', key: 'c' }, t('tip.calls', { count: toNumber(tip.cell.calls) })) : null,
         ]
       })()
 
