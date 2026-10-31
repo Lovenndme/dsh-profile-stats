@@ -46,6 +46,11 @@ window.__ModuleLoader__.load({
       'tip.none': 'No activity',
       'tip.tokens': '{value} tokens',
       'tip.calls': '{count} requests',
+      'tip.week': 'Week of {date}',
+      'tip.cumulative': 'Cumulative through {date}',
+      'mode.day': 'Daily',
+      'mode.week': 'Weekly',
+      'mode.total': 'Cumulative',
       'status.loading': 'Scanning local session logs…',
       'status.updated': 'Updated {time}',
       'action.refresh': 'Refresh',
@@ -89,6 +94,11 @@ window.__ModuleLoader__.load({
       'tip.none': '无活动',
       'tip.tokens': '{value} tokens',
       'tip.calls': '{count} 次请求',
+      'tip.week': '{date} 起一周',
+      'tip.cumulative': '累计至 {date}',
+      'mode.day': '每天',
+      'mode.week': '每周',
+      'mode.total': '累计总量',
       'status.loading': '正在统计本地会话日志…',
       'status.updated': '更新于 {time}',
       'action.refresh': '刷新',
@@ -304,24 +314,41 @@ window.__ModuleLoader__.load({
       start.setDate(start.getDate() - start.getDay())
 
       const cells = []
+      const weeks = []
       const months = []
-      const values = []
       const cursor = new Date(start.getTime())
       let column = 0
       let previousMonth = -1
+      let cumulative = 0
 
       while (cursor.getTime() <= today.getTime()) {
         const weekStart = new Date(cursor.getTime())
+        let weekTokens = 0
+        let weekCalls = 0
+        let weekEnd = weekStart
         for (let row = 0; row < 7; row += 1) {
           const key = localDateKey(cursor)
           const future = cursor.getTime() > today.getTime()
           const day = future ? null : totals.get(key)
           const tokens = day ? day.tokens : 0
           const calls = day ? day.calls : 0
-          if (!future && tokens > 0) values.push(tokens)
-          cells.push({ key, tokens, calls, future, date: new Date(cursor.getTime()) })
+          if (!future) {
+            weekTokens += tokens
+            weekCalls += calls
+            weekEnd = new Date(cursor.getTime())
+          }
+          cells.push({ key, tokens, calls, future, column, date: new Date(cursor.getTime()) })
           cursor.setDate(cursor.getDate() + 1)
         }
+        cumulative += weekTokens
+        weeks.push({
+          column,
+          startKey: localDateKey(weekStart),
+          endKey: localDateKey(weekEnd),
+          weekTokens,
+          weekCalls,
+          cumulativeTokens: cumulative,
+        })
         const month = weekStart.getMonth()
         if (month !== previousMonth) {
           previousMonth = month
@@ -330,16 +357,19 @@ window.__ModuleLoader__.load({
         column += 1
       }
 
-      const sorted = values.slice().sort((left, right) => left - right)
-      const quantile = (ratio) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor(sorted.length * ratio)))]
-      const thresholds = sorted.length === 0 ? [] : [quantile(0.25), quantile(0.5), quantile(0.75)]
-      const levelOf = (tokens) => {
-        if (tokens <= 0) return 0
-        if (sorted.length === 0) return 1
-        if (tokens <= thresholds[0]) return 1
-        if (tokens <= thresholds[1]) return 2
-        if (tokens <= thresholds[2]) return 3
-        return 4
+      // 三档热力图各用一套分位阈值：每天看单日用量，每周看周合计，累计看截至该周的累计值。
+      const leveler = (sourceValues) => {
+        const sorted = sourceValues.filter((value) => value > 0).sort((left, right) => left - right)
+        if (sorted.length === 0) return () => 0
+        const quantile = (ratio) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor(sorted.length * ratio)))]
+        const thresholds = [quantile(0.25), quantile(0.5), quantile(0.75)]
+        return (value) => {
+          if (!(value > 0)) return 0
+          if (value <= thresholds[0]) return 1
+          if (value <= thresholds[1]) return 2
+          if (value <= thresholds[2]) return 3
+          return 4
+        }
       }
 
       let windowTokens = 0
@@ -363,7 +393,18 @@ window.__ModuleLoader__.load({
         spacedMonths.push(current)
       }
 
-      return { cells, months: spacedMonths, levelOf, windowTokens, columns: column }
+      return {
+        cells,
+        weeks,
+        months: spacedMonths,
+        windowTokens,
+        columns: column,
+        levels: {
+          day: leveler(cells.map((cell) => cell.tokens)),
+          week: leveler(weeks.map((week) => week.weekTokens)),
+          total: leveler(weeks.map((week) => week.cumulativeTokens)),
+        },
+      }
     }
 
     function heatBackground(level) {
@@ -523,17 +564,22 @@ window.__ModuleLoader__.load({
 
     function Heatmap(props) {
       const heat = props.heat
+      const mode = props.mode === 'week' || props.mode === 'total' ? props.mode : 'day'
       const [tip, setTip] = useState(null)
+
+      /** 某一列（一周）的聚合值：周合计或累计值；每天模式不用它。 */
+      const weekOf = (cell) => heat.weeks[cell.column] || { weekTokens: 0, weekCalls: 0, cumulativeTokens: 0 }
 
       const showTip = (cell) => (event) => {
         const target = event && event.currentTarget
         if (!target || typeof target.getBoundingClientRect !== 'function') return
         const rect = target.getBoundingClientRect()
         const viewportWidth = typeof window !== 'undefined' && window.innerWidth ? window.innerWidth : 1200
-        const halfWidth = 92
+        const halfWidth = 104
         const centerX = rect.left + rect.width / 2
         setTip({
           cell,
+          week: weekOf(cell),
           x: Math.min(Math.max(centerX, halfWidth), Math.max(halfWidth, viewportWidth - halfWidth)),
           /** 靠近视口顶部时改到格子下方，避免浮层被裁掉。 */
           y: rect.top < 96 ? rect.bottom + 8 : rect.top - 8,
@@ -543,7 +589,13 @@ window.__ModuleLoader__.load({
       const hideTip = () => setTip(null)
 
       const cells = heat.cells.map((cell) => {
-        const level = cell.future ? 0 : heat.levelOf(cell.tokens)
+        const level = cell.future
+          ? 0
+          : mode === 'week'
+            ? heat.levels.week(weekOf(cell).weekTokens)
+            : mode === 'total'
+              ? heat.levels.total(weekOf(cell).cumulativeTokens)
+              : heat.levels.day(cell.tokens)
         return h('div', {
           key: cell.key,
           className: 'dps-cell',
@@ -554,20 +606,54 @@ window.__ModuleLoader__.load({
         })
       })
 
-      const tooltip = tip
+      const tipLines = (() => {
+        if (!tip) return null
+        if (mode === 'week') {
+          const value = toNumber(tip.week.weekTokens)
+          return [
+            h('div', { className: 'dps-tip-date', key: 'd' }, t('tip.week', { date: formatCellDate(tip.week.startKey) })),
+            h(
+              'div',
+              { className: 'dps-tip-value', key: 'v' },
+              value > 0 ? t('tip.tokens', { value: formatTokens(value) }) : t('tip.none'),
+            ),
+            value > 0 ? h('div', { className: 'dps-tip-exact', key: 'e' }, value.toLocaleString(currentLocaleId())) : null,
+            toNumber(tip.week.weekCalls) > 0
+              ? h('div', { className: 'dps-tip-exact', key: 'c' }, t('tip.calls', { count: toNumber(tip.week.weekCalls) }))
+              : null,
+          ]
+        }
+        if (mode === 'total') {
+          const value = toNumber(tip.week.cumulativeTokens)
+          return [
+            h('div', { className: 'dps-tip-date', key: 'd' }, t('tip.cumulative', { date: formatCellDate(tip.week.endKey) })),
+            h(
+              'div',
+              { className: 'dps-tip-value', key: 'v' },
+              value > 0 ? t('tip.tokens', { value: formatTokens(value) }) : t('tip.none'),
+            ),
+            value > 0 ? h('div', { className: 'dps-tip-exact', key: 'e' }, value.toLocaleString(currentLocaleId())) : null,
+          ]
+        }
+        return [
+          h('div', { className: 'dps-tip-date', key: 'd' }, formatCellDate(tip.cell.key)),
+          h(
+            'div',
+            { className: 'dps-tip-value', key: 'v' },
+            tip.cell.tokens > 0 ? t('tip.tokens', { value: formatTokens(tip.cell.tokens) }) : t('tip.none'),
+          ),
+          tip.cell.tokens > 0
+            ? h('div', { className: 'dps-tip-exact', key: 'e' }, toNumber(tip.cell.tokens).toLocaleString(currentLocaleId()))
+            : null,
+          tip.cell.calls > 0 ? h('div', { className: 'dps-tip-exact', key: 'c' }, t('tip.calls', { count: toNumber(tip.cell.calls) })) : null,
+        ]
+      })()
+
+      const tooltip = tipLines
         ? h(
             'div',
             { className: 'dps-tip', style: { left: `${tip.x}px`, top: `${tip.y}px`, transform: `translate(-50%, ${tip.below ? '0' : '-100%'})` } },
-            h('div', { className: 'dps-tip-date' }, formatCellDate(tip.cell.key)),
-            h(
-              'div',
-              { className: 'dps-tip-value' },
-              tip.cell.tokens > 0 ? t('tip.tokens', { value: formatTokens(tip.cell.tokens) }) : t('tip.none'),
-            ),
-            tip.cell.tokens > 0
-              ? h('div', { className: 'dps-tip-exact' }, toNumber(tip.cell.tokens).toLocaleString(currentLocaleId()))
-              : null,
-            tip.cell.calls > 0 ? h('div', { className: 'dps-tip-exact' }, t('tip.calls', { count: toNumber(tip.cell.calls) })) : null,
+            tipLines,
           )
         : null
 
@@ -740,6 +826,8 @@ window.__ModuleLoader__.load({
         refresh()
       }, [refresh])
 
+      const [activityMode, setActivityMode] = useState('day')
+
       const totals = snapshot && snapshot.totals ? snapshot.totals : null
       const heat = useMemo(() => buildHeatmap(snapshot && snapshot.daily ? snapshot.daily : []), [snapshot && snapshot.daily])
       const identity = snapshot && snapshot.identity ? snapshot.identity : { name: 'DSH', handle: '@local' }
@@ -835,8 +923,33 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 'dps-section' },
-            h('div', { className: 'dps-section-head' }, h('span', { className: 'dps-section-title' }, t('section.activity'))),
-            h(Heatmap, { heat }),
+            h(
+              'div',
+              { className: 'dps-section-head' },
+              h('span', { className: 'dps-section-title' }, t('section.activity')),
+              h(
+                'div',
+                { className: 'dps-switch' },
+                [
+                  ['day', t('mode.day')],
+                  ['week', t('mode.week')],
+                  ['total', t('mode.total')],
+                ].map(([id, label]) =>
+                  h(
+                    'button',
+                    {
+                      key: id,
+                      type: 'button',
+                      'data-active': activityMode === id ? 'true' : 'false',
+                      onClick: () => setActivityMode(id),
+                    },
+                    label,
+                  ),
+                ),
+              ),
+            ),
+            // key 绑定模式：切换时重挂载 Heatmap，顺带清掉上一次的悬浮浮层。
+            h(Heatmap, { heat, mode: activityMode, key: `heat-${activityMode}` }),
           ),
           totals && hasAnySession
             ? h(
