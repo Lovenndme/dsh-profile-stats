@@ -20,11 +20,19 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 export const inject = ['webServer', 'sessionQuery']
 
 const SNAPSHOT_PATH = '/api/dsh-profile-stats/snapshot'
 const REFRESH_PATH = '/api/dsh-profile-stats/refresh'
+const UPDATE_PATH = '/api/dsh-profile-stats/update'
+
+/** 本插件自己的包名 / 目录（用于读自身版本、给 pluginManager 传 spec）。 */
+const SELF_NAME = 'dsh-profile-stats'
+const SELF_DIR = path.dirname(fileURLToPath(import.meta.url))
+/** 版本检查的缓存时长：打开面板最多每 6 小时问一次 registry。 */
+const UPDATE_CHECK_TTL_MS = 6 * 60 * 60 * 1000
 
 /** 缓存结构版本：折叠口径变了就 +1，旧缓存整份丢弃重折。 */
 const CACHE_VERSION = 9
@@ -460,6 +468,49 @@ function writeCache(cache) {
   }
 }
 
+/** 本插件自身声明的版本号（registry 上比对用）。 */
+function readOwnVersion() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(SELF_DIR, 'package.json'), 'utf8')).version || ''
+  } catch {
+    return ''
+  }
+}
+
+/** 够用的 semver 比较：-1 / 0 / 1；同号时预发布版本低于正式版。 */
+function compareVersions(left, right) {
+  const parse = (value) => {
+    const [core, ...rest] = String(value || '').split('-')
+    const parts = core.split('.').map((piece) => Number.parseInt(piece, 10) || 0)
+    return { parts, pre: rest.join('-') }
+  }
+  const a = parse(left)
+  const b = parse(right)
+  for (let index = 0; index < 3; index += 1) {
+    const diff = (a.parts[index] || 0) - (b.parts[index] || 0)
+    if (diff !== 0) return diff > 0 ? 1 : -1
+  }
+  if (a.pre === b.pre) return 0
+  if (!a.pre) return 1
+  if (!b.pre) return -1
+  return a.pre > b.pre ? 1 : -1
+}
+
+/**
+ * 是否「registry 依赖」。只有这种安装方式能被 pluginManager 升级；
+ * file:/link:/git+/github:/https: 这些一律不算（升级要重新装，别自作主张）。
+ */
+function isRegistrySpec(spec) {
+  const text = String(spec || '').trim()
+  if (!text) return false
+  if (/^(file:|link:|portal:|workspace:|git\+|git:|github:|https?:|ssh:|\/|\.{1,2}[\\/])/i.test(text)) return false
+  return /^[a-z0-9@][\w@./-]*(@[\w.^~<>=|* -]+)?$/i.test(text)
+}
+
+function updateResultFile() {
+  return path.join(dshHome(), 'dsh-profile-stats', 'update.json')
+}
+
 /* ------------------------------------------------------------------ 插件本体 */
 
 export function apply(ctx) {
@@ -604,6 +655,120 @@ export function apply(ctx) {
     return { name, handle, avatar, source: override ? 'file' : 'os', host, file: identityFile() }
   }
 
+  /* ---------------------------------------------------------- 版本检查与升级 */
+
+  const updateState = {
+    installed: readOwnVersion(),
+    latest: '',
+    available: false,
+    canUpdate: false,
+    source: '',
+    checking: false,
+    checkedAt: 0,
+    running: false,
+    lastResult: null,
+  }
+  try {
+    const raw = JSON.parse(fs.readFileSync(updateResultFile(), 'utf8'))
+    if (raw && typeof raw === 'object') updateState.lastResult = raw
+  } catch {
+    /* 没有上一次的更新结果 */
+  }
+
+  const updateInfo = () => ({
+    installed: updateState.installed,
+    latest: updateState.latest,
+    available: updateState.available,
+    canUpdate: updateState.canUpdate,
+    checking: updateState.checking,
+    running: updateState.running,
+    lastResult: updateState.lastResult,
+  })
+
+  const readInstalledFromManager = async (manager) => {
+    try {
+      const bundles = await manager.listBundles()
+      const mine = Array.isArray(bundles) ? bundles.find((bundle) => bundle && bundle.name === SELF_NAME) : null
+      if (!mine) return
+      if (mine.version) updateState.installed = String(mine.version)
+      updateState.source = mine.source === undefined || mine.source === null ? '' : String(mine.source)
+      // 只有从 registry 装的才能被进程内升级；link/git/tarball 一律不动。
+      updateState.canUpdate = mine.installed === true && isRegistrySpec(updateState.source)
+    } catch (error) {
+      console.warn('[dsh-profile-stats] 读取安装信息失败：', error && error.message ? error.message : error)
+    }
+  }
+
+  /** 问一次 registry 上的 latest（6 小时缓存，失败静默）。 */
+  const refreshUpdateInfo = async (force) => {
+    if (updateState.checking || updateState.running) return
+    if (!force && Date.now() - updateState.checkedAt < UPDATE_CHECK_TTL_MS) return
+    const manager = ctx.get('pluginManager')
+    if (!manager || typeof manager.inspect !== 'function') return
+    updateState.checking = true
+    try {
+      await readInstalledFromManager(manager)
+      const inspection = await manager.inspect(SELF_NAME)
+      if (inspection && inspection.status === 'accepted' && inspection.version) {
+        updateState.latest = String(inspection.version)
+        updateState.available =
+          updateState.canUpdate && compareVersions(updateState.latest, updateState.installed) > 0
+      }
+      updateState.checkedAt = Date.now()
+    } catch (error) {
+      console.warn('[dsh-profile-stats] 版本检查失败：', error && error.message ? error.message : error)
+    } finally {
+      updateState.checking = false
+    }
+  }
+
+  /**
+   * 一键升级：removeBundle → installBundle。
+   * 先答复请求、再延迟执行——否则 removeBundle 会在我们自己的调用栈里等自己卸载，
+   * 路由先被拆掉，请求永远拿不到响应。
+   */
+  const startUpdate = () => {
+    const manager = ctx.get('pluginManager')
+    const target = updateState.latest
+    if (!manager || typeof manager.removeBundle !== 'function' || typeof manager.installBundle !== 'function') {
+      return { ok: false, error: 'manager-unavailable' }
+    }
+    if (!target) return { ok: false, error: 'no-target' }
+    if (!updateState.canUpdate) return { ok: false, error: 'not-registry-install' }
+    if (compareVersions(target, updateState.installed) <= 0) return { ok: false, error: 'up-to-date' }
+
+    updateState.running = true
+    setTimeout(async () => {
+      const result = {
+        target,
+        from: updateState.installed,
+        at: Date.now(),
+        ok: false,
+        step: 'remove',
+        error: null,
+      }
+      try {
+        const removed = await manager.removeBundle(SELF_NAME)
+        result.remove = removed && removed.application
+        result.step = 'install'
+        const installed = await manager.installBundle(`${SELF_NAME}@${target}`, { saveExact: true, enabled: true })
+        result.install = installed && installed.application
+        result.version = installed && installed.version
+        result.ok = Boolean(installed) && installed.application !== 'failed'
+      } catch (error) {
+        result.error = error && error.message ? String(error.message) : String(error)
+      }
+      try {
+        const file = updateResultFile()
+        fs.mkdirSync(path.dirname(file), { recursive: true })
+        fs.writeFileSync(file, JSON.stringify(result))
+      } catch {
+        /* 结果文件写不了不影响升级本身 */
+      }
+    }, 400)
+    return { ok: true, target }
+  }
+
   const snapshotBody = () => {
     const agg = state.aggregate || rebuild()
     return {
@@ -612,6 +777,7 @@ export function apply(ctx) {
       scanning: state.scanning,
       progress: state.progress,
       identity: identity(),
+      update: updateInfo(),
       totals: agg.totals,
       daily: agg.daily,
       failedSessions: Object.keys(state.errors).length,
@@ -658,9 +824,29 @@ export function apply(ctx) {
     }),
   )
 
+  ctx.effect(() =>
+    ctx.webServer.register({
+      kind: 'exact',
+      path: UPDATE_PATH,
+      handler: (req, res) => {
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { ok: false, error: 'method-not-allowed' })
+          return
+        }
+        sendJson(res, 200, startUpdate())
+      },
+    }),
+  )
+
   // 冷启动就把扫描排上，第一次打开页面时通常已经能直接给数。
   ctx.effect(() => {
     const timer = setTimeout(() => kick(false), 1500)
-    return () => clearTimeout(timer)
+    const updateTimer = setTimeout(() => {
+      refreshUpdateInfo(false).catch(() => {})
+    }, 4000)
+    return () => {
+      clearTimeout(timer)
+      clearTimeout(updateTimer)
+    }
   })
 }

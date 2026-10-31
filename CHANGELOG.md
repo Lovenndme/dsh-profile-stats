@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.0 — 2026-10-31
+
+- 面板内一键升级：宿主每 6 小时用 `pluginManager.inspect` 查一次 npm 上的 latest，有新版本时页脚出现「更新到 x.y.z」按钮；
+  点击后宿主按 remove → install 完成升级（先答复请求、再延迟执行，避免在自己的调用栈里等自己卸载），插件重装完成后页面自动刷新。
+- 只对 **registry 安装**启用（`file:/link:/git+/github:/https:` 一律不显示按钮，避免动到开发副本或自作主张改安装方式）。
+- 桌面 profile 无法用 CLI 或第三方 updater 更新（`profile "desktop" is managed exclusively by the Electron application`），因此该按钮是桌面用户的唯一一键升级路径。
+
 ## 1.3.2 — 2026-10-31
 
 - README 增补「用户如何保持最新」：仅 registry 安装可被第三方 updater 检测；更新走官方 add 通道；需重启生效；pnpm 11 minimumReleaseAge 的注意点。

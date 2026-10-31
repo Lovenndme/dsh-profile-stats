@@ -22,6 +22,7 @@ window.__ModuleLoader__.load({
     const NS = 'dsh-profile-stats'
     const SNAPSHOT_URL = '/api/dsh-profile-stats/snapshot'
     const REFRESH_URL = '/api/dsh-profile-stats/refresh'
+    const UPDATE_URL = '/api/dsh-profile-stats/update'
     const PANEL_ID = 'profile'
     const DAY_MS = 86400000
     const HEAT_WEEKS = 53
@@ -54,6 +55,8 @@ window.__ModuleLoader__.load({
       'status.updated': 'Updated {time}',
       'action.refresh': 'Refresh',
       'action.retry': 'Retry',
+      'action.update': 'Update to {version}',
+      'action.updating': 'Updating…',
       'error.title': 'Failed to load usage stats',
       'error.hint': 'The host route /api/dsh-profile-stats/snapshot did not answer.',
       'empty.title': 'No sessions yet',
@@ -101,6 +104,8 @@ window.__ModuleLoader__.load({
       'status.updated': '更新于 {time}',
       'action.refresh': '刷新',
       'action.retry': '重试',
+      'action.update': '更新到 {version}',
+      'action.updating': '更新中…',
       'error.title': '读取用量统计失败',
       'error.hint': '宿主路由 /api/dsh-profile-stats/snapshot 没有响应。',
       'empty.title': '还没有可统计的会话',
@@ -422,7 +427,7 @@ window.__ModuleLoader__.load({
 
     /* -------------------------------------------------------------- 数据拉取 */
 
-    function useSnapshot() {
+    function useSnapshot(intervalMs = 45000) {
       const [snapshot, setSnapshot] = useState(null)
       const [error, setError] = useState(null)
 
@@ -441,7 +446,7 @@ window.__ModuleLoader__.load({
             if (!alive) return
             setSnapshot(payload)
             setError(null)
-            timer = setTimeout(load, payload && payload.scanning ? 900 : 45000)
+            timer = setTimeout(load, payload && payload.scanning ? 900 : intervalMs)
           } catch (failure) {
             if (!alive) return
             setError(failure)
@@ -454,7 +459,7 @@ window.__ModuleLoader__.load({
           alive = false
           if (timer) clearTimeout(timer)
         }
-      }, [])
+      }, [intervalMs])
 
       const refresh = useCallback(() => {
         fetch(REFRESH_URL, { method: 'POST' }).catch(() => {})
@@ -849,6 +854,7 @@ window.__ModuleLoader__.load({
     function ProfilePage() {
       useLocaleRevision()
       const { snapshot, error, refresh } = useSnapshot()
+      const [updating, setUpdating] = useState(false)
 
       useEffect(() => {
         // 打开页面就请求一次后台补扫：页面先画旧快照，数字随后自动刷新。
@@ -865,6 +871,11 @@ window.__ModuleLoader__.load({
       const generatedAt = snapshot && snapshot.generatedAt ? new Date(snapshot.generatedAt) : null
 
       const initial = String(identity.avatar || identity.name || 'D').trim().charAt(0).toUpperCase() || 'D'
+
+      const updateInfo = snapshot && snapshot.update ? snapshot.update : null
+      const updateReady = Boolean(
+        updateInfo && updateInfo.available && updateInfo.latest && updateInfo.latest !== updateInfo.installed,
+      )
 
       const hasAnySession = Boolean(totals && totals.calls > 0)
       const daily = snapshot && Array.isArray(snapshot.daily) ? snapshot.daily : []
@@ -891,6 +902,11 @@ window.__ModuleLoader__.load({
         h(StatCard, { label: t('stat.longestStreak'), value: hasAnySession ? formatDays(totals.longestStreak) : '—' }),
         h(StatCard, { label: t('stat.currentStreak'), value: hasAnySession ? formatDays(totals.currentStreak) : '—' }),
       )
+
+      useEffect(() => {
+        if (!updating || !updateInfo) return
+        if (updateInfo.installed && updateInfo.installed === updateInfo.latest) setUpdating(false)
+      }, [updating, updateInfo && updateInfo.installed, updateInfo && updateInfo.latest])
 
       // 首次统计期间卡片显示「—」而不是一堆 0，并在下方给出进度，避免看起来像没数据。
       const scanningHint =
@@ -1016,15 +1032,50 @@ window.__ModuleLoader__.load({
             { className: 'dps-footer' },
             h('span', null, statusLine),
             h(
-              'button',
-              {
-                type: 'button',
-                className: 'dps-button',
-                onClick: () => {
-                  refresh()
+              'span',
+              { style: { display: 'inline-flex', alignItems: 'center', gap: '8px' } },
+              updateReady
+                ? h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'dps-button',
+                      onClick: async () => {
+                        const target = updateInfo.latest
+                        setUpdating(true)
+                        await fetch(UPDATE_URL, { method: 'POST' }).catch(() => {})
+                        for (let attempt = 0; attempt < 40; attempt += 1) {
+                          await new Promise((resolve) => setTimeout(resolve, 1500))
+                          try {
+                            const response = await fetch(SNAPSHOT_URL, { cache: 'no-store' })
+                            const payload = await response.json()
+                            if (payload && payload.update && payload.update.installed === target) {
+                              window.location.reload()
+                              return
+                            }
+                          } catch {
+                            /* 重装期间路由会短暂消失，继续等 */
+                          }
+                        }
+                        setUpdating(false)
+                      },
+                    },
+                    t('action.update', { version: updateInfo.latest }),
+                  )
+                : updating
+                  ? h('span', { className: 'dps-section-note' }, t('action.updating'))
+                  : null,
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dps-button',
+                  onClick: () => {
+                    refresh()
+                  },
                 },
-              },
-              t('action.refresh'),
+                t('action.refresh'),
+              ),
             ),
           ),
         ),

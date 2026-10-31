@@ -64,6 +64,20 @@ plugin_manager(action: "install_bundle", target: "dsh-profile-stats")
 After installing, a **Profile** row appears in the left sidebar (person icon). Click it; the page
 renders immediately from a cached snapshot and rescans in the background.
 
+## In-panel update button
+
+The panel itself checks npm for a newer release (once per six hours, through the profile's plugin
+manager) and, when the package was installed **from the registry**, shows an `Update to x.y.z` button in
+the footer. Clicking it asks the host to remove and reinstall this bundle; the page reloads by itself once
+the new version is in place.
+
+Two limits are deliberate:
+
+- Installations from a git, tarball, or `link:` spec never show the button — a self-update there would
+  rewrite how you installed it.
+- On the **desktop** profile, the `dsh plugin` CLI and CLI-driven updaters are refused
+  (`profile "desktop" is managed exclusively by the Electron application`), so this button is the only
+  one-click path there. Web profiles can also use a third-party updater.
 ## Keeping it up to date (for users)
 
 DSH itself has no built-in bundle updater, and this plugin deliberately never phones home, so an
