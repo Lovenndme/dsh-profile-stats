@@ -33,7 +33,7 @@ window.__ModuleLoader__.load({
     const EN = {
       'panel.title': 'Profile',
       'stat.tokens': 'Total tokens',
-      'stat.peak': 'Peak daily tokens',
+      'stat.today': 'Tokens today',
       'stat.longestTurn': 'Longest task',
       'stat.longestStreak': 'Longest streak',
       'stat.currentStreak': 'Current streak',
@@ -85,7 +85,7 @@ window.__ModuleLoader__.load({
     const ZH = {
       'panel.title': '个人主页',
       'stat.tokens': '累计 Token 数',
-      'stat.peak': 'Token 使用峰值',
+      'stat.today': '今日 Token 用量',
       'stat.longestTurn': '最长任务用时',
       'stat.longestStreak': '最长连续天数',
       'stat.currentStreak': '当前连续天数',
@@ -1103,21 +1103,20 @@ window.__ModuleLoader__.load({
 
       const hasAnySession = Boolean(totals && totals.calls > 0)
       const daily = snapshot && Array.isArray(snapshot.daily) ? snapshot.daily : []
-      const todayEntry = daily.length > 0 ? daily[daily.length - 1] : null
+      const todayKey = localDateKey(startOfDay(new Date()))
+      const todayEntry = daily.find((entry) => entry && entry.date === todayKey) || null
       const providerHasRows = Boolean(
         (todayEntry && todayEntry.byProvider && Object.keys(todayEntry.byProvider).length > 0) ||
           (totals && totals.byProvider && Object.keys(totals.byProvider).length > 0),
       )
-      const peakSub = totals && totals.peakDay && totals.peakDay.date ? totals.peakDay.date : undefined
 
       const stats = h(
         'div',
         { className: 'dps-stats' },
         h(StatCard, { label: t('stat.tokens'), value: hasAnySession ? formatTokens(totals.tokens) : '—' }),
         h(StatCard, {
-          label: t('stat.peak'),
-          value: hasAnySession ? formatTokens(totals.peakDay ? totals.peakDay.tokens : 0) : '—',
-          sub: hasAnySession ? peakSub : undefined,
+          label: t('stat.today'),
+          value: hasAnySession ? formatTokens(todayEntry ? todayEntry.tokens : 0) : '—',
         }),
         h(StatCard, {
           label: t('stat.longestTurn'),
