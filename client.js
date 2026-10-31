@@ -533,9 +533,9 @@ window.__ModuleLoader__.load({
 .dps-chart-tick > span{position:absolute;left:0;top:-8px;font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;padding-right:6px}
 .dps-chart-scroll{position:absolute;left:40px;right:0;top:0;bottom:0;overflow-x:auto;overflow-y:hidden}
 .dps-chart-bars{position:relative;height:100%;display:flex;align-items:stretch;gap:6px}
-.dps-chart-bucket{flex:1 1 0;min-width:0;height:100%;display:flex;flex-direction:column}
-.dps-chart-pair{display:flex;align-items:flex-end;justify-content:center;gap:2px;width:100%;flex:1 1 auto;min-height:0}
-.dps-chart-bar{width:100%;border-radius:2px 2px 0 0;transition:opacity .12s ease-out}
+.dps-chart-bucket{flex:1 1 0;min-width:0;min-height:0;height:100%;display:flex;flex-direction:column}
+.dps-chart-pair{display:flex;align-items:flex-end;justify-content:center;gap:3px;width:100%;flex:1 1 0;min-height:0}
+.dps-chart-bar{width:100%;max-width:16px;min-height:0;border-radius:2px 2px 0 0;transition:opacity .12s ease-out}
 .dps-chart-bucket:hover .dps-chart-bar{opacity:.8}
 .dps-chart-label{height:18px;line-height:18px;text-align:center;font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap;overflow:hidden}
 .dps-tip-row{display:flex;align-items:center;gap:6px;font-size:12px;white-space:nowrap}
@@ -959,7 +959,7 @@ window.__ModuleLoader__.load({
       }
       if (max <= 0) return null
 
-      const stride = Math.max(1, Math.ceil(buckets.length / 8))
+      const stride = Math.max(1, Math.ceil(buckets.length / 14))
       const labelOf = (key) => key.slice(5).replace('-', '/')
 
       const showTip = (bucket) => (event) => {
