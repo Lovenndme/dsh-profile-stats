@@ -526,15 +526,16 @@ window.__ModuleLoader__.load({
 .dps-chart-legend-item{display:inline-flex;align-items:center;gap:6px}
 .dps-chart-legend-total{color:var(--dsw-alias-label-primary);font-variant-numeric:tabular-nums}
 .dps-chart-plot{position:relative;height:220px;min-width:0;padding-bottom:18px}
-.dps-chart-tick{position:absolute;left:64px;right:0;border-top:1px dashed var(--dsw-alias-border-l2);pointer-events:none}
+.dps-chart-ticks{position:absolute;left:64px;right:0;top:0;bottom:16px;pointer-events:none}
+.dps-chart-tick{position:absolute;left:0;right:0;border-top:1px dashed var(--dsw-alias-border-l2)}
 .dps-chart-tick > span{position:absolute;left:-64px;top:-7px;width:60px;text-align:right;font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;padding-right:6px;background:var(--dsw-alias-bg-layer-1)}
-.dps-chart-scroll{position:absolute;left:64px;right:0;top:0;bottom:18px;overflow-x:auto;overflow-y:hidden}
+.dps-chart-scroll{position:absolute;left:64px;right:0;top:0;bottom:0;overflow-x:auto;overflow-y:hidden}
 .dps-chart-bars{position:relative;height:100%;display:flex;align-items:flex-end;gap:2px}
-.dps-chart-bucket{flex:1 1 0;min-width:0;height:100%;display:flex;flex-direction:column;justify-content:flex-end;position:relative}
-.dps-chart-pair{display:flex;align-items:flex-end;justify-content:center;gap:2px;width:100%;height:100%}
+.dps-chart-bucket{flex:1 1 0;min-width:0;height:100%;display:flex;flex-direction:column}
+.dps-chart-pair{display:flex;align-items:flex-end;justify-content:center;gap:2px;width:100%;flex:1 1 auto;min-height:0}
 .dps-chart-bar{width:45%;max-width:10px;min-width:2px;border-radius:2px 2px 0 0;transition:opacity .12s ease-out}
 .dps-chart-bucket:hover .dps-chart-bar{opacity:.8}
-.dps-chart-label{position:absolute;top:100%;left:50%;transform:translateX(-50%);font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap;padding-top:4px}
+.dps-chart-label{height:16px;line-height:16px;text-align:center;font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap;overflow:hidden}
 .dps-tip-row{display:flex;align-items:center;gap:6px;font-size:12px;white-space:nowrap}
 .dps-tip-row .dps-dot{width:8px;height:8px;border-radius:2px;flex:0 0 auto}
 .dps-tip-row .dps-tip-value{margin-left:auto;padding-left:12px}
@@ -1011,11 +1012,15 @@ window.__ModuleLoader__.load({
       const plot = h(
         'div',
         { className: 'dps-chart-plot' },
-        ticks.map((ratio) =>
-          h(
-            'div',
-            { className: 'dps-chart-tick', key: ratio, style: { bottom: `${ratio * 100}%` } },
-            h('span', null, formatTokens(max * ratio)),
+        h(
+          'div',
+          { className: 'dps-chart-ticks' },
+          ticks.map((ratio) =>
+            h(
+              'div',
+              { className: 'dps-chart-tick', key: ratio, style: { bottom: `${ratio * 100}%` } },
+              h('span', null, formatTokens(max * ratio)),
+            ),
           ),
         ),
         h(
