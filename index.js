@@ -704,15 +704,23 @@ export function apply(ctx) {
     if (updateState.checking || updateState.running) return
     if (!force && Date.now() - updateState.checkedAt < UPDATE_CHECK_TTL_MS) return
     const manager = ctx.get('pluginManager')
-    if (!manager || typeof manager.inspect !== 'function') return
+    if (!manager || typeof manager.listBundles !== 'function') return
     updateState.checking = true
     try {
       await readInstalledFromManager(manager)
-      const inspection = await manager.inspect(SELF_NAME)
-      if (inspection && inspection.status === 'accepted' && inspection.version) {
-        updateState.latest = String(inspection.version)
-        updateState.available =
-          updateState.canUpdate && compareVersions(updateState.latest, updateState.installed) > 0
+      // 不用 pluginManager.inspect：它对「已安装的包」一律返回 already-installed，
+      // 问不出 registry 上的最新版本。这里直接读 registry 的 /<name>/latest。
+      const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(SELF_NAME)}/latest`, {
+        headers: { accept: 'application/json' },
+        signal: AbortSignal.timeout(8000),
+      })
+      if (response.ok) {
+        const payload = await response.json()
+        if (payload && typeof payload.version === 'string') {
+          updateState.latest = payload.version
+          updateState.available =
+            updateState.canUpdate && compareVersions(updateState.latest, updateState.installed) > 0
+        }
       }
       updateState.checkedAt = Date.now()
     } catch (error) {
@@ -733,8 +741,8 @@ export function apply(ctx) {
     if (!manager || typeof manager.removeBundle !== 'function' || typeof manager.installBundle !== 'function') {
       return { ok: false, error: 'manager-unavailable' }
     }
-    if (!target) return { ok: false, error: 'no-target' }
     if (!updateState.canUpdate) return { ok: false, error: 'not-registry-install' }
+    if (!target) return { ok: false, error: 'no-target' }
     if (compareVersions(target, updateState.installed) <= 0) return { ok: false, error: 'up-to-date' }
 
     updateState.running = true

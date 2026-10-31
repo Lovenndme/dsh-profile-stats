@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.1 — 2026-10-31
+
+- 修复版本探测：改用 registry 的 `/<name>/latest` 读最新版（`pluginManager.inspect` 对已安装的包一律返回 already-installed，问不出新版本）。
+- 错误码顺序修正：先判断能否更新，再判断目标版本，link/git 安装会得到 `not-registry-install` 而不是 `no-target`。
+
 ## 1.4.0 — 2026-10-31
 
 - 面板内一键升级：宿主每 6 小时用 `pluginManager.inspect` 查一次 npm 上的 latest，有新版本时页脚出现「更新到 x.y.z」按钮；
