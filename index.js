@@ -35,7 +35,7 @@ const SELF_DIR = path.dirname(fileURLToPath(import.meta.url))
 const UPDATE_CHECK_TTL_MS = 6 * 60 * 60 * 1000
 
 /** 缓存结构版本：折叠口径变了就 +1，旧缓存整份丢弃重折。 */
-const CACHE_VERSION = 10
+const CACHE_VERSION = 11
 const DAY_MS = 86400000
 /** 打开页面时如果快照比这个更旧，就顺手在后台重扫。 */
 const STALE_AFTER_MS = 5 * 60 * 1000
@@ -166,15 +166,33 @@ function providerOf(event) {
 }
 
 /**
- * 这一步用的是哪个模型（deepseek-v4.1-flash-economy / deepseek-v4-pro …）。
- * 只按两大类统计：名字里带 pro 的算 Pro，带 flash 的算 Flash，其余归 Other。
+ * 模型 id 归一化：把中转站常见的写法差异（前缀、点/下划线、日期快照后缀）抹平，
+ * 让同一个模型的多种写法落到同一个 family 上。例如
+ *   deepseek-v4-1-flash-261017 / deepseek-v4.1-flash / DeepSeek-V4-1-Flash
+ * 都归一成 deepseek-v4-1-flash。
  */
-function modelClassOf(event) {
+function normalizeModelId(raw) {
+  let id = String(raw || '').trim().toLowerCase()
+  if (!id) return ''
+  // 有些中转站会把厂商当前缀再拼一层
+  id = id.replace(/^(openai|anthropic|google|azure|aliyun|zhipu|baidu|moonshot)[/:]/, '')
+  // 点、下划线统一成分隔符
+  id = id.replace(/[._]/g, '-')
+  // 去掉尾部的日期/快照/版本噪音
+  id = id
+    .replace(/-\d{4}-\d{2}-\d{2}$/, '')
+    .replace(/-\d{6,8}$/, '')
+    .replace(/-\d{4}$/, '')
+    .replace(/-v\d+$/, '')
+    .replace(/-(latest|preview|stable|exp)$/, '')
+  return id.replace(/-+/g, '-').replace(/^-|-$/g, '')
+}
+
+/** 这一步实际用的模型族（模型 id 归一化后的结果，原样作为统计键）。 */
+function modelFamilyOf(event) {
   const source = event && event.data && event.data.message && event.data.message.source
-  const model = source && typeof source.model === 'string' ? source.model.toLowerCase() : ''
-  if (model.includes('pro')) return 'pro'
-  if (model.includes('flash')) return 'flash'
-  return 'other'
+  const raw = source && typeof source.model === 'string' ? source.model : ''
+  return normalizeModelId(raw) || 'unknown'
 }
 
 function applyEvent(fold, event) {
@@ -200,8 +218,8 @@ function applyEvent(fold, event) {
       fold.cacheReadTokens += toNumber(usage.cacheReadTokens)
       fold.cacheWriteTokens += toNumber(usage.cacheWriteTokens)
       if (tokens > fold.maxStepTokens) fold.maxStepTokens = tokens
-      const modelClass = modelClassOf(event)
-      fold.perModel[modelClass] = toNumber(fold.perModel[modelClass]) + tokens
+      const modelFamily = modelFamilyOf(event)
+      fold.perModel[modelFamily] = toNumber(fold.perModel[modelFamily]) + tokens
       if (time > 0) {
         const key = localDayKey(time)
         if (key) {
@@ -217,7 +235,7 @@ function applyEvent(fold, event) {
           day[provider] = toNumber(day[provider]) + tokens
           fold.perDayProvider[key] = day
           const modelDay = fold.perDayModel[key] || {}
-          modelDay[modelClass] = toNumber(modelDay[modelClass]) + tokens
+          modelDay[modelFamily] = toNumber(modelDay[modelFamily]) + tokens
           fold.perDayModel[key] = modelDay
         }
       }
@@ -275,15 +293,15 @@ function foldSnapshot(snapshot) {
         fold.inheritedCacheReadTokens += toNumber(usage.cacheReadTokens)
         fold.inheritedCacheWriteTokens += toNumber(usage.cacheWriteTokens)
         const time = toNumber(event.time)
-        const inheritedModelClass = modelClassOf(event)
-        fold.inheritedPerModel[inheritedModelClass] = toNumber(fold.inheritedPerModel[inheritedModelClass]) + tokens
+        const inheritedModelFamily = modelFamilyOf(event)
+        fold.inheritedPerModel[inheritedModelFamily] = toNumber(fold.inheritedPerModel[inheritedModelFamily]) + tokens
         if (time > 0) {
           const key = localDayKey(time)
           if (key) {
             fold.inheritedPerDay[key] = toNumber(fold.inheritedPerDay[key]) + tokens
             fold.inheritedPerDayCalls[key] = toNumber(fold.inheritedPerDayCalls[key]) + 1
             const inheritedDayModels = fold.inheritedPerDayModel[key] || {}
-            inheritedDayModels[inheritedModelClass] = toNumber(inheritedDayModels[inheritedModelClass]) + tokens
+            inheritedDayModels[inheritedModelFamily] = toNumber(inheritedDayModels[inheritedModelFamily]) + tokens
             fold.inheritedPerDayModel[key] = inheritedDayModels
           }
         }
@@ -369,8 +387,8 @@ function aggregate(sessions, now, knownIds) {
         entry.byProvider[provider] = toNumber(entry.byProvider[provider]) + toNumber(value)
       }
       const dayModels = modelsByDay && modelsByDay[key]
-      for (const [modelClass, value] of Object.entries(dayModels || {})) {
-        entry.byModel[modelClass] = toNumber(entry.byModel[modelClass]) + toNumber(value)
+      for (const [modelFamily, value] of Object.entries(dayModels || {})) {
+        entry.byModel[modelFamily] = toNumber(entry.byModel[modelFamily]) + toNumber(value)
       }
       daily.set(key, entry)
     }
@@ -386,8 +404,8 @@ function aggregate(sessions, now, knownIds) {
     for (const [provider, value] of Object.entries(fold.perProvider || {})) {
       totals.byProvider[provider] = toNumber(totals.byProvider[provider]) + toNumber(value)
     }
-    for (const [modelClass, value] of Object.entries(fold.perModel || {})) {
-      totals.byModel[modelClass] = toNumber(totals.byModel[modelClass]) + toNumber(value)
+    for (const [modelFamily, value] of Object.entries(fold.perModel || {})) {
+      totals.byModel[modelFamily] = toNumber(totals.byModel[modelFamily]) + toNumber(value)
     }
 
     const inheritedTokens = toNumber(fold.inheritedTokens)
@@ -408,8 +426,8 @@ function aggregate(sessions, now, knownIds) {
         totals.outputTokens += toNumber(fold.inheritedOutputTokens)
         totals.cacheReadTokens += toNumber(fold.inheritedCacheReadTokens)
         totals.cacheWriteTokens += toNumber(fold.inheritedCacheWriteTokens)
-        for (const [modelClass, value] of Object.entries(fold.inheritedPerModel || {})) {
-          totals.byModel[modelClass] = toNumber(totals.byModel[modelClass]) + toNumber(value)
+        for (const [modelFamily, value] of Object.entries(fold.inheritedPerModel || {})) {
+          totals.byModel[modelFamily] = toNumber(totals.byModel[modelFamily]) + toNumber(value)
         }
         mergeDay(fold, fold.inheritedPerDay, fold.inheritedPerDayCalls, fold.inheritedPerDayModel)
       }
