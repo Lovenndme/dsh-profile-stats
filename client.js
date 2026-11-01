@@ -556,6 +556,9 @@ window.__ModuleLoader__.load({
 .dps-chart-tick > span{position:absolute;left:0;top:-8px;font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;padding-right:6px}
 .dps-chart-scroll{position:absolute;left:40px;right:0;top:0;bottom:0;overflow-x:auto;overflow-y:hidden}
 .dps-chart-bars{position:relative;height:100%;display:flex;align-items:stretch;gap:6px}
+@keyframes dps-grow{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+.dps-chart-stack{transform-origin:bottom center;animation:dps-grow .58s cubic-bezier(.22,.61,.36,1) both}
+@media (prefers-reduced-motion:reduce){.dps-chart-stack{animation:none}}
 .dps-chart-bucket{flex:1 1 0;min-width:0;min-height:0;height:100%;display:flex;flex-direction:column}
 .dps-chart-stack{display:flex;flex-direction:column;justify-content:flex-end;align-items:stretch;width:100%;max-width:22px;margin:0 auto;flex:1 1 0;min-height:0;border-radius:2px 2px 0 0;overflow:hidden}
 .dps-chart-seg{width:100%;min-height:0;transition:opacity .12s ease-out}
@@ -1117,7 +1120,7 @@ window.__ModuleLoader__.load({
           { className: 'dps-chart-scroll' },
           h(
             'div',
-            { className: 'dps-chart-bars', style: { minWidth: `${buckets.length * 14}px` } },
+            { className: 'dps-chart-bars', key: `bars-${range}`, style: { minWidth: `${buckets.length * 14}px` } },
             buckets.map((bucket, index) =>
               h(
                 'div',
@@ -1129,7 +1132,10 @@ window.__ModuleLoader__.load({
                 },
                 h(
                   'div',
-                  { className: 'dps-chart-stack' },
+                  {
+                    className: 'dps-chart-stack',
+                    style: { animationDelay: `${Math.min(index * 18, 320)}ms` },
+                  },
                   // 反转顺序：用量最大的排在最底下（DOM 里放最后）
                   series
                     .slice()
