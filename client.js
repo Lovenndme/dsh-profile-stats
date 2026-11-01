@@ -557,9 +557,9 @@ window.__ModuleLoader__.load({
 .dps-chart-scroll{position:absolute;left:40px;right:0;top:0;bottom:0;overflow-x:auto;overflow-y:hidden}
 .dps-chart-bars{position:relative;height:100%;display:flex;align-items:stretch;gap:6px}
 .dps-chart-bucket{flex:1 1 0;min-width:0;min-height:0;height:100%;display:flex;flex-direction:column}
-.dps-chart-pair{display:flex;align-items:flex-end;justify-content:center;gap:3px;width:100%;flex:1 1 0;min-height:0}
-.dps-chart-bar{width:100%;max-width:16px;min-height:0;border-radius:2px 2px 0 0;transition:opacity .12s ease-out}
-.dps-chart-bucket:hover .dps-chart-bar{opacity:.8}
+.dps-chart-stack{display:flex;flex-direction:column;justify-content:flex-end;align-items:stretch;width:100%;max-width:22px;margin:0 auto;flex:1 1 0;min-height:0;border-radius:2px 2px 0 0;overflow:hidden}
+.dps-chart-seg{width:100%;min-height:0;transition:opacity .12s ease-out}
+.dps-chart-bucket:hover .dps-chart-seg{opacity:.82}
 .dps-chart-label{height:18px;line-height:18px;text-align:center;font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap;overflow:hidden}
 .dps-tip-row{display:flex;align-items:center;gap:6px;font-size:12px;white-space:nowrap}
 .dps-tip-row .dps-dot{width:8px;height:8px;border-radius:2px;flex:0 0 auto}
@@ -917,6 +917,9 @@ window.__ModuleLoader__.load({
       'var(--dsw-alias-brand-primary)',
       'var(--dsw-alias-state-success-primary)',
       'var(--dsw-alias-state-warn-primary)',
+      'var(--dsw-alias-state-error-primary)',
+      'var(--dsw-alias-state-idle-primary)',
+      'var(--dsw-alias-label-secondary)',
     ]
 
     const MODEL_VENDORS = {
@@ -1002,7 +1005,7 @@ window.__ModuleLoader__.load({
       const ranked = [...familyTotals.entries()].sort((left, right) => right[1] - left[1]).filter(([, value]) => value > 0)
       if (ranked.length === 0) return null
 
-      const top = ranked.slice(0, 2)
+      const top = ranked.slice(0, 6)
       const rest = ranked.slice(2)
       const series = top.map(([family], index) => ({
         key: family,
@@ -1126,17 +1129,24 @@ window.__ModuleLoader__.load({
                 },
                 h(
                   'div',
-                  { className: 'dps-chart-pair' },
-                  series.map((item) =>
-                    h('div', {
-                      key: item.key,
-                      className: 'dps-chart-bar',
-                      style: {
-                        height: `${axisMax > 0 ? (valueOf(bucket, item.key) / axisMax) * 100 : 0}%`,
-                        background: item.color,
-                      },
+                  { className: 'dps-chart-stack' },
+                  // 反转顺序：用量最大的排在最底下（DOM 里放最后）
+                  series
+                    .slice()
+                    .reverse()
+                    .map((item) => {
+                      const value = valueOf(bucket, item.key)
+                      if (!(value > 0)) return null
+                      return h('div', {
+                        key: item.key,
+                        className: 'dps-chart-seg',
+                        title: `${item.name} ${formatTokens(value)}`,
+                        style: {
+                          height: `${axisMax > 0 ? (value / axisMax) * 100 : 0}%`,
+                          background: item.color,
+                        },
+                      })
                     }),
-                  ),
                 ),
                 index % stride === 0 ? h('div', { className: 'dps-chart-label' }, labelOf(bucket.key)) : null,
               ),
