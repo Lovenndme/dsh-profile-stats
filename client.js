@@ -68,6 +68,7 @@ window.__ModuleLoader__.load({
       'value.tokensTooltip': '{date} · {value} tokens',
       'section.provider': 'Provider breakdown',
       'section.model': 'Token by model',
+      'chart.total': 'total {value}',
       'range.recent': 'Last 14 days',
       'range.all': 'All time',
       'toggle.today': 'Today',
@@ -120,6 +121,7 @@ window.__ModuleLoader__.load({
       'value.tokensTooltip': '{date} · {value} tokens',
       'section.provider': '供应商拆分',
       'section.model': '模型分布',
+      'chart.total': '总计 {value}',
       'range.recent': '近 14 天',
       'range.all': '全部',
       'toggle.today': '今日',
@@ -543,7 +545,7 @@ window.__ModuleLoader__.load({
 .dps-chart-total{font-size:12px;font-weight:400;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
 .dps-chart-legend{display:flex;align-items:center;justify-content:center;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--dsw-alias-label-secondary)}
 .dps-chart-legend-item{display:inline-flex;align-items:center;gap:6px}
-.dps-chart-legend-total{color:var(--dsw-alias-label-primary);font-variant-numeric:tabular-nums}
+.dps-chart-legend-total{color:var(--dsw-alias-label-primary);font-variant-numeric:tabular-nums;margin-left:2px}
 .dps-chart-plot{position:relative;height:240px;min-width:0}
 .dps-chart-ticks{position:absolute;left:0;right:0;top:0;bottom:18px;pointer-events:none}
 .dps-chart-tick{position:absolute;left:0;right:0;border-top:1px solid var(--dsw-alias-border-l2);opacity:.55}
@@ -1026,6 +1028,7 @@ window.__ModuleLoader__.load({
             { className: 'dps-chart-legend-item', key: item.key },
             h('span', { className: 'dps-dot', style: { background: item.color } }),
             item.name,
+            h('span', { className: 'dps-chart-legend-total' }, formatTokens(totalsInRange[MODEL_SERIES.indexOf(item)])),
           ),
         ),
       )
@@ -1115,7 +1118,7 @@ window.__ModuleLoader__.load({
             'div',
             { className: 'dps-chart-title' },
             t('section.model'),
-            h('span', { className: 'dps-chart-total' }, formatTokens(rangeTotal)),
+            h('span', { className: 'dps-chart-total' }, t('chart.total', { value: formatTokens(rangeTotal) })),
           ),
           toggle,
         ),
