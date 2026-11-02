@@ -582,7 +582,6 @@ window.__ModuleLoader__.load({
 .dps-mix-share{color:var(--dsw-alias-label-secondary);text-align:right;font-variant-numeric:tabular-nums}
 .dps-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:1px}
 .dps-value{color:var(--dsw-alias-label-primary);font-variant-numeric:tabular-nums}
-.dps-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--dsw-alias-label-secondary)}
 .dps-button{appearance:none;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-size:12px;padding:6px 14px;border-radius:8px;cursor:pointer;font-family:inherit}
 .dps-button:hover{border-color:var(--dsw-alias-border-l2)}
 .dps-button:active{transform:translateY(1px)}
@@ -593,7 +592,6 @@ window.__ModuleLoader__.load({
 /* —— 设计图改版：头部 / KPI 卡 / 两栏网格 / 环形中心 / 供应商进度条 —— */
 .dps-page{max-width:1180px;padding:28px 28px 48px;gap:18px}
 .dps-identity{position:relative;flex-direction:column;align-items:center;gap:14px}
-.dps-header-status{position:absolute;left:0;top:50%;transform:translateY(-50%);font-size:12px;color:var(--dsw-alias-label-secondary);white-space:nowrap}
 .dps-avatar{width:64px;height:64px;border-radius:18px;font-size:26px;background:var(--dsw-alias-bg-layer-2);box-shadow:none}
 .dps-name{font-size:24px;font-weight:700;line-height:1.15;letter-spacing:-.01em}
 .dps-handle{font-size:12px}
@@ -1349,14 +1347,6 @@ window.__ModuleLoader__.load({
             )
           : null
 
-      let statusLine
-      if (scanning) {
-        statusLine = progress.total > 0 ? `${t('status.loading')} ${progress.done}/${progress.total}` : t('status.loading')
-      } else if (generatedAt) {
-        statusLine = t('status.updated', { time: formatClock(generatedAt) })
-      } else {
-        statusLine = t('status.loading')
-      }
 
       const errorBlock = error
         ? h(
@@ -1448,42 +1438,9 @@ window.__ModuleLoader__.load({
               h('div', { className: 'dps-name' }, identity.name || 'DSH'),
               h('div', { className: 'dps-handle' }, identity.handle || '@local'),
             ),
-            h('span', { className: 'dps-header-status' }, statusLine),
             h(
               'div',
               { className: 'dps-header-actions' },
-              h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'dps-icon-button',
-                  'aria-label': t('action.refresh'),
-                  title: t('action.refresh'),
-                  onClick: () => {
-                    refresh()
-                  },
-                },
-                h(Icon, { name: 'refresh' }),
-              ),
-            ),
-          ),
-          stats,
-          scanningHint,
-          errorBlock,
-          emptyBlock,
-          heatSection,
-          h(
-            'div',
-            { className: 'dps-grid' },
-            modelSection,
-            h('div', { className: 'dps-stack' }, mixSection, providerSection),
-          ),
-          h(
-            'div',
-            { className: 'dps-footer' },
-            h(
-              'span',
-              { style: { display: 'inline-flex', alignItems: 'center', gap: '8px' } },
               updateReady
                 ? h(
                     'button',
@@ -1515,8 +1472,31 @@ window.__ModuleLoader__.load({
                 : updating
                   ? h('span', { className: 'dps-section-note' }, t('action.updating'))
                   : null,
-
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dps-icon-button',
+                  'aria-label': t('action.refresh'),
+                  title: t('action.refresh'),
+                  onClick: () => {
+                    refresh()
+                  },
+                },
+                h(Icon, { name: 'refresh' }),
+              ),
             ),
+          ),
+          stats,
+          scanningHint,
+          errorBlock,
+          emptyBlock,
+          heatSection,
+          h(
+            'div',
+            { className: 'dps-grid' },
+            modelSection,
+            h('div', { className: 'dps-stack' }, mixSection, providerSection),
           ),
         ),
       )
