@@ -1,4 +1,9 @@
-﻿# Changelog
+# Changelog
+
+## 2.4.9 — 2026-11-02
+
+- fix: never write a BOM into package.json (the DSH loader JSON.parses it and skips the bundle)
+
 
 ## 2.4.8 — 2026-11-02
 
