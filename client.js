@@ -87,6 +87,8 @@ window.__ModuleLoader__.load({
       'section.model': 'Token by model',
       'chart.total': 'total {value}',
       'model.others': 'Other models',
+      'model.flashFamily': 'DeepSeek Flash',
+      'model.proFamily': 'DeepSeek Pro',
       'model.unknown': 'Unknown model',
       'range.recent': 'Last 14 days',
       'range.all': 'All time',
@@ -159,6 +161,8 @@ window.__ModuleLoader__.load({
       'section.model': '模型分布',
       'chart.total': '总计 {value}',
       'model.others': '其他模型',
+      'model.flashFamily': 'DeepSeek Flash 系列',
+      'model.proFamily': 'DeepSeek Pro',
       'model.unknown': '未知模型',
       'range.recent': '近 14 天',
       'range.all': '全部',
@@ -1117,6 +1121,24 @@ window.__ModuleLoader__.load({
       step: 'Step', o: 'OpenAI o',
     }
 
+    /**
+     * 型号家族：用户只关心档位，不关心供应商写法。
+     * deepseek-v4-flash / deepseek-v4-1-flash / deepseek-flash / deepseek-v4-1-flash-economy /
+     * deepseek-v4-flash-vision 都归为 flash；带 pro 的归为 pro；其余保留各自的归一化 id。
+     */
+    function modelFamily(id) {
+      const text = String(id || '').toLowerCase()
+      if (text.includes('pro')) return 'deepseek-pro'
+      if (text.includes('flash')) return 'deepseek-flash'
+      return text
+    }
+
+    function familyLabel(key) {
+      if (key === 'deepseek-flash') return t('model.flashFamily')
+      if (key === 'deepseek-pro') return t('model.proFamily')
+      return prettyModelName(key)
+    }
+
     /** 把归一化后的模型 id 转成可读名字：deepseek-v4-1-flash → DeepSeek V4.1 Flash。 */
     function prettyModelName(id) {
       if (!id || id === 'unknown') return t('model.unknown')
@@ -1184,8 +1206,9 @@ window.__ModuleLoader__.load({
         for (const [family, raw] of Object.entries(byModel)) {
           const value = toNumber(raw)
           if (!(value > 0)) continue
-          bucket.values[family] = (bucket.values[family] || 0) + value
-          familyTotals.set(family, (familyTotals.get(family) || 0) + value)
+          const group = modelFamily(family)
+          bucket.values[group] = (bucket.values[group] || 0) + value
+          familyTotals.set(group, (familyTotals.get(group) || 0) + value)
         }
         bucketMap.set(bucketKey, bucket)
       }
@@ -1198,7 +1221,7 @@ window.__ModuleLoader__.load({
       const rest = ranked.slice(2)
       const series = top.map(([family], index) => ({
         key: family,
-        name: prettyModelName(family),
+        name: familyLabel(family),
         color: MODEL_PALETTE[index % MODEL_PALETTE.length],
         total: familyTotals.get(family) || 0,
       }))

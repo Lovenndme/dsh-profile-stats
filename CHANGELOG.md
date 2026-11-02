@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.4.2 — 2026-11-02
+
+- 模型分布按**型号家族**归并：deepseek-v4-flash / deepseek-v4-1-flash / deepseek-flash / -flash-economy / -flash-vision 全部合并为 **DeepSeek Flash**，带 pro 的合并为 **DeepSeek Pro**；其他厂商模型保留各自名称。不再因为供应商写法不同而拆成多根柱子。
+
 ## 2.4.1 — 2026-11-02
 
 - 新增**页面级时间范围**（全部 / 今日 / 7 天 / 30 天，位于头部工具栏）：驱动 KPI 累计 Token、Cache Lens、模型分布、供应商拆分；模型分布不再自带范围开关，跟随页面范围。热力图与「最长任务 / 连续天数」保持原义不变。
