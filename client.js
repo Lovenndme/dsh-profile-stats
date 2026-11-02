@@ -576,7 +576,7 @@ window.__ModuleLoader__.load({
 .dps-mix{display:flex;flex-direction:column;gap:10px}
 .dps-mix-chart{flex:0 0 auto;line-height:0}
 .dps-mix-body{display:flex;flex-direction:column;align-items:center;gap:14px;width:100%}
-.dps-mix-legend{width:100%;display:flex;flex-direction:column;gap:8px;font-size:12px}
+.dps-mix-legend{width:100%;display:flex;flex-direction:column;align-items:center;gap:8px;font-size:12px}
 .dps-mix-row{display:grid;grid-template-columns:8px 72px 88px 44px;gap:10px;align-items:baseline;justify-content:start}
 .dps-mix-label{color:var(--dsw-alias-label-secondary)}
 .dps-mix-value{font-weight:600;font-variant-numeric:tabular-nums;text-align:right}
