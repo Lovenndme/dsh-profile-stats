@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.4.5 — 2026-11-02
+
+- ci: decide the version at release time and tag each release instead of bumping per change
+- style: rename the provider card, left-align its title, and stretch the model card to match the row, 2.4.4
+- fix: split model families by version and tier (v4 flash vs v4.1 flash), 2.4.3
+- fix: group model ids into flash/pro families instead of per-variant bars, 2.4.2
+- feat: page-level time range driving KPI, cache lens, model and provider splits, 2.4.1
+- feat: replace the token-mix donut with a Cache Lens and derive uncached input from the total, 2.4.0
+
+
 ## 2.4.4 — 2026-11-02
 
 - 「供应商拆分」改名为「供应商分类」，标题回到卡片左上角（右上是今日/累计开关）。
