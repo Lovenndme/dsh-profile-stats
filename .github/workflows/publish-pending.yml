@@ -118,6 +118,27 @@ jobs:
           git tag "v${{ steps.bump.outputs.version }}"
           git push origin "v${{ steps.bump.outputs.version }}"
 
+      # A GitHub Release is the notification channel: one email per real publish, and none for the
+      # every-4-hours runs that find nothing to do. It also gives the version a readable changelog page.
+      - name: Publish the release notes
+        if: steps.gate.outputs.pending == 'true' && inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${{ steps.bump.outputs.version }}"
+          node - <<'NODE'
+          const fs = require('fs')
+          const text = fs.readFileSync('CHANGELOG.md', 'utf8')
+          const start = text.indexOf('\n## ')
+          const rest = text.slice(start + 1)
+          const next = rest.indexOf('\n## ', 1)
+          fs.writeFileSync('release-notes.md', next === -1 ? rest : rest.slice(0, next))
+          NODE
+          gh release create "v${version}" \
+            --title "v${version}" \
+            --notes-file release-notes.md \
+            --verify-tag || gh release edit "v${version}" --notes-file release-notes.md
       - name: Wait for the registry to serve the new version
         if: steps.gate.outputs.pending == 'true' && inputs.dry_run != true
         run: |
