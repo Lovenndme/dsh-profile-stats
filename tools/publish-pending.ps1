@@ -1,36 +1,35 @@
 ﻿<#
 .SYNOPSIS
-  Publish only when the local version is ahead of the registry. Designed to run on a schedule.
+  Local fallback for the batched release: bump the patch version at publish time, publish, and tag.
 
 .DESCRIPTION
-  Workflow it supports: while working, bump `version` in package.json and add a CHANGELOG entry, commit, and
-  stop there. This script runs every few hours, sees that the local version is newer than npm's `latest`,
-  publishes it, and then verifies the registry caught up.
+  Mirrors .github/workflows/publish-pending.yml so this machine can do the same thing when GitHub is
+  unreachable. Day-to-day work only commits; the version is decided here:
 
-  It never bumps the version itself — a publish batch must not invent changelog entries. If local version
-  equals the registry version it exits quietly (exit 0, "nothing to publish").
+    1. find the last release tag (`v*`)
+    2. if there are no commits after it, exit quietly
+    3. otherwise bump the patch version, write a CHANGELOG section from the commit subjects,
+       commit that, publish to npm, and tag the released commit
 
-  Credentials: $env:NPM_TOKEN, else $HOME/.dsh/.npm-publish-token (never stored in this repository).
+  Credentials: $env:NPM_TOKEN, else $HOME/.dsh/.npm-publish-token.
 #>
 param(
-  [switch]$Force,
+  [switch]$NoPush,
   [string]$LogDir = (Join-Path $HOME '.dsh/dsh-profile-stats')
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $pkgPath = Join-Path $repo 'package.json'
+$changelogPath = Join-Path $repo 'CHANGELOG.md'
 
 function Write-Log([string]$message) {
   $stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
-  $line = "[$stamp] $message"
-  Write-Host $line
+  Write-Host "[$stamp] $message"
   try {
     if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Force -Path $LogDir | Out-Null }
-    Add-Content -Path (Join-Path $LogDir 'publish.log') -Value $line -Encoding utf8
-  } catch {
-    /* 日志写不进去不影响发布 */
-  }
+    Add-Content -Path (Join-Path $LogDir 'publish.log') -Value "[$stamp] $message" -Encoding utf8
+  } catch { }
 }
 
 function Get-Token {
@@ -40,96 +39,77 @@ function Get-Token {
   throw '找不到 npm 发布凭据：请设置 $env:NPM_TOKEN，或把 token 写入 ~/.dsh/.npm-publish-token'
 }
 
-$local = (Get-Content $pkgPath -Raw | ConvertFrom-Json).version
-$latest = $null
-try {
-  $latest = (Invoke-RestMethod -Uri 'https://registry.npmjs.org/dsh-profile-stats/latest' -TimeoutSec 20).version
-} catch {
-  Write-Log "读取 registry 版本失败，跳过本轮：$($_.Exception.Message)"
-  exit 0
-}
-
-Write-Log "本地 $local / 线上 $latest"
-
-function Compare-Semver([string]$left, [string]$right) {
-  $a = $left.Split('-')[0].Split('.') | ForEach-Object { [int]$_ }
-  $b = $right.Split('-')[0].Split('.') | ForEach-Object { [int]$_ }
-  for ($i = 0; $i -lt 3; $i++) {
-    $x = if ($i -lt $a.Count) { $a[$i] } else { 0 }
-    $y = if ($i -lt $b.Count) { $b[$i] } else { 0 }
-    if ($x -ne $y) { return $(if ($x -gt $y) { 1 } else { -1 }) }
-  }
-  return 0
-}
-
-if (-not $Force -and (Compare-Semver $local $latest) -le 0) {
-  Write-Log '没有待发布版本，跳过'
-  exit 0
-}
-
-# 发布前跑一遍测试：坏版本不进 npm
-$verify = Join-Path (Split-Path $repo -Parent) 'profile-stats-verify'
-$node = (Get-Command node -ErrorAction SilentlyContinue)
-if (-not $node) {
-  $bundled = Join-Path $HOME '.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/node/bin/node.exe'
-  if (Test-Path $bundled) { $node = [pscustomobject]@{ Source = $bundled } }
-}
-if ($node -and (Test-Path (Join-Path $verify 'client-smoke.mjs'))) {
-  & $node.Source (Join-Path $verify 'client-smoke.mjs') *> $null
-  if ($LASTEXITCODE -ne 0) { Write-Log '客户端冒烟测试失败，跳过发布'; exit 1 }
-  & $node.Source (Join-Path $verify 'host-integration.mjs') *> $null
-  if ($LASTEXITCODE -ne 0) { Write-Log '宿主集成测试失败，跳过发布'; exit 1 }
-  Write-Log '测试通过'
-}
-
-$token = Get-Token
-$auth = "//registry.npmjs.org/:_authToken=$token"
-
-# npm 会把 "npm notice …" 写到 stderr，而 $ErrorActionPreference='Stop' 会把原生 stderr 当成
-# 终止错误（NativeCommandError）→ 发布被中断。这一段临时放宽，只看输出里有没有 npm error。
-$npmCmd = (Get-Command npm -ErrorAction SilentlyContinue)
-if (-not $npmCmd) {
-  $bundledNpm = Join-Path $HOME '.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/npm/bin/npm-cli.js'
-  if (-not (Test-Path $bundledNpm)) {
-    $bundledNpm = 'C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js'
-  }
-  if ((Test-Path $bundledNpm) -and $node) {
-    $npmCmd = [pscustomobject]@{ Source = $node.Source; Prefix = @($bundledNpm) }
-  }
-}
-if (-not $npmCmd) {
-  Write-Log '找不到 npm，无法发布'
-  exit 1
-}
-
-$previousEap = $ErrorActionPreference
-$ErrorActionPreference = 'Continue'
 Push-Location $repo
 try {
-  if ($npmCmd.Prefix) {
-    $output = (& $npmCmd.Source $npmCmd.Prefix[0] publish --access public "--$auth" 2>&1 | Out-String)
+  $last = (git describe --tags --abbrev=0 --match 'v*' 2>$null)
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($last)) {
+    $last = $null
+    $count = [int](git rev-list --count HEAD)
+    Write-Log '还没有发布标签，按全部提交计算'
   } else {
-    $output = (& $npmCmd.Source publish --access public "--$auth" 2>&1 | Out-String)
+    $count = [int](git rev-list --count "$last..HEAD")
+    Write-Log "上次发布标签 $last"
   }
-} catch {
-  $output = "exception: $($_.Exception.Message)"
+  Write-Log "上次发布后新增提交 $count 个"
+  if ($count -le 0) {
+    Write-Log '没有待发布的提交，跳过'
+    exit 0
+  }
+
+  $pkg = Get-Content $pkgPath -Raw | ConvertFrom-Json
+  $current = $pkg.version
+  $parts = $current.Split('-')[0].Split('.')
+  $next = '{0}.{1}.{2}' -f [int]$parts[0], [int]$parts[1], ([int]$parts[2] + 1)
+  $pkg.version = $next
+  ($pkg | ConvertTo-Json -Depth 20) + "`n" | Set-Content $pkgPath -Encoding utf8 -NoNewline
+  Write-Log "版本 $current → $next"
+
+  $range = if ($last) { "$last..HEAD" } else { 'HEAD' }
+  $subjects = (git log --no-merges --pretty='- %s' $range) -join "`n"
+  $body = (Get-Content $changelogPath -Raw) -replace '(?s)^# Changelog\r?\n', ''
+  $header = "# Changelog`n`n## $next — $((Get-Date).ToString('yyyy-MM-dd'))`n`n"
+  Set-Content $changelogPath ($header + $subjects + "`n" + $body) -Encoding utf8 -NoNewline
+
+  git add package.json CHANGELOG.md
+  git -c user.name=Lovenndme -c user.email=catherineessie773@gmail.com commit -q -m "release: v$next"
+  if (-not $NoPush) { git push origin HEAD | Out-Null; Write-Log '发布提交已推送' }
+
+  $verify = Join-Path (Split-Path $repo -Parent) 'profile-stats-verify'
+  $nodePath = (Get-Command node -ErrorAction SilentlyContinue)
+  if (-not $nodePath) {
+    $bundled = Join-Path $HOME '.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/node/bin/node.exe'
+    if (Test-Path $bundled) { $nodePath = [pscustomobject]@{ Source = $bundled } }
+  }
+  if ($nodePath -and (Test-Path (Join-Path $verify 'client-smoke.mjs'))) {
+    & $nodePath.Source (Join-Path $verify 'client-smoke.mjs') *> $null
+    if ($LASTEXITCODE -ne 0) { Write-Log '客户端冒烟测试失败，已提交但不发布'; exit 1 }
+    & $nodePath.Source (Join-Path $verify 'host-integration.mjs') *> $null
+    if ($LASTEXITCODE -ne 0) { Write-Log '宿主集成测试失败，已提交但不发布'; exit 1 }
+    Write-Log '测试通过'
+  }
+
+  $token = Get-Token
+  $auth = "//registry.npmjs.org/:_authToken=$token"
+  $npmCmd = (Get-Command npm -ErrorAction SilentlyContinue)
+  $previousEap = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $output = (& $npmCmd.Source publish --access public "--$auth" 2>&1 | Out-String)
+  } catch {
+    $output = "exception: $($_.Exception.Message)"
+  } finally {
+    $ErrorActionPreference = $previousEap
+  }
+  Remove-Item Env:NPM_TOKEN -ErrorAction SilentlyContinue
+  if ($output -match 'npm error' -or $output -match 'exception:') {
+    Write-Log "发布失败：$($output.Trim())"
+    exit 1
+  }
+  Write-Log "已发布 $next"
+
+  git tag "v$next" 2>$null
+  if (-not $NoPush) { git push origin "v$next" | Out-Null }
+  Write-Log "已打标签 v$next"
 } finally {
   Pop-Location
-  $ErrorActionPreference = $previousEap
 }
-Remove-Item Env:NPM_TOKEN -ErrorAction SilentlyContinue
-if ($output -match 'npm error' -or $output -match 'exception:') {
-  Write-Log "发布失败：$($output.Trim())"
-  exit 1
-}
-Write-Log "已发布 $local"
-
-for ($i = 1; $i -le 10; $i++) {
-  Start-Sleep -Seconds 20
-  try {
-    $now = (Invoke-RestMethod -Uri 'https://registry.npmjs.org/dsh-profile-stats/latest' -TimeoutSec 20).version
-    if ((Compare-Semver $now $local) -eq 0) { Write-Log "registry 已生效：$now"; exit 0 }
-  } catch { }
-}
-Write-Log '已发布，但 registry 尚未返回新版本（CDN 延迟，稍后自动生效）'
-exit 0
