@@ -45,6 +45,17 @@ window.__ModuleLoader__.load({
       'breakdown.output': 'Output',
       'breakdown.cache': 'Cache hit',
       'breakdown.totalLabel': 'total tokens',
+      'lens.total': 'Total tokens',
+      'lens.cacheShare': 'Cache share',
+      'lens.uncachedTotal': 'Uncached total',
+      'lens.uncachedShare': 'Uncached input share',
+      'lens.cache': 'Cache hit',
+      'lens.input': 'Uncached input',
+      'lens.output': 'Output',
+      'lens.zoom': 'Zoom into uncached',
+      'lens.back': 'Back to overall',
+      'lens.basis': 'Shares are computed over the uncached total',
+      'lens.uncachedTitle': 'Uncached token mix',
       'tip.none': 'No activity',
       'tip.tokens': '{value} tokens',
       'tip.week': 'Week of {date}',
@@ -101,6 +112,17 @@ window.__ModuleLoader__.load({
       'breakdown.output': '输出',
       'breakdown.cache': '缓存命中',
       'breakdown.totalLabel': '总 Token',
+      'lens.total': '总 Token',
+      'lens.cacheShare': '缓存 Token 占比',
+      'lens.uncachedTotal': '非缓存 Token 合计',
+      'lens.uncachedShare': '未缓存输入占比',
+      'lens.cache': '缓存命中',
+      'lens.input': '未缓存输入',
+      'lens.output': '输出',
+      'lens.zoom': '放大非缓存细分',
+      'lens.back': '返回整体构成',
+      'lens.basis': '当前比例基于非缓存 Token 合计计算',
+      'lens.uncachedTitle': '非缓存 Token 构成',
       'tip.none': '无活动',
       'tip.tokens': '{value} tokens',
       'tip.week': '{date} 起的一周',
@@ -590,7 +612,27 @@ window.__ModuleLoader__.load({
 .dps-error{border:1px solid var(--dsw-alias-state-error-primary);border-radius:12px;padding:14px 16px;font-size:13px;display:flex;flex-direction:column;gap:6px}
 .dps-error-title{color:var(--dsw-alias-state-error-primary);font-weight:600}
 .dps-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-/* —— 设计图改版：头部 / KPI 卡 / 两栏网格 / 环形中心 / 供应商进度条 —— */
+.dps-lens{display:flex;flex-direction:column;gap:12px}
+.dps-lens-metrics{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding-top:2px}
+.dps-lens-big{font-size:26px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1}
+.dps-lens-accent{color:var(--dsw-alias-brand-primary)}
+.dps-lens-cap{font-size:12px;color:var(--dsw-alias-label-secondary);margin-top:2px}
+.dps-lens-bar{display:flex;width:100%;height:14px;border-radius:999px;overflow:hidden;background:var(--dsw-alias-bg-layer-2)}
+.dps-lens-seg{display:block;height:100%;transition:width .26s ease,opacity .18s ease,filter .18s ease;min-width:2px;cursor:default}
+.dps-lens-seg:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
+.dps-lens-seg[data-dim="true"]{opacity:.45}
+.dps-lens-rows{display:flex;flex-direction:column;gap:2px}
+.dps-lens-row{display:grid;grid-template-columns:10px 1fr auto 52px;align-items:baseline;gap:10px;font-size:13px;padding:6px 4px;border-radius:8px;transition:background .18s ease}
+.dps-lens-row[data-active="true"]{background:var(--dsw-alias-bg-layer-2)}
+.dps-lens-dot{width:10px;height:10px;border-radius:50%}
+.dps-lens-name{color:var(--dsw-alias-label-secondary)}
+.dps-lens-value{font-weight:600;font-variant-numeric:tabular-nums;text-align:right}
+.dps-lens-share{color:var(--dsw-alias-label-secondary);text-align:right;font-variant-numeric:tabular-nums}
+.dps-lens-note{font-size:11px;color:var(--dsw-alias-label-secondary)}
+.dps-lens-action{display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:9px 12px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:transparent;color:var(--dsw-alias-label-secondary);font-size:12px;font-family:inherit;cursor:pointer;transition:border-color .18s ease,color .18s ease}
+.dps-lens-action:hover,.dps-lens-action:focus-visible{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);outline:none}
+.dps-lens-action svg{width:15px;height:15px}
+@media (prefers-reduced-motion:reduce){.dps-lens-seg,.dps-lens-row,.dps-lens-action{transition:none}}/* —— 设计图改版：头部 / KPI 卡 / 两栏网格 / 环形中心 / 供应商进度条 —— */
 .dps-page{max-width:1180px;padding:28px 28px 48px;gap:18px}
 .dps-identity{position:relative;flex-direction:column;align-items:center;gap:14px}
 .dps-avatar{width:64px;height:64px;border-radius:18px;font-size:26px;background:var(--dsw-alias-bg-layer-2);box-shadow:none}
@@ -669,6 +711,8 @@ window.__ModuleLoader__.load({
       calendar: 'M4 7h16v13H4zM8 3v4m8-4v4M4 11h16',
       flame: 'M12 21c3.9 0 6-2.4 6-5.4 0-4.2-4.2-5.6-3.3-10.6-2.6.8-4.2 3.1-4.2 5 0 1.1.4 1.9.4 2.7 0 1.1-.8 1.8-1.7 1.8-1 0-1.9-.9-1.9-2.2-1 1.4-1.3 2.9-1.3 4.2C6 18.6 8.1 21 12 21z',
       refresh: 'M20 12a8 8 0 11-2.3-5.6M20 4v4h-4',
+      zoom: 'M11 18a7 7 0 100-14 7 7 0 000 14zM16 16l4 4',
+      back: 'M19 12H5m6-6l-6 6 6 6',
     }
 
     function Icon(props) {
@@ -799,105 +843,158 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** 环形图：用 stroke-dasharray 画弧，三段（输入/输出/缓存）各自成扇形。 */
-    function DonutChart(props) {
-      const segments = props.segments || []
-      const size = props.size || 120
-      const thickness = props.thickness || 16
-      const total = segments.reduce((sum, segment) => sum + toNumber(segment.value), 0)
-      const radius = (size - thickness) / 2
-      const circumference = 2 * Math.PI * radius
-      const center = size / 2
-      let offset = 0
-      const arcs = []
-      for (const segment of segments) {
-        const value = toNumber(segment.value)
-        if (!(value > 0) || total <= 0) continue
-        const length = (value / total) * circumference
-        arcs.push(
-          h('circle', {
-            key: segment.key,
-            cx: center,
-            cy: center,
-            r: radius,
-            fill: 'none',
-            stroke: segment.color,
-            strokeWidth: thickness,
-            strokeLinecap: 'butt',
-            strokeDasharray: `${Math.max(length - 1, 0.5)} ${circumference}`,
-            strokeDashoffset: -offset,
-            transform: `rotate(-90 ${center} ${center})`,
-          }),
-        )
-        offset += length
-      }
-      return h(
-        'svg',
-        { width: size, height: size, viewBox: `0 0 ${size} ${size}`, role: 'img', 'aria-label': props.label || '' },
-        h('circle', {
-          cx: center,
-          cy: center,
-          r: radius,
-          fill: 'none',
-          stroke: 'var(--dsw-alias-bg-layer-2)',
-          strokeWidth: thickness,
-        }),
-        arcs,
-      )
-    }
-
+    /**
+     * Token 构成 = Cache Lens：横向分段占比条 + 三行明细，可放大到「非缓存」内部构成。
+     *
+     * 口径：不同供应商的 usage.inputTokens 语义不一致（有的已含缓存命中），所以
+     * 不能直接用 input + cache + output 当初值。这里以 total（每步 max(totalTokens, input+output)）
+     * 为准，未缓存输入由 total 反推：未缓存输入 = total − 缓存 − 输出，保证三段互斥且合计等于 total。
+     */
     function Breakdown(props) {
-      const totals = props.totals
-      const segments = [
-        { key: 'input', label: t('breakdown.input'), value: toNumber(totals.inputTokens), color: 'var(--dsw-alias-brand-primary)' },
-        { key: 'output', label: t('breakdown.output'), value: toNumber(totals.outputTokens), color: 'var(--dsw-alias-state-success-primary)' },
-        {
-          key: 'cache',
-          label: t('breakdown.cache'),
-          value: toNumber(totals.cacheReadTokens) + toNumber(totals.cacheWriteTokens),
-          color: 'var(--dsw-alias-state-warn-primary)',
-        },
-      ]
-      const sum = segments.reduce((total, segment) => total + segment.value, 0)
+      const totals = props.totals || {}
+      const [zoomed, setZoomed] = useState(false)
+      const [hover, setHover] = useState(null)
+      const [tip, setTip] = useState(null)
 
-      const rows = segments.map((segment) =>
-        h(
-          'div',
-          { className: 'dps-mix-row', key: segment.key },
-          h('span', { className: 'dps-dot', style: { background: segment.color } }),
-          h('span', { className: 'dps-mix-label' }, segment.label),
-          h('span', { className: 'dps-mix-value' }, formatTokens(segment.value)),
-          h('span', { className: 'dps-mix-share' }, `${sum > 0 ? ((segment.value / sum) * 100).toFixed(1) : '0.0'}%`),
+      const total = toNumber(totals.tokens)
+      const cache = toNumber(totals.cacheReadTokens) + toNumber(totals.cacheWriteTokens)
+      const output = toNumber(totals.outputTokens)
+      const uncached = Math.max(0, total - cache - output)
+
+      const overall = [
+        { key: 'cache', label: t('lens.cache'), value: cache, color: 'var(--dsw-alias-brand-primary)' },
+        { key: 'input', label: t('lens.input'), value: uncached, color: 'var(--dsw-alias-label-primary)' },
+        { key: 'output', label: t('lens.output'), value: output, color: 'var(--dsw-alias-state-success-primary)' },
+      ].filter((row) => row.value > 0 || row.key !== 'output')
+      const uncachedTotal = uncached + output
+      const inner = [
+        { key: 'input', label: t('lens.input'), value: uncached, color: 'var(--dsw-alias-label-primary)' },
+        { key: 'output', label: t('lens.output'), value: output, color: 'var(--dsw-alias-state-success-primary)' },
+      ].filter((row) => row.value > 0 || row.key !== 'output')
+
+      const rows = zoomed ? inner : overall
+      const denominator = zoomed ? uncachedTotal : total
+      const share = (value) => (denominator > 0 ? (value / denominator) * 100 : 0)
+
+      const primary = zoomed ? uncachedTotal : total
+      const primaryLabel = zoomed ? t('lens.uncachedTotal') : t('lens.total')
+      const secondary = share(cache)
+      const secondaryLabel = zoomed ? t('lens.uncachedShare') : t('lens.cacheShare')
+
+      const showTip = (row) => (event) => {
+        const target = event && event.currentTarget
+        if (!target || typeof target.getBoundingClientRect !== 'function') return
+        const rect = target.getBoundingClientRect()
+        const width = rect.width || 40
+        const halfWidth = 110
+        const centerX = rect.left + width / 2
+        const viewportWidth = typeof window !== 'undefined' && window.innerWidth ? window.innerWidth : 1200
+        setHover(row.key)
+        setTip({
+          row,
+          x: Math.min(Math.max(centerX, halfWidth), Math.max(halfWidth, viewportWidth - halfWidth)),
+          y: rect.top - 8,
+        })
+      }
+      const hideTip = () => {
+        setHover(null)
+        setTip(null)
+      }
+
+      const bar = h(
+        'div',
+        { className: 'dps-lens-bar', role: 'group' },
+        rows.map((row) =>
+          h('span', {
+            key: row.key,
+            className: 'dps-lens-seg',
+            tabIndex: 0,
+            'data-dim': hover && hover !== row.key ? 'true' : 'false',
+            style: { width: `${share(row.value)}%`, background: row.color },
+            onMouseEnter: showTip(row),
+            onMouseLeave: hideTip,
+            onFocus: showTip(row),
+            onBlur: hideTip,
+          }),
         ),
       )
+
+      const detail = h(
+        'div',
+        { className: 'dps-lens-rows' },
+        rows.map((row) =>
+          h(
+            'div',
+            {
+              key: row.key,
+              className: 'dps-lens-row',
+              'data-active': hover === row.key ? 'true' : 'false',
+              onMouseEnter: () => setHover(row.key),
+              onMouseLeave: () => setHover(null),
+            },
+            h('span', { className: 'dps-lens-dot', style: { background: row.color } }),
+            h('span', { className: 'dps-lens-name' }, row.label),
+            h('span', { className: 'dps-lens-value' }, formatTokens(row.value)),
+            h('span', { className: 'dps-lens-share' }, `${share(row.value).toFixed(1)}%`),
+          ),
+        ),
+      )
+
+      const tooltip = tip
+        ? h(
+            'div',
+            { className: 'dps-tip', style: { left: `${tip.x}px`, top: `${tip.y}px`, transform: 'translate(-50%, -100%)' } },
+            h('div', { className: 'dps-tip-date' }, tip.row.label),
+            h('div', { className: 'dps-tip-value' }, formatTokens(tip.row.value)),
+            h('div', { className: 'dps-tip-date' }, `${share(tip.row.value).toFixed(1)}%`),
+          )
+        : null
 
       return h(
         'div',
-        { className: 'dps-card dps-mix' },
-        h('div', { className: 'dps-chart-head' }, h('div', { className: 'dps-chart-title' }, t('section.breakdown'))),
+        { className: 'dps-card dps-lens' },
         h(
           'div',
-          { className: 'dps-mix-body' },
+          { className: 'dps-chart-head' },
+          h('div', { className: 'dps-chart-title' }, zoomed ? t('lens.uncachedTitle') : t('section.breakdown')),
+        ),
+        h(
+          'div',
+          { className: 'dps-lens-metrics' },
           h(
             'div',
-            { className: 'dps-donut-wrap' },
-            h(DonutChart, { segments, size: 132, thickness: 18, label: t('section.breakdown') }),
-            h(
-              'div',
-              { className: 'dps-donut-center' },
-              h('div', { className: 'dps-donut-value' }, formatTokens(sum)),
-              h('div', { className: 'dps-donut-label' }, t('breakdown.totalLabel')),
-            ),
+            { className: 'dps-lens-metric' },
+            h('div', { className: 'dps-lens-big' }, formatTokens(primary)),
+            h('div', { className: 'dps-lens-cap' }, primaryLabel),
           ),
           h(
             'div',
-            { className: 'dps-mix-legend' },
-            rows,
+            { className: 'dps-lens-metric' },
+            h('div', { className: 'dps-lens-big dps-lens-accent' }, `${secondary.toFixed(1)}%`),
+            h('div', { className: 'dps-lens-cap' }, secondaryLabel),
           ),
         ),
+        bar,
+        detail,
+        zoomed
+          ? h('div', { className: 'dps-lens-note' }, t('lens.basis'))
+          : null,
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dps-lens-action',
+            onClick: () => {
+              setZoomed(!zoomed)
+              hideTip()
+            },
+          },
+          h(Icon, { name: zoomed ? 'back' : 'zoom' }),
+          zoomed ? t('lens.back') : t('lens.zoom'),
+        ),
+        tooltip,
       )
     }
-
     const PROVIDER_COLORS = [
       'var(--dsw-alias-brand-primary)',
       'var(--dsw-alias-state-success-primary)',

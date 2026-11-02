@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.4.0 — 2026-11-02
+
+- **Token 构成改为 Cache Lens**（替换原环形图）：顶部两个大号指标（总 Token / 缓存占比）、横向分段占比条
+  （缓存命中 / 未缓存输入 / 输出）、三行明细（色标 + 名称 + 用量 + 占比）、底部「放大非缓存细分」按钮；
+  放大后标题变「非缓存 Token 构成」、分母改为非缓存合计并显式标注，可「返回整体构成」。切档 260ms 过渡，
+  hover 联动高亮分段与明细并给浮层，支持键盘焦点，`prefers-reduced-motion` 下关闭过渡。
+- **修正统计口径**：不同供应商的 `usage.inputTokens` 语义不一致（有的已含缓存命中），实测
+  `input + cache + output` 比 total 多出 1.6%。现在以 total 为准反推
+  `未缓存输入 = total − 缓存 − 输出`（并夹到 ≥ 0），保证三段互斥、合计恒等于 total。
+
 ## 2.3.7 — 2026-11-02
 
 - 发布搬到 GitHub Actions：`.github/workflows/publish-pending.yml` 每 4 小时检查一次，
