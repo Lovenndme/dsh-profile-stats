@@ -527,10 +527,10 @@ window.__ModuleLoader__.load({
 .dps-section-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .dps-section-title{font-size:14px;font-weight:600}
 .dps-section-note{font-size:12px;color:var(--dsw-alias-label-secondary)}
-.dps-card{padding:18px 16px;border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-layer-1)}
-.dps-heat{display:flex;flex-direction:column;gap:12px;overflow-x:auto}
-.dps-heat-grid{display:grid;grid-auto-flow:column;grid-template-rows:repeat(7,11px);grid-auto-columns:11px;gap:3px}
-.dps-cell{width:11px;height:11px;border-radius:2.5px;background:var(--dsw-alias-bg-layer-2);box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l1)}
+.dps-card{padding:14px;border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-layer-1)}
+.dps-heat{display:flex;flex-direction:column;gap:10px;overflow:visible}
+.dps-heat-grid{display:grid;grid-auto-flow:column;grid-template-rows:repeat(7,auto);grid-auto-columns:minmax(0,1fr);gap:2px;width:100%}
+.dps-cell{width:100%;aspect-ratio:1;height:auto;border-radius:2.5px;background:var(--dsw-alias-bg-layer-2);box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l1)}
 .dps-cell[data-future="true"]{opacity:.35}
 .dps-months{position:relative;height:14px;font-size:10px;color:var(--dsw-alias-label-secondary)}
 .dps-tip{position:fixed;z-index:9999;pointer-events:none;transform:translate(-50%,-100%);background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:6px 10px;box-shadow:0 10px 28px rgba(0,0,0,.28);white-space:nowrap;text-align:left}
@@ -573,9 +573,9 @@ window.__ModuleLoader__.load({
 .dps-switch button{appearance:none;border:none;background:transparent;color:var(--dsw-alias-label-secondary);font-size:11px;padding:4px 10px;cursor:pointer;font-family:inherit}
 .dps-switch button[data-active="true"]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
 .dps-month{position:absolute;top:0;white-space:nowrap}
-.dps-mix{display:flex;align-items:center;justify-content:center;gap:36px;flex-wrap:wrap}
+.dps-mix{display:flex;align-items:center;justify-content:center;gap:20px;flex-wrap:wrap}
 .dps-mix-chart{flex:0 0 auto;line-height:0}
-.dps-mix-legend{flex:0 0 auto;display:flex;flex-direction:column;gap:10px;font-size:13px}
+.dps-mix-legend{flex:0 0 auto;display:flex;flex-direction:column;gap:8px;font-size:12px}
 .dps-mix-row{display:grid;grid-template-columns:8px 72px 88px 44px;gap:10px;align-items:baseline;justify-content:start}
 .dps-mix-label{color:var(--dsw-alias-label-secondary)}
 .dps-mix-value{font-weight:600;font-variant-numeric:tabular-nums;text-align:right}
@@ -607,6 +607,7 @@ window.__ModuleLoader__.load({
 .dps-stat-badge svg{width:16px;height:16px;display:block}
 .dps-stat-value{font-size:28px;font-weight:700;letter-spacing:-.02em;line-height:1.05}
 .dps-stat-label{font-size:12px;color:var(--dsw-alias-label-secondary)}
+.dps-stack{display:flex;flex-direction:column;gap:14px;min-width:0}
 .dps-grid{display:grid;grid-template-columns:minmax(0,1.92fr) minmax(0,1fr);gap:18px;align-items:start}
 .dps-grid .dps-section{gap:12px}
 .dps-donut-wrap{position:relative;display:flex;align-items:center;justify-content:center}
@@ -779,7 +780,7 @@ window.__ModuleLoader__.load({
       const monthNodes = heat.months.map((month) =>
         h(
           'span',
-          { key: `${month.column}-${month.label}`, className: 'dps-month', style: { left: `${month.column * CELL_PITCH}px` } },
+          { key: `${month.column}-${month.label}`, className: 'dps-month', style: { left: `${(month.column / heat.columns) * 100}%` } },
           month.label,
         ),
       )
@@ -877,7 +878,7 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'dps-donut-wrap' },
-          h(DonutChart, { segments, size: 148, thickness: 20, label: t('section.breakdown') }),
+          h(DonutChart, { segments, size: 132, thickness: 18, label: t('section.breakdown') }),
           h(
             'div',
             { className: 'dps-donut-center' },
@@ -1468,17 +1469,12 @@ window.__ModuleLoader__.load({
           scanningHint,
           errorBlock,
           emptyBlock,
-          h(
-            'div',
-            { className: 'dps-grid' },
-            heatSection,
-            mixSection,
-          ),
+          heatSection,
           h(
             'div',
             { className: 'dps-grid' },
             modelSection,
-            providerSection,
+            h('div', { className: 'dps-stack' }, mixSection, providerSection),
           ),
           h(
             'div',
