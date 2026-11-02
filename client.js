@@ -573,9 +573,10 @@ window.__ModuleLoader__.load({
 .dps-switch button{appearance:none;border:none;background:transparent;color:var(--dsw-alias-label-secondary);font-size:11px;padding:4px 10px;cursor:pointer;font-family:inherit}
 .dps-switch button[data-active="true"]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
 .dps-month{position:absolute;top:0;white-space:nowrap}
-.dps-mix{display:flex;align-items:center;justify-content:center;gap:20px;flex-wrap:wrap}
+.dps-mix{display:flex;flex-direction:column;gap:10px}
 .dps-mix-chart{flex:0 0 auto;line-height:0}
-.dps-mix-legend{flex:0 0 auto;display:flex;flex-direction:column;gap:8px;font-size:12px}
+.dps-mix-body{display:flex;flex-direction:column;align-items:center;gap:14px;width:100%}
+.dps-mix-legend{width:100%;display:flex;flex-direction:column;gap:8px;font-size:12px}
 .dps-mix-row{display:grid;grid-template-columns:8px 72px 88px 44px;gap:10px;align-items:baseline;justify-content:start}
 .dps-mix-label{color:var(--dsw-alias-label-secondary)}
 .dps-mix-value{font-weight:600;font-variant-numeric:tabular-nums;text-align:right}
@@ -876,19 +877,23 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dps-chart-head' }, h('div', { className: 'dps-chart-title' }, t('section.breakdown'))),
         h(
           'div',
-          { className: 'dps-donut-wrap' },
-          h(DonutChart, { segments, size: 132, thickness: 18, label: t('section.breakdown') }),
+          { className: 'dps-mix-body' },
           h(
             'div',
-            { className: 'dps-donut-center' },
-            h('div', { className: 'dps-donut-value' }, formatTokens(sum)),
-            h('div', { className: 'dps-donut-label' }, t('breakdown.totalLabel')),
+            { className: 'dps-donut-wrap' },
+            h(DonutChart, { segments, size: 132, thickness: 18, label: t('section.breakdown') }),
+            h(
+              'div',
+              { className: 'dps-donut-center' },
+              h('div', { className: 'dps-donut-value' }, formatTokens(sum)),
+              h('div', { className: 'dps-donut-label' }, t('breakdown.totalLabel')),
+            ),
           ),
-        ),
-        h(
-          'div',
-          { className: 'dps-mix-legend' },
-          rows,
+          h(
+            'div',
+            { className: 'dps-mix-legend' },
+            rows,
+          ),
         ),
       )
     }
