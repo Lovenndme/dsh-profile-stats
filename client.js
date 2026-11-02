@@ -894,7 +894,9 @@ window.__ModuleLoader__.load({
 
       const primary = zoomed ? uncachedTotal : total
       const primaryLabel = zoomed ? t('lens.uncachedTotal') : t('lens.total')
-      const secondary = share(cache)
+      // 放大的视图里分母是非缓存合计，第二个指标必须也随之换成「未缓存输入」，
+      // 否则会拿缓存总量去除以非缓存合计，出现 3979% 这种荒谬数字。
+      const secondary = zoomed ? share(uncached) : share(cache)
       const secondaryLabel = zoomed ? t('lens.uncachedShare') : t('lens.cacheShare')
 
       const showTip = (row) => (event) => {
