@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.3.7 — 2026-11-02
+
+- 发布搬到 GitHub Actions：`.github/workflows/publish-pending.yml` 每 4 小时检查一次，
+  本地版本领先 npm latest 时才发布（先 `node --check`，发布后轮询 registry 确认生效）。本机计划任务保留为兜底。
+
 ## 2.3.6 — 2026-11-02
 
 - 发布流程改为**攒批**：改动只做测试 + 升版本 + CHANGELOG + 提交，npm 发布由 	ools/publish-pending.ps1 每 4 小时批量执行（本地版本领先线上才发，发布前跑测试）。
