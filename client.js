@@ -44,6 +44,7 @@ window.__ModuleLoader__.load({
       'breakdown.input': 'Input',
       'breakdown.output': 'Output',
       'breakdown.cache': 'Cache hit',
+      'breakdown.totalLabel': 'total tokens',
       'tip.none': 'No activity',
       'tip.tokens': '{value} tokens',
       'tip.week': 'Week of {date}',
@@ -99,6 +100,7 @@ window.__ModuleLoader__.load({
       'breakdown.input': '输入',
       'breakdown.output': '输出',
       'breakdown.cache': '缓存命中',
+      'breakdown.totalLabel': '总 Token',
       'tip.none': '无活动',
       'tip.tokens': '{value} tokens',
       'tip.week': '{date} 起的一周',
@@ -588,6 +590,36 @@ window.__ModuleLoader__.load({
 .dps-error{border:1px solid var(--dsw-alias-state-error-primary);border-radius:12px;padding:14px 16px;font-size:13px;display:flex;flex-direction:column;gap:6px}
 .dps-error-title{color:var(--dsw-alias-state-error-primary);font-weight:600}
 .dps-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+/* —— 设计图改版：头部 / KPI 卡 / 两栏网格 / 环形中心 / 供应商进度条 —— */
+.dps-page{max-width:1180px;padding:28px 28px 48px;gap:18px}
+.dps-identity{align-items:center;gap:14px}
+.dps-avatar{width:64px;height:64px;border-radius:18px;font-size:26px;background:var(--dsw-alias-bg-layer-2);box-shadow:none}
+.dps-name{font-size:24px;font-weight:700;line-height:1.15;letter-spacing:-.01em}
+.dps-handle{font-size:12px}
+.dps-header-actions{margin-left:auto;display:flex;align-items:center;gap:10px}
+.dps-icon-button{width:40px;height:40px;border-radius:12px;border:0;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);display:grid;place-items:center;cursor:pointer;transition:background .12s ease-out,color .12s ease-out}
+.dps-icon-button:hover{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary)}
+.dps-icon-button svg{width:17px;height:17px;display:block}
+.dps-stats{grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;border:0;border-radius:0;background:transparent}
+.dps-stat{align-items:flex-start;justify-content:flex-start;gap:10px;border-right:none;padding:16px;min-height:0;background:var(--dsw-alias-bg-layer-1);border-radius:14px}
+.dps-stat[data-emphasis="true"]{box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--dsw-alias-brand-primary) 55%, transparent)}
+.dps-stat-badge{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-brand-primary);flex:0 0 auto}
+.dps-stat-badge svg{width:16px;height:16px;display:block}
+.dps-stat-value{font-size:28px;font-weight:700;letter-spacing:-.02em;line-height:1.05}
+.dps-stat-label{font-size:12px;color:var(--dsw-alias-label-secondary)}
+.dps-grid{display:grid;grid-template-columns:minmax(0,1.92fr) minmax(0,1fr);gap:18px;align-items:start}
+.dps-grid .dps-section{gap:12px}
+.dps-donut-wrap{position:relative;display:flex;align-items:center;justify-content:center}
+.dps-donut-center{position:absolute;text-align:center;line-height:1.25}
+.dps-donut-value{font-size:22px;font-weight:700;font-variant-numeric:tabular-nums}
+.dps-donut-label{font-size:11px;color:var(--dsw-alias-label-secondary)}
+.dps-prov-track{height:8px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);overflow:hidden}
+.dps-prov-track > span{display:block;height:100%;border-radius:999px}
+.dps-prov-row-v2{display:flex;flex-direction:column;gap:8px}
+.dps-prov-row-v2 + .dps-prov-row-v2{margin-top:14px}
+.dps-prov-top{display:flex;align-items:baseline;gap:10px;font-size:13px}
+.dps-prov-top .dps-prov-value{margin-left:auto;font-weight:600}
+@media (max-width:980px){.dps-grid{grid-template-columns:1fr}.dps-stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
 `
 
     /* ------------------------------------------------------------------ 组件 */
@@ -628,13 +660,39 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** 小图标集（内联 SVG，随主题色走）。 */
+    const ICON_PATHS = {
+      tokens: 'M7 4h7l4 4v12H7zM14 4v4h4',
+      today: 'M4 18V9m5 9V6m5 12v-6m5 6V8',
+      clock: 'M12 7v5l3 2M12 3a9 9 0 100 18 9 9 0 000-18z',
+      calendar: 'M4 7h16v13H4zM8 3v4m8-4v4M4 11h16',
+      flame: 'M12 21c3.9 0 6-2.4 6-5.4 0-4.2-4.2-5.6-3.3-10.6-2.6.8-4.2 3.1-4.2 5 0 1.1.4 1.9.4 2.7 0 1.1-.8 1.8-1.7 1.8-1 0-1.9-.9-1.9-2.2-1 1.4-1.3 2.9-1.3 4.2C6 18.6 8.1 21 12 21z',
+      refresh: 'M20 12a8 8 0 11-2.3-5.6M20 4v4h-4',
+    }
+
+    function Icon(props) {
+      return h(
+        'svg',
+        {
+          viewBox: '0 0 24 24',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 1.8,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': true,
+        },
+        h('path', { d: ICON_PATHS[props.name] || ICON_PATHS.tokens }),
+      )
+    }
+
     function StatCard(props) {
       return h(
         'div',
-        { className: 'dps-stat' },
+        { className: 'dps-stat', 'data-emphasis': props.emphasis ? 'true' : 'false' },
+        props.icon ? h('div', { className: 'dps-stat-badge' }, h(Icon, { name: props.icon })) : null,
         h('div', { className: 'dps-stat-value', title: props.title || undefined }, props.value),
         h('div', { className: 'dps-stat-label' }, props.label),
-        props.sub ? h('div', { className: 'dps-stat-sub' }, props.sub) : null,
       )
     }
 
@@ -815,7 +873,18 @@ window.__ModuleLoader__.load({
       return h(
         'div',
         { className: 'dps-card dps-mix' },
-        h('div', { className: 'dps-mix-chart' }, h(DonutChart, { segments, size: 148, thickness: 20, label: t('section.breakdown') })),
+        h('div', { className: 'dps-chart-head' }, h('div', { className: 'dps-chart-title' }, t('section.breakdown'))),
+        h(
+          'div',
+          { className: 'dps-donut-wrap' },
+          h(DonutChart, { segments, size: 148, thickness: 20, label: t('section.breakdown') }),
+          h(
+            'div',
+            { className: 'dps-donut-center' },
+            h('div', { className: 'dps-donut-value' }, formatTokens(sum)),
+            h('div', { className: 'dps-donut-label' }, t('breakdown.totalLabel')),
+          ),
+        ),
         h(
           'div',
           { className: 'dps-mix-legend' },
@@ -889,11 +958,17 @@ window.__ModuleLoader__.load({
         visible.map((row, index) =>
           h(
             'div',
-            { className: 'dps-prov-row', key: row.id },
-            h('span', { className: 'dps-prov-name', title: providerLabel(row.id) }, providerLabel(row.id)),
+            { className: 'dps-prov-row-v2', key: row.id },
+            h(
+              'div',
+              { className: 'dps-prov-top' },
+              h('span', { className: 'dps-prov-name', title: providerLabel(row.id) }, providerLabel(row.id)),
+              h('span', { className: 'dps-prov-value' }, formatTokens(row.tokens)),
+              h('span', { className: 'dps-prov-share' }, `${sum > 0 ? ((row.tokens / sum) * 100).toFixed(1) : '0.0'}%`),
+            ),
             h(
               'span',
-              { className: 'dps-prov-bar' },
+              { className: 'dps-prov-track' },
               h('span', {
                 style: {
                   width: `${sum > 0 ? Math.max((row.tokens / sum) * 100, 1.5) : 0}%`,
@@ -901,8 +976,6 @@ window.__ModuleLoader__.load({
                 },
               }),
             ),
-            h('span', { className: 'dps-prov-value' }, formatTokens(row.tokens)),
-            h('span', { className: 'dps-prov-share' }, `${sum > 0 ? ((row.tokens / sum) * 100).toFixed(1) : '0.0'}%`),
           ),
         ),
       )
@@ -910,7 +983,7 @@ window.__ModuleLoader__.load({
       return h(
         'div',
         { className: 'dps-card dps-prov-card' },
-        h('div', { className: 'dps-prov-head' }, toggle),
+        h('div', { className: 'dps-prov-head' }, h('span', { className: 'dps-section-title' }, t('section.provider')), toggle),
         list,
       )
     }
@@ -1237,18 +1310,27 @@ window.__ModuleLoader__.load({
       const stats = h(
         'div',
         { className: 'dps-stats' },
-        h(StatCard, { label: t('stat.tokens'), value: hasAnySession ? formatTokens(totals.tokens) : '—' }),
+        h(StatCard, { label: t('stat.tokens'), value: hasAnySession ? formatTokens(totals.tokens) : '—', icon: 'tokens', emphasis: true }),
         h(StatCard, {
           label: t('stat.today'),
           value: hasAnySession ? formatTokens(todayEntry ? todayEntry.tokens : 0) : '—',
+          icon: 'today',
         }),
         h(StatCard, {
           label: t('stat.longestTurn'),
           value: hasAnySession ? formatDuration(totals.longestTurnMs) : '—',
+          icon: 'clock',
         }),
-        h(StatCard, { label: t('stat.longestStreak'), value: hasAnySession ? formatDays(totals.longestStreak) : '—' }),
-        h(StatCard, { label: t('stat.currentStreak'), value: hasAnySession ? formatDays(totals.currentStreak) : '—' }),
-      )
+        h(StatCard, {
+          label: t('stat.longestStreak'),
+          value: hasAnySession ? formatDays(totals.longestStreak) : '—',
+          icon: 'calendar',
+        }),
+        h(StatCard, {
+          label: t('stat.currentStreak'),
+          value: hasAnySession ? formatDays(totals.currentStreak) : '—',
+          icon: 'flame',
+        }),      )
 
       useEffect(() => {
         if (!updating || !updateInfo) return
@@ -1309,6 +1391,44 @@ window.__ModuleLoader__.load({
             )
           : null
 
+      // —— 设计图：两栏网格（活动+构成 / 模型+供应商）——
+      const heatSection = h(
+        'div',
+        { className: 'dps-section' },
+        h(
+          'div',
+          { className: 'dps-section-head' },
+          h('span', { className: 'dps-section-title' }, t('section.activity')),
+          h(
+            'div',
+            { className: 'dps-switch' },
+            [
+              ['day', t('mode.day')],
+              ['week', t('mode.week')],
+              ['total', t('mode.total')],
+            ].map(([id, label]) =>
+              h(
+                'button',
+                {
+                  key: id,
+                  type: 'button',
+                  'data-active': activityMode === id ? 'true' : 'false',
+                  onClick: () => setActivityMode(id),
+                },
+                label,
+              ),
+            ),
+          ),
+        ),
+        h(Heatmap, { heat, mode: activityMode, key: `heat-${activityMode}` }),
+      )
+      const mixSection = totals && hasAnySession ? h('div', { className: 'dps-section' }, h(Breakdown, { totals })) : null
+      const modelSection =
+        totals && hasAnySession ? h('div', { className: 'dps-section' }, h(ModelChart, { daily, totals })) : null
+      const providerSection =
+        totals && hasAnySession && providerHasRows
+          ? h('div', { className: 'dps-section' }, h(ProviderBreakdown, { today: todayEntry, totals }))
+          : null
       return h(
         'div',
         { className: 'dps-root' },
@@ -1320,8 +1440,29 @@ window.__ModuleLoader__.load({
             'div',
             { className: 'dps-identity' },
             h('div', { className: 'dps-avatar', 'aria-hidden': true }, initial),
-            h('div', { className: 'dps-name' }, identity.name || 'DSH'),
-            h('div', { className: 'dps-handle' }, identity.handle || '@local'),
+            h(
+              'div',
+              { className: 'dps-id-text' },
+              h('div', { className: 'dps-name' }, identity.name || 'DSH'),
+              h('div', { className: 'dps-handle' }, identity.handle || '@local'),
+            ),
+            h(
+              'div',
+              { className: 'dps-header-actions' },
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dps-icon-button',
+                  'aria-label': t('action.refresh'),
+                  title: t('action.refresh'),
+                  onClick: () => {
+                    refresh()
+                  },
+                },
+                h(Icon, { name: 'refresh' }),
+              ),
+            ),
           ),
           stats,
           scanningHint,
@@ -1329,52 +1470,16 @@ window.__ModuleLoader__.load({
           emptyBlock,
           h(
             'div',
-            { className: 'dps-section' },
-            h(
-              'div',
-              { className: 'dps-section-head' },
-              h('span', { className: 'dps-section-title' }, t('section.activity')),
-              h(
-                'div',
-                { className: 'dps-switch' },
-                [
-                  ['day', t('mode.day')],
-                  ['week', t('mode.week')],
-                  ['total', t('mode.total')],
-                ].map(([id, label]) =>
-                  h(
-                    'button',
-                    {
-                      key: id,
-                      type: 'button',
-                      'data-active': activityMode === id ? 'true' : 'false',
-                      onClick: () => setActivityMode(id),
-                    },
-                    label,
-                  ),
-                ),
-              ),
-            ),
-            // key 绑定模式：切换时重挂载 Heatmap，顺带清掉上一次的悬浮浮层。
-            h(Heatmap, { heat, mode: activityMode, key: `heat-${activityMode}` }),
+            { className: 'dps-grid' },
+            heatSection,
+            mixSection,
           ),
-          totals && hasAnySession
-            ? h(
-                'div',
-                { className: 'dps-section' },
-                h('div', { className: 'dps-section-head' }, h('span', { className: 'dps-section-title' }, t('section.breakdown'))),
-                h(Breakdown, { totals }),
-              )
-            : null,
-          totals && hasAnySession && providerHasRows
-            ? h(
-                'div',
-                { className: 'dps-section' },
-                h(ModelChart, { daily, totals }),
-                h('div', { className: 'dps-section-head' }, h('span', { className: 'dps-section-title' }, t('section.provider'))),
-                h(ProviderBreakdown, { today: todayEntry, totals }),
-              )
-            : null,
+          h(
+            'div',
+            { className: 'dps-grid' },
+            modelSection,
+            providerSection,
+          ),
           h(
             'div',
             { className: 'dps-footer' },
@@ -1413,17 +1518,7 @@ window.__ModuleLoader__.load({
                 : updating
                   ? h('span', { className: 'dps-section-note' }, t('action.updating'))
                   : null,
-              h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'dps-button',
-                  onClick: () => {
-                    refresh()
-                  },
-                },
-                t('action.refresh'),
-              ),
+
             ),
           ),
         ),
