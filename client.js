@@ -83,7 +83,7 @@ window.__ModuleLoader__.load({
       'unit.minute': '{count} m',
       'unit.none': '—',
       'value.tokensTooltip': '{date} · {value} tokens',
-      'section.provider': 'Provider breakdown',
+      'section.provider': 'Provider split',
       'section.model': 'Token by model',
       'chart.total': 'total {value}',
       'model.others': 'Other models',
@@ -157,7 +157,7 @@ window.__ModuleLoader__.load({
       'unit.minute': '{count} 分',
       'unit.none': '—',
       'value.tokensTooltip': '{date} · {value} tokens',
-      'section.provider': '供应商拆分',
+      'section.provider': '供应商分类',
       'section.model': '模型分布',
       'chart.total': '总计 {value}',
       'model.others': '其他模型',
@@ -573,7 +573,7 @@ window.__ModuleLoader__.load({
 .dps-tip-date{font-size:10px;line-height:1.5;color:var(--dsw-alias-label-secondary)}
 .dps-tip-value{font-size:12px;line-height:1.5;font-weight:600;font-variant-numeric:tabular-nums}
 .dps-prov-card{display:flex;flex-direction:column;gap:12px}
-.dps-prov-head{display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap}
+.dps-prov-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .dps-prov{display:flex;flex-direction:column;gap:9px}
 .dps-prov-row{display:grid;grid-template-columns:132px minmax(60px,1fr) auto 48px;gap:10px;align-items:center;font-size:12px}
 .dps-prov-name{color:var(--dsw-alias-label-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -588,7 +588,7 @@ window.__ModuleLoader__.load({
 .dps-chart-legend{display:flex;align-items:center;justify-content:center;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--dsw-alias-label-secondary)}
 .dps-chart-legend-item{display:inline-flex;align-items:center;gap:6px}
 .dps-chart-legend-total{color:var(--dsw-alias-label-primary);font-variant-numeric:tabular-nums;margin-left:2px}
-.dps-chart-plot{position:relative;height:240px;min-width:0}
+.dps-chart-plot{position:relative;height:240px;min-width:0;flex:1 1 auto}
 .dps-chart-ticks{position:absolute;left:0;right:0;top:0;bottom:18px;pointer-events:none}
 .dps-chart-tick{position:absolute;left:0;right:0;border-top:1px solid var(--dsw-alias-border-l2);opacity:.55}
 .dps-chart-tick > span{position:absolute;left:0;top:-8px;font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;padding-right:6px}
@@ -664,7 +664,9 @@ window.__ModuleLoader__.load({
 .dps-stat-value{font-size:28px;font-weight:700;letter-spacing:-.02em;line-height:1.05}
 .dps-stat-label{font-size:12px;color:var(--dsw-alias-label-secondary)}
 .dps-stack{display:flex;flex-direction:column;gap:14px;min-width:0}
-.dps-grid{display:grid;grid-template-columns:minmax(0,1.92fr) minmax(0,1fr);gap:18px;align-items:start}
+.dps-grid{display:grid;grid-template-columns:minmax(0,1.92fr) minmax(0,1fr);gap:18px;align-items:stretch}
+.dps-grid > .dps-section{display:flex;flex-direction:column;min-width:0}
+.dps-grid > .dps-section > .dps-card{flex:1 1 auto;display:flex;flex-direction:column}
 .dps-grid .dps-section{gap:12px}
 .dps-donut-wrap{position:relative;display:flex;align-items:center;justify-content:center}
 .dps-donut-center{position:absolute;text-align:center;line-height:1.25}
