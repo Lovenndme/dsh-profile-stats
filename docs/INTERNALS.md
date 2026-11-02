@@ -118,6 +118,10 @@ $DSH_HOME/dsh-profile-stats/update.json     # last in-panel update result
 - Host changes need a fresh module generation: toggle `include:dsh-profile-stats` off and on via
   `plugin_manager`, or restart Harness. Client changes only need a page refresh.
 - `index.js` exports `apply` / `inject` only; `client.js` registers through `window.__ModuleLoader__`.
-- Release: `pwsh tools/release.ps1` (patch bump → test → commit → push → publish → verify). The script reads
-  a granular npm token from `$env:NPM_TOKEN` or `$HOME/.dsh/.npm-publish-token`; no credential is stored in
-  the repository.
+- Releases are **batched**: a change lands as test + version bump + CHANGELOG + commit, and publishing waits
+  for the schedule. `pwsh tools/publish-pending.ps1` publishes only when `package.json` is ahead of npm's
+  `latest`; it runs the test suites first, skips silently when nothing is pending, and logs to
+  `$HOME/.dsh/dsh-profile-stats/publish.log`. On Windows it is registered as a scheduled task every 4 hours.
+  `pwsh tools/release.ps1` still exists for an immediate full release (test → bump → commit → push → publish).
+  No script stores credentials in the repository: they come from `$env:NPM_TOKEN` or
+  `$HOME/.dsh/.npm-publish-token`.
