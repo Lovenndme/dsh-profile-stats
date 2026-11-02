@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.4.6 — 2026-11-02
+
+- fix: fold the unversioned official deepseek-flash alias into the V4.1 Flash family
+
+
 ## 2.4.5 — 2026-11-02
 
 - ci: decide the version at release time and tag each release instead of bumping per change
