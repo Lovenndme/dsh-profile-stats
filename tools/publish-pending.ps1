@@ -84,15 +84,42 @@ if ($node -and (Test-Path (Join-Path $verify 'client-smoke.mjs'))) {
 
 $token = Get-Token
 $auth = "//registry.npmjs.org/:_authToken=$token"
+
+# npm 会把 "npm notice …" 写到 stderr，而 $ErrorActionPreference='Stop' 会把原生 stderr 当成
+# 终止错误（NativeCommandError）→ 发布被中断。这一段临时放宽，只看输出里有没有 npm error。
+$npmCmd = (Get-Command npm -ErrorAction SilentlyContinue)
+if (-not $npmCmd) {
+  $bundledNpm = Join-Path $HOME '.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/npm/bin/npm-cli.js'
+  if (-not (Test-Path $bundledNpm)) {
+    $bundledNpm = 'C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js'
+  }
+  if ((Test-Path $bundledNpm) -and $node) {
+    $npmCmd = [pscustomobject]@{ Source = $node.Source; Prefix = @($bundledNpm) }
+  }
+}
+if (-not $npmCmd) {
+  Write-Log '找不到 npm，无法发布'
+  exit 1
+}
+
+$previousEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
 Push-Location $repo
 try {
-  $output = (npm publish --access public "--$auth" 2>&1) -join "`n"
+  if ($npmCmd.Prefix) {
+    $output = (& $npmCmd.Source $npmCmd.Prefix[0] publish --access public "--$auth" 2>&1 | Out-String)
+  } else {
+    $output = (& $npmCmd.Source publish --access public "--$auth" 2>&1 | Out-String)
+  }
+} catch {
+  $output = "exception: $($_.Exception.Message)"
 } finally {
   Pop-Location
+  $ErrorActionPreference = $previousEap
 }
 Remove-Item Env:NPM_TOKEN -ErrorAction SilentlyContinue
-if ($output -match 'npm error') {
-  Write-Log "发布失败：`n$output"
+if ($output -match 'npm error' -or $output -match 'exception:') {
+  Write-Log "发布失败：$($output.Trim())"
   exit 1
 }
 Write-Log "已发布 $local"
