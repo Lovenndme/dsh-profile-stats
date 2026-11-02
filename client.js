@@ -1124,18 +1124,28 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 型号家族：用户只关心档位，不关心供应商写法。
-     * deepseek-v4-flash / deepseek-v4-1-flash / deepseek-flash / deepseek-v4-1-flash-economy /
-     * deepseek-v4-flash-vision 都归为 flash；带 pro 的归为 pro；其余保留各自的归一化 id。
+     * 无版本号的别名 → 归入对应家族。官方渠道的 `deepseek-flash` 就是 V4.1 Flash 的别名
+     * （请求什么就回什么，日志里不会自带版本号）。
+     */
+    const MODEL_ALIASES = {
+      'deepseek-flash': 'deepseek-v4-1-flash',
+      'deepseek-pro': 'deepseek-v4-1-pro',
+    }
+
+    /**
+     * 型号家族：用户只关心版本 + 档位，不关心供应商写法。
+     * deepseek-v4-flash / deepseek-v4-flash-vision → v4 flash；deepseek-v4-1-flash / -economy → v4.1 flash；
+     * 无版本别名按 MODEL_ALIASES 归并；其余保留各自的归一化 id。
      */
     function modelFamily(id) {
       const text = String(id || '').toLowerCase()
       const tier = text.includes('pro') ? 'pro' : text.includes('flash') ? 'flash' : ''
-      if (!tier) return text
+      if (!tier) return MODEL_ALIASES[text] || text
       // 版本号是家族的一部分：v4-flash 与 v4-1-flash 是两个家族
       const match = text.match(/-v(\d+)(?:-(\d+))?/)
       const version = match ? (match[2] ? `v${match[1]}-${match[2]}` : `v${match[1]}`) : ''
-      return version ? `deepseek-${version}-${tier}` : `deepseek-${tier}`
+      const key = version ? `deepseek-${version}-${tier}` : `deepseek-${tier}`
+      return MODEL_ALIASES[key] || key
     }
 
     /** deepseek-v4-1-flash → 「DeepSeek V4.1 Flash」；不带版本时就是「DeepSeek Flash」。 */
