@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.4.3 — 2026-11-02
+
+- 模型家族按**版本 + 档位**归并（版本号代表模型能力，不同版本不混为一谈）：
+  `deepseek-v4-1-flash-261017` / `deepseek-v4.1-flash` / `deepseek-v4.1-flash-economy` → **DeepSeek V4.1 Flash**；
+  `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` → **DeepSeek V4 Flash**；`deepseek-v4-pro` → **DeepSeek V4 Pro**；
+  无版本号的 `deepseek-flash` 单独成家族；其他厂商模型保留各自名称。
+
 ## 2.4.2 — 2026-11-02
 
 - 模型分布按**型号家族**归并：deepseek-v4-flash / deepseek-v4-1-flash / deepseek-flash / -flash-economy / -flash-vision 全部合并为 **DeepSeek Flash**，带 pro 的合并为 **DeepSeek Pro**；其他厂商模型保留各自名称。不再因为供应商写法不同而拆成多根柱子。

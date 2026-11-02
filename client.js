@@ -1128,15 +1128,21 @@ window.__ModuleLoader__.load({
      */
     function modelFamily(id) {
       const text = String(id || '').toLowerCase()
-      if (text.includes('pro')) return 'deepseek-pro'
-      if (text.includes('flash')) return 'deepseek-flash'
-      return text
+      const tier = text.includes('pro') ? 'pro' : text.includes('flash') ? 'flash' : ''
+      if (!tier) return text
+      // 版本号是家族的一部分：v4-flash 与 v4-1-flash 是两个家族
+      const match = text.match(/-v(\d+)(?:-(\d+))?/)
+      const version = match ? (match[2] ? `v${match[1]}-${match[2]}` : `v${match[1]}`) : ''
+      return version ? `deepseek-${version}-${tier}` : `deepseek-${tier}`
     }
 
+    /** deepseek-v4-1-flash → 「DeepSeek V4.1 Flash」；不带版本时就是「DeepSeek Flash」。 */
     function familyLabel(key) {
-      if (key === 'deepseek-flash') return t('model.flashFamily')
-      if (key === 'deepseek-pro') return t('model.proFamily')
-      return prettyModelName(key)
+      const match = String(key).match(/^deepseek-(v\d+(?:-\d+)?-)?(flash|pro)$/)
+      if (!match) return prettyModelName(key)
+      const version = match[1] ? match[1].replace(/-$/, '').replace('-', '.').toUpperCase() : ''
+      const tier = match[2] === 'flash' ? 'Flash' : 'Pro'
+      return ['DeepSeek', version, tier].filter(Boolean).join(' ')
     }
 
     /** 把归一化后的模型 id 转成可读名字：deepseek-v4-1-flash → DeepSeek V4.1 Flash。 */
