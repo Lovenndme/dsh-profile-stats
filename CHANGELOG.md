@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.4.7 — 2026-11-02
+
+- ci: publish a GitHub release on every real publish so the owner gets exactly one notification
+
+
 ## 2.4.6 — 2026-11-02
 
 - fix: fold the unversioned official deepseek-flash alias into the V4.1 Flash family
