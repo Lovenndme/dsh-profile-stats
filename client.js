@@ -592,7 +592,8 @@ window.__ModuleLoader__.load({
 .dps-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 /* —— 设计图改版：头部 / KPI 卡 / 两栏网格 / 环形中心 / 供应商进度条 —— */
 .dps-page{max-width:1180px;padding:28px 28px 48px;gap:18px}
-.dps-identity{align-items:center;gap:14px}
+.dps-identity{position:relative;flex-direction:column;align-items:center;gap:14px}
+.dps-header-status{position:absolute;left:0;top:50%;transform:translateY(-50%);font-size:12px;color:var(--dsw-alias-label-secondary);white-space:nowrap}
 .dps-avatar{width:64px;height:64px;border-radius:18px;font-size:26px;background:var(--dsw-alias-bg-layer-2);box-shadow:none}
 .dps-name{font-size:24px;font-weight:700;line-height:1.15;letter-spacing:-.01em}
 .dps-handle{font-size:12px}
@@ -1447,6 +1448,7 @@ window.__ModuleLoader__.load({
               h('div', { className: 'dps-name' }, identity.name || 'DSH'),
               h('div', { className: 'dps-handle' }, identity.handle || '@local'),
             ),
+            h('span', { className: 'dps-header-status' }, statusLine),
             h(
               'div',
               { className: 'dps-header-actions' },
@@ -1479,7 +1481,6 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 'dps-footer' },
-            h('span', null, statusLine),
             h(
               'span',
               { style: { display: 'inline-flex', alignItems: 'center', gap: '8px' } },
