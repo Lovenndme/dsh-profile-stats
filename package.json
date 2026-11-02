@@ -1,68 +1,68 @@
-﻿{
-    "name":  "dsh-profile-stats",
-    "version":  "2.4.8",
-    "description":  "Personal usage profile page for the DeepSeek Harness Web UI: cumulative tokens, peak day, longest task, activity streaks, token mix, a 12-month token-activity heatmap and a per-provider billing breakdown, all folded from the local session logs.",
-    "type":  "module",
-    "main":  "index.js",
-    "exports":  {
-                    ".":  "./index.js",
-                    "./client":  "./client.js",
-                    "./cordis.patch.yml":  "./cordis.patch.yml",
-                    "./package.json":  "./package.json",
-                    "./locale/*.json":  "./locale/*.json",
-                    "./icon":  "./icon.svg"
-                },
-    "files":  [
-                  "index.js",
-                  "client.js",
-                  "cordis.patch.yml",
-                  "locale/*.json",
-                  "icon.svg",
-                  "README.md",
-                  "CHANGELOG.md",
-                  "LICENSE",
-                  "README.zh.md"
-              ],
-    "keywords":  [
-                     "dsh",
-                     "dsh-plugin",
-                     "deepseek-harness",
-                     "profile",
-                     "usage",
-                     "tokens",
-                     "token-usage",
-                     "heatmap",
-                     "billing",
-                     "dashboard"
-                 ],
-    "license":  "MIT",
-    "author":  "Lovenndme",
-    "homepage":  "https://github.com/Lovenndme/dsh-profile-stats#readme",
-    "repository":  {
-                       "type":  "git",
-                       "url":  "git+https://github.com/Lovenndme/dsh-profile-stats.git"
-                   },
-    "bugs":  {
-                 "url":  "https://github.com/Lovenndme/dsh-profile-stats/issues"
-             },
-    "engines":  {
-                    "dsh":  "\u003e=0.2.1-rc.5 \u003c0.3.0-0"
-                },
-    "dsh":  {
-                "bundle":  {
-                               "patch":  "./cordis.patch.yml"
-                           },
-                "client":  {
-                               "platform":  "web",
-                               "inject":  [
-                                              "slots"
-                                          ]
-                           },
-                "compatibility":  {
-                                      "dshReleases":  {
-                                                          "0.2.1-rc.5":  "verified"
-                                                      },
-                                      "note":  "Host half uses ctx.sessionQuery (listSessions / readSession incl. inheritedEventCount) and ctx.webServer.register; client half uses slots.inject/register plus the locale service. On a host without those APIs the plugin fails to load instead of showing wrong numbers."
-                                  }
-            }
+{
+  "name": "dsh-profile-stats",
+  "version": "2.4.8",
+  "description": "Personal usage profile page for the DeepSeek Harness Web UI: cumulative tokens, peak day, longest task, activity streaks, token mix, a 12-month token-activity heatmap and a per-provider billing breakdown, all folded from the local session logs.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.zh.md"
+  ],
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "profile",
+    "usage",
+    "tokens",
+    "token-usage",
+    "heatmap",
+    "billing",
+    "dashboard"
+  ],
+  "license": "MIT",
+  "author": "Lovenndme",
+  "homepage": "https://github.com/Lovenndme/dsh-profile-stats#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Lovenndme/dsh-profile-stats.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Lovenndme/dsh-profile-stats/issues"
+  },
+  "engines": {
+    "dsh": ">=0.2.1-rc.5 <0.3.0-0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "slots"
+      ]
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.1-rc.5": "verified"
+      },
+      "note": "Host half uses ctx.sessionQuery (listSessions / readSession incl. inheritedEventCount) and ctx.webServer.register; client half uses slots.inject/register plus the locale service. On a host without those APIs the plugin fails to load instead of showing wrong numbers."
+    }
+  }
 }

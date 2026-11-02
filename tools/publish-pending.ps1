@@ -56,12 +56,26 @@ try {
     exit 0
   }
 
-  $pkg = Get-Content $pkgPath -Raw | ConvertFrom-Json
-  $current = $pkg.version
-  $parts = $current.Split('-')[0].Split('.')
-  $next = '{0}.{1}.{2}' -f [int]$parts[0], [int]$parts[1], ([int]$parts[2] + 1)
-  $pkg.version = $next
-  ($pkg | ConvertTo-Json -Depth 20) + "`n" | Set-Content $pkgPath -Encoding utf8 -NoNewline
+  # 必须用 node 改 package.json：PowerShell 的 ConvertTo-Json + Set-Content -Encoding utf8 会写入
+  # UTF-8 BOM，而 DSH 加载 bundle 时 JSON.parse 遇到 BOM 直接失败，插件会被静默跳过（sidepanel 入口消失）。
+  $current = ((Get-Content $pkgPath -Raw | ConvertFrom-Json).version)
+  $nodeForJson = (Get-Command node -ErrorAction SilentlyContinue)
+  if (-not $nodeForJson) {
+    $bundledNode = Join-Path $HOME '.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/node/bin/node.exe'
+    if (Test-Path $bundledNode) { $nodeForJson = [pscustomobject]@{ Source = $bundledNode } }
+  }
+  if (-not $nodeForJson) { throw '找不到 node，无法安全改写 package.json' }
+  $next = & $nodeForJson.Source -e @"
+const fs = require('fs')
+const path = process.argv[1]
+const raw = fs.readFileSync(path, 'utf8').replace(/^\uFEFF/, '')
+const pkg = JSON.parse(raw)
+const [major, minor, patch] = pkg.version.split('-')[0].split('.').map(Number)
+pkg.version = major + '.' + minor + '.' + (patch + 1)
+fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n', 'utf8')
+console.log(pkg.version)
+"@ $pkgPath
+  $next = ($next | Select-Object -Last 1).Trim()
   Write-Log "版本 $current → $next"
 
   $range = if ($last) { "$last..HEAD" } else { 'HEAD' }
