@@ -139,16 +139,22 @@ jobs:
             --title "v${version}" \
             --notes-file release-notes.md \
             --verify-tag || gh release edit "v${version}" --notes-file release-notes.md
+      # The publish already succeeded at this point, so a slow CDN must never fail the run: a red X
+      # here sends the owner a scary mail for a release that actually shipped (2026-11-03 v2.4.9).
       - name: Wait for the registry to serve the new version
         if: steps.gate.outputs.pending == 'true' && inputs.dry_run != true
         run: |
-          set -euo pipefail
+          set -uo pipefail
           version="${{ steps.bump.outputs.version }}"
-          for attempt in $(seq 1 10); do
-            sleep 20
-            live="$(npm view dsh-profile-stats version)"
+          name="$(node -p "require('./package.json').name")"
+          for attempt in $(seq 1 20); do
+            sleep 30
+            live="$(npm view "$name" version)"
             echo "attempt=$attempt registry=$live"
-            if [ "$live" = "$version" ]; then exit 0; fi
+            if [ "$live" = "$version" ]; then
+              echo "registry now serves $version"
+              exit 0
+            fi
           done
-          echo "published but the registry still serves an older version"
-          exit 1
+          echo "::warning::published $version, but the registry still serves $live after 10 minutes — the publish itself succeeded"
+          exit 0
