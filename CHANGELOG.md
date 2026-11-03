@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.4.11 — 2026-11-03
+
+- ci: sync the marketplace entry description nightly, PR only when it drifts
+- fix: keep every card mounted when the selected range has no data (provider split too)
+- fix: keep the model chart card when the selected range has no usage
+
+
 ## 2.4.10 — 2026-11-03
 
 - ci: do not fail a release when the npm CDN lags behind the successful publish
