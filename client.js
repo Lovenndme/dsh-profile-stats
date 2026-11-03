@@ -1180,6 +1180,52 @@ window.__ModuleLoader__.load({
       return out.join(' ')
     }
 
+    /** 模型图自带的范围开关（页面级范围生效时隐藏）。 */
+    function buildRangeToggle(range, setRange) {
+      return h(
+        'div',
+        { className: 'dps-switch' },
+        [
+          { id: 'recent', label: t('range.recent') },
+          { id: 'all', label: t('range.all') },
+        ].map((option) =>
+          h(
+            'button',
+            {
+              key: option.id,
+              type: 'button',
+              'data-active': range === option.id ? 'true' : 'false',
+              onClick: () => setRange(option.id),
+            },
+            option.label,
+          ),
+        ),
+      )
+    }
+
+    /**
+     * 范围内没有任何用量时的模型图：卡片、标题和绘图区都保留，只是没有柱子。
+     * 之前这种情况直接 return null，导致整块从页面上消失（2026-11-03 反馈）。
+     */
+    function emptyModelChart(range, setRange, lockRange) {
+
+      return h(
+        'div',
+        { className: 'dps-card dps-chart' },
+        h(
+          'div',
+          { className: 'dps-chart-head' },
+          h(
+            'div',
+            { className: 'dps-chart-title' },
+            t('section.model'),
+            h('span', { className: 'dps-chart-total' }, t('chart.total', { value: formatTokens(0) })),
+          ),
+          lockRange ? null : buildRangeToggle(range, setRange),
+        ),
+        h('div', { className: 'dps-chart-plot' }),
+      )
+    }
     /**
      * 按时间的竖向柱状图：时间轴连续（没有数据的日期也占位），近 14 天按天分桶、全部按周汇总。
      * 模型来自宿主的动态识别（任意模型 id 都会被统计）：范围内用量前 2 的模型各占一根柱，
@@ -1235,7 +1281,7 @@ window.__ModuleLoader__.load({
       const buckets = [...bucketMap.values()].sort((left, right) => (left.key < right.key ? -1 : 1))
 
       const ranked = [...familyTotals.entries()].sort((left, right) => right[1] - left[1]).filter(([, value]) => value > 0)
-      if (ranked.length === 0) return null
+      if (ranked.length === 0) return emptyModelChart(range, setRange, lockRange)
 
       const top = ranked.slice(0, 6)
       const rest = ranked.slice(2)
@@ -1271,7 +1317,7 @@ window.__ModuleLoader__.load({
           if (value > max) max = value
         }
       }
-      if (max <= 0) return null
+      if (max <= 0) return emptyModelChart(range, setRange, lockRange)
 
       const stride = Math.max(1, Math.ceil(buckets.length / 14))
       const labelOf = (key) => key.slice(5).replace('-', '/')
@@ -1290,25 +1336,8 @@ window.__ModuleLoader__.load({
         })
       }
 
-      const toggle = h(
-        'div',
-        { className: 'dps-switch' },
-        [
-          { id: 'recent', label: t('range.recent') },
-          { id: 'all', label: t('range.all') },
-        ].map((option) =>
-          h(
-            'button',
-            {
-              key: option.id,
-              type: 'button',
-              'data-active': range === option.id ? 'true' : 'false',
-              onClick: () => setRange(option.id),
-            },
-            option.label,
-          ),
-        ),
-      )
+      const toggle = buildRangeToggle(range, setRange)
+
 
       const legend = h(
         'div',
