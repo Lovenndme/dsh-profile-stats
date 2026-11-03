@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.4.10 — 2026-11-03
+
+- ci: do not fail a release when the npm CDN lags behind the successful publish
+
+
 ## 2.4.9 — 2026-11-02
 
 - fix: never write a BOM into package.json (the DSH loader JSON.parses it and skips the bundle)
