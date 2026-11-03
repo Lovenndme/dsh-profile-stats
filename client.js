@@ -1043,7 +1043,6 @@ window.__ModuleLoader__.load({
         .map(([id, tokens]) => ({ id, tokens: toNumber(tokens) }))
         .filter((row) => row.tokens > 0)
         .sort((left, right) => right.tokens - left.tokens)
-      if (rows.length === 0) return null
 
       const sum = rows.reduce((total, row) => total + row.tokens, 0)
       const visible = rows.slice(0, 6)
@@ -1250,7 +1249,7 @@ window.__ModuleLoader__.load({
       const keys = [...byDate.keys()].sort()
       const firstDataKey = keys.length > 0 ? keys[0] : todayKey
       const startKey = range === 'recent' ? localDateKey(new Date(today.getTime() - 13 * DAY_MS)) : firstDataKey
-      if (dateFromKey(startKey).getTime() > today.getTime()) return null
+      if (dateFromKey(startKey).getTime() > today.getTime()) return emptyModelChart(range, setRange, lockRange)
 
       // 连续铺满每一天，再按范围折叠成「天」或「周」
       const days = []
@@ -1517,11 +1516,6 @@ window.__ModuleLoader__.load({
 
       const todayKey = localDateKey(startOfDay(new Date()))
       const todayEntry = daily.find((entry) => entry && entry.date === todayKey) || null
-      const providerHasRows = Boolean(
-        (todayEntry && todayEntry.byProvider && Object.keys(todayEntry.byProvider).length > 0) ||
-          (totals && totals.byProvider && Object.keys(totals.byProvider).length > 0),
-      )
-
       const stats = h(
         'div',
         { className: 'dps-stats' },
@@ -1638,7 +1632,7 @@ window.__ModuleLoader__.load({
       const modelSection =
         totals && hasAnySession ? h('div', { className: 'dps-section' }, h(ModelChart, { daily: scoped.days, totals: scoped.totals, lockRange: true })) : null
       const providerSection =
-        totals && hasAnySession && providerHasRows
+        totals && hasAnySession
           ? h('div', { className: 'dps-section' }, h(ProviderBreakdown, { today: todayEntry, totals: scoped.totals }))
           : null
       return h(
