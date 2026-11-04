@@ -1491,8 +1491,14 @@ window.__ModuleLoader__.load({
       const source = totals || {}
       const total = toNumber(source.tokens)
       const output = Math.min(toNumber(source.outputTokens), total)
-      const cache = Math.min(toNumber(source.cacheReadTokens) + toNumber(source.cacheWriteTokens), total - output)
-      const uncached = total - cache - output
+      const cache = toNumber(source.cacheReadTokens) + toNumber(source.cacheWriteTokens)
+      const input = toNumber(source.inputTokens)
+      // 不同供应商的 inputTokens 语义不一致：input ≥ cache 说明它已经包含了缓存命中，
+      // 这时未缓存输入要减掉缓存；否则 inputTokens 本身就是未缓存输入。
+      // 用减法（总量 − 缓存 − 输出）会把这部分减成 0，凭空造出 100% 命中率。
+      const uncached = input > 0 ? (input >= cache ? input - cache : input) : Math.max(0, total - cache - output)
+      // 三段之和可能略小于宿主的总量（上游数字不自洽），柱状条按自身合计铺满。
+      const partsTotal = cache + uncached + output
       const uncachedTotal = uncached + output
       return {
         total,
@@ -1500,6 +1506,7 @@ window.__ModuleLoader__.load({
         uncached,
         output,
         uncachedTotal,
+        partsTotal,
         inputTotal: cache + uncached,
         hitRate: cache + uncached > 0 ? (cache / (cache + uncached)) * 100 : 0,
         uncachedShare: uncachedTotal > 0 ? (uncached / uncachedTotal) * 100 : 0,
@@ -1519,7 +1526,7 @@ window.__ModuleLoader__.load({
       const segmentRefs = useRef({})
 
       // 柱宽描述的是「构成本身」，分母是总量（放大视图是非缓存合计）。
-      const denominator = zoomed ? lens.uncachedTotal : lens.total
+      const denominator = zoomed ? lens.uncachedTotal : lens.partsTotal
       const barShare = (value) => (denominator > 0 ? (value / denominator) * 100 : 0)
       // 百分比列统一除以「输入」：缓存与未缓存输入同源，命中率就是缓存在这两段里的占比，
       // 于是 100% 与 0% 不再互相矛盾。输出不属于输入，这一列不给百分比。
