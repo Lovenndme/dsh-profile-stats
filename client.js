@@ -30,7 +30,6 @@ window.__ModuleLoader__.load({
     /** 指标卡里的迷你柱：最近多少天。 */
     const SPARK_DAYS = 14
     const HEAT_WEEKS = 53
-    const CELL_PITCH = 14
 
     /* -------------------------------------------------------------- 文案字典 */
 
@@ -421,20 +420,6 @@ window.__ModuleLoader__.load({
       return formatDate(date, { month: 'short' })
     }
 
-    /** 'YYYY-MM-DD' → 本地化的完整日期（总是带年份），周/累计档的悬浮提示用。 */
-    function formatCellDateFull(key) {
-      const date = parseDateKey(key)
-      return date ? formatDate(date, { year: 'numeric', month: 'long', day: 'numeric' }) : String(key || '')
-    }
-
-    /** 'YYYY-MM-DD' → 本地化的「月日」（跨年时带年份），热力图悬浮提示用。 */
-    function formatCellDate(key) {
-      const date = parseDateKey(key)
-      if (!date) return String(key || '')
-      const sameYear = date.getFullYear() === new Date().getFullYear()
-      return formatDate(date, sameYear ? { month: 'short', day: 'numeric' } : { year: 'numeric', month: 'short', day: 'numeric' })
-    }
-
     /* ------------------------------------------------------------ 数据派生 */
 
     /** daily[] → Map(dateKey → entry)，只收格式正确的日期。 */
@@ -607,223 +592,6 @@ window.__ModuleLoader__.load({
           focusable: 'false',
         },
         h('path', { d: ICON_PATHS[props.name] || ICON_PATHS.tokens }),
-      )
-    }
-
-    /* ------------------------------------------------------------ 热力图数据 */
-
-    function buildHeatmap(daily) {
-      const totals = new Map()
-      for (const entry of daily || []) {
-        if (entry && typeof entry.date === 'string') {
-          totals.set(entry.date, { tokens: toNumber(entry.tokens), calls: toNumber(entry.calls) })
-        }
-      }
-      const today = startOfDay(new Date())
-      // 一周从周一开始，与模型分布「按周」同一口径（旧实现这里按周日起算，同一周两处合计对不上）。
-      const start = startOfWeek(addDays(today, -(HEAT_WEEKS * 7 - 1)))
-      const startKey = localDateKey(start)
-      // 「累计总量」是截至每周的全部用量：窗口之前的天也要算进起点，而不是从窗口第一天的 0 开始。
-      let baseline = 0
-      for (const [key, day] of totals) {
-        if (/^\d{4}-\d{2}-\d{2}$/.test(key) && key < startKey) baseline += day.tokens
-      }
-
-      const cells = []
-      const weeks = []
-      const months = []
-      const cursor = new Date(start.getTime())
-      let column = 0
-      let previousMonth = -1
-      let cumulative = baseline
-
-      while (cursor.getTime() <= today.getTime()) {
-        const weekStart = new Date(cursor.getTime())
-        let weekTokens = 0
-        let weekEnd = weekStart
-        for (let row = 0; row < 7; row += 1) {
-          const key = localDateKey(cursor)
-          const future = cursor.getTime() > today.getTime()
-          const day = future ? null : totals.get(key)
-          const tokens = day ? day.tokens : 0
-          if (!future) {
-            weekTokens += tokens
-            weekEnd = new Date(cursor.getTime())
-          }
-          cells.push({ key, tokens, future, column, date: new Date(cursor.getTime()) })
-          cursor.setDate(cursor.getDate() + 1)
-        }
-        cumulative += weekTokens
-        weeks.push({
-          column,
-          startKey: localDateKey(weekStart),
-          endKey: localDateKey(weekEnd),
-          weekTokens,
-          cumulativeTokens: cumulative,
-        })
-        const month = weekStart.getMonth()
-        if (month !== previousMonth) {
-          previousMonth = month
-          months.push({ column, label: monthLabel(weekStart) })
-        }
-        column += 1
-      }
-
-      // 三档热力图各用一套分位阈值：每天看单日用量，每周看周合计，累计看截至该周的累计值。
-      const leveler = (sourceValues) => {
-        const sorted = sourceValues.filter((value) => value > 0).sort((left, right) => left - right)
-        if (sorted.length === 0) return () => 0
-        const quantile = (ratio) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor(sorted.length * ratio)))]
-        const thresholds = [quantile(0.25), quantile(0.5), quantile(0.75)]
-        return (value) => {
-          if (!(value > 0)) return 0
-          if (value <= thresholds[0]) return 1
-          if (value <= thresholds[1]) return 2
-          if (value <= thresholds[2]) return 3
-          return 4
-        }
-      }
-
-      let windowTokens = 0
-      for (const cell of cells) windowTokens += cell.tokens
-
-      // 月份标签按列定位，列距只有 14px，而「10月」这类标签约 25px 宽：
-      // 起点若是被截断的残月（只覆盖几天），就会和下一个整月挤在一起。
-      // 这里按估算宽度做一次排布：和下一个标签抢位置时让位（丢掉的总是残月）。
-      const labelWidth = (label) => {
-        let units = 0
-        for (const char of String(label)) units += /[\u2e80-\u9fff\uff00-\uffef]/.test(char) ? 1.7 : 1
-        return units * 6.6
-      }
-      const spacedMonths = []
-      for (let index = 0; index < months.length; index += 1) {
-        const current = months[index]
-        const next = months[index + 1]
-        if (next && (next.column - current.column) * CELL_PITCH < labelWidth(current.label) + 6) continue
-        const previous = spacedMonths[spacedMonths.length - 1]
-        if (previous && (current.column - previous.column) * CELL_PITCH < labelWidth(previous.label) + 6) continue
-        spacedMonths.push(current)
-      }
-
-      return {
-        cells,
-        weeks,
-        months: spacedMonths,
-        windowTokens,
-        columns: column,
-        levels: {
-          day: leveler(cells.map((cell) => cell.tokens)),
-          week: leveler(weeks.map((week) => week.weekTokens)),
-          total: leveler(weeks.map((week) => week.cumulativeTokens)),
-        },
-      }
-    }
-
-    function heatBackground(level) {
-      if (level <= 0) return undefined
-      const mix = [26, 46, 68, 92][level - 1]
-      return `color-mix(in srgb, var(--dsw-alias-brand-primary) ${mix}%, var(--dsw-alias-bg-layer-2))`
-    }
-
-    function Heatmap(props) {
-      const heat = props.heat
-      const mode = props.mode === 'week' || props.mode === 'total' ? props.mode : 'day'
-      const [tip, setTip] = useState(null)
-
-      /** 某一列（一周）的聚合值：周合计或累计值；每天模式不用它。 */
-      const weekOf = (cell) => heat.weeks[cell.column] || { weekTokens: 0, cumulativeTokens: 0 }
-
-      const showTip = (cell) => (event) => {
-        const target = event && event.currentTarget
-        if (!target || typeof target.getBoundingClientRect !== 'function') return
-        const rect = target.getBoundingClientRect()
-        const viewportWidth = typeof window !== 'undefined' && window.innerWidth ? window.innerWidth : 1200
-        const halfWidth = 104
-        const centerX = rect.left + rect.width / 2
-        setTip({
-          cell,
-          week: weekOf(cell),
-          x: Math.min(Math.max(centerX, halfWidth), Math.max(halfWidth, viewportWidth - halfWidth)),
-          /** 靠近视口顶部时改到格子下方，避免浮层被裁掉。 */
-          y: rect.top < 96 ? rect.bottom + 8 : rect.top - 8,
-          below: rect.top < 96,
-        })
-      }
-      const hideTip = () => setTip(null)
-
-      const cells = heat.cells.map((cell) => {
-        // 只有「每天」这一档尊重未来日期（今天之后留白）；
-        // 「每周 / 累计」是按整列聚合的，整列同色才看得出这一周的份量。
-        const level =
-          mode === 'week'
-            ? heat.levels.week(weekOf(cell).weekTokens)
-            : mode === 'total'
-              ? heat.levels.total(weekOf(cell).cumulativeTokens)
-              : cell.future
-                ? 0
-                : heat.levels.day(cell.tokens)
-        return h('div', {
-          key: cell.key,
-          className: 'dps-cell',
-          'data-future': cell.future ? 'true' : 'false',
-          onMouseEnter: showTip(cell),
-          onMouseLeave: hideTip,
-          style: level > 0 ? { background: heatBackground(level), boxShadow: 'none' } : undefined,
-        })
-      })
-
-      // 悬浮浮层只保留「时间 + 缩写用量」两行：精确数字与请求数不再展示。
-      const tipLines = (() => {
-        if (!tip) return null
-        let label
-        let value
-        if (mode === 'week') {
-          label = t('tip.week', { date: formatCellDateFull(tip.week.startKey) })
-          value = toNumber(tip.week.weekTokens)
-        } else if (mode === 'total') {
-          label = t('tip.cumulative', { date: formatCellDateFull(tip.week.startKey) })
-          value = toNumber(tip.week.cumulativeTokens)
-        } else {
-          label = formatCellDate(tip.cell.key)
-          value = toNumber(tip.cell.tokens)
-        }
-        return [
-          h('div', { className: 'dps-tip-date', key: 'd' }, label),
-          h(
-            'div',
-            { className: 'dps-tip-value', key: 'v' },
-            value > 0 ? t('tip.tokens', { value: formatTokens(value) }) : t('tip.none'),
-          ),
-        ]
-      })()
-
-      const tooltip = tipLines
-        ? h(
-            'div',
-            { className: 'dps-tip', style: { left: `${tip.x}px`, top: `${tip.y}px`, transform: `translate(-50%, ${tip.below ? '0' : '-100%'})` } },
-            tipLines,
-          )
-        : null
-
-      const monthNodes = heat.months.map((month) =>
-        h(
-          'span',
-          { key: `${month.column}-${month.label}`, className: 'dps-month', style: { left: `${(month.column / heat.columns) * 100}%` } },
-          month.label,
-        ),
-      )
-
-      return h(
-        'div',
-        { className: 'dps-card dps-heat' },
-        h(
-          'div',
-          { style: { display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' } },
-          h('span', { className: 'dps-section-note' }, t('note.range')),
-          h('span', { className: 'dps-section-note' }, t('note.total', { value: formatTokens(heat.windowTokens) })),
-        ),
-        h('div', null, h('div', { className: 'dps-heat-grid' }, cells), h('div', { className: 'dps-months' }, monthNodes)),
-        tooltip,
       )
     }
 
@@ -1437,6 +1205,467 @@ window.__ModuleLoader__.load({
 
       return h('div', { className: 'dps-card dps-chart' }, heads, plot, legend, tooltip)
     }
+    /* ------------------------------------------------------------ 活动图数据 */
+
+    /** 活动图几何（SVG 用户单位）：格距 10、格子 8，三档共用同一坐标系，所以切换时高度不变。 */
+    const ACT_PITCH = 10
+    const ACT_CELL = 8
+    const ACT_HEIGHT = 7 * ACT_PITCH - (ACT_PITCH - ACT_CELL)
+
+    /**
+     * 近 12 个月（53 周，周一起算）的活动数据：
+     *   cells  每天一格：tokens / level（0–4，按非零日的四分位）/ future（今天之后）
+     *   weeks  每周一列：tokens（周合计）/ cumulative（截至该周的全部用量，含窗口之前）
+     *   months 月份标签所在列（相邻标签至少隔 3 列，冲突时丢掉靠前的残月）
+     */
+    function buildActivity(daily, today) {
+      const byDate = indexDaily(daily)
+      const todayStart = startOfDay(today)
+      const todayKey = localDateKey(todayStart)
+      const start = startOfWeek(addDays(todayStart, -(HEAT_WEEKS * 7 - 1)))
+      const startKey = localDateKey(start)
+
+      // 窗口之前的用量是「累计」的起点。键已校验为 YYYY-MM-DD（定长、补零），字典序即日期序。
+      let baseline = 0
+      for (const [key, entry] of byDate) {
+        if (key < startKey) baseline += toNumber(entry.tokens)
+      }
+
+      const cells = []
+      const weeks = []
+      const monthStarts = []
+      let running = baseline
+      let windowTokens = 0
+      for (let col = 0; ; col += 1) {
+        const weekStart = addDays(start, col * 7)
+        if (weekStart.getTime() > todayStart.getTime()) break
+        let weekTokens = 0
+        let lastKey = localDateKey(weekStart)
+        for (let row = 0; row < 7; row += 1) {
+          const date = addDays(weekStart, row)
+          const key = localDateKey(date)
+          const future = date.getTime() > todayStart.getTime()
+          const entry = future ? null : byDate.get(key)
+          const tokens = entry ? toNumber(entry.tokens) : 0
+          if (!future) {
+            weekTokens += tokens
+            lastKey = key
+          }
+          if (date.getDate() === 1) monthStarts.push({ col, date })
+          cells.push({ key, col, row, tokens, future, today: key === todayKey })
+        }
+        running += weekTokens
+        windowTokens += weekTokens
+        weeks.push({ col, startKey: localDateKey(weekStart), endKey: lastKey, tokens: weekTokens, cumulative: running })
+      }
+
+      const months = []
+      for (const item of monthStarts) {
+        const previous = months[months.length - 1]
+        if (previous && item.col - previous.col < 3) months.pop()
+        months.push({ col: item.col, label: monthLabel(item.date), key: localDateKey(item.date) })
+      }
+      if (months.length > 0 && months[0].col < 2 && months.length > 1 && months[1].col - months[0].col < 4) months.shift()
+
+      // 四档阈值：非零日的 25 / 50 / 75 分位
+      const values = cells
+        .filter((cell) => !cell.future && cell.tokens > 0)
+        .map((cell) => cell.tokens)
+        .sort((left, right) => left - right)
+      const quantile = (ratio) => values[Math.min(values.length - 1, Math.max(0, Math.floor(values.length * ratio)))]
+      const thresholds = values.length > 0 ? [quantile(0.25), quantile(0.5), quantile(0.75)] : []
+      const level = (value) => {
+        if (!(value > 0) || thresholds.length === 0) return 0
+        if (value <= thresholds[0]) return 1
+        if (value <= thresholds[1]) return 2
+        if (value <= thresholds[2]) return 3
+        return 4
+      }
+      for (const cell of cells) cell.level = cell.future ? 0 : level(cell.tokens)
+
+      return { columns: weeks.length, cells, weeks, months, windowTokens, baseline, todayKey }
+    }
+
+    /* ------------------------------------------------------------ 浮层 */
+
+    /**
+     * 悬浮浮层。先以 visibility:hidden 渲染，layout effect 里量出真实尺寸，再相对锚点定位：
+     * 优先放在锚点上方，放不下就翻到下方，左右夹在面板可视区（.dps-root 与视口的交集）以内。
+     * 用 position:fixed，但会量出包含块的实际原点再修正——祖先有 transform / 容器查询时也不会错位。
+     */
+    function Popover(props) {
+      const ref = useRef(null)
+      const anchor = props.anchor
+      useLayoutEffect(() => {
+        const element = ref.current
+        if (!element || !anchor || typeof element.getBoundingClientRect !== 'function') return
+        element.style.left = '0px'
+        element.style.top = '0px'
+        const origin = element.getBoundingClientRect()
+        const viewportWidth = (typeof window !== 'undefined' && window.innerWidth) || origin.right + 1000
+        const viewportHeight = (typeof window !== 'undefined' && window.innerHeight) || origin.bottom + 1000
+        const root = typeof element.closest === 'function' ? element.closest('.dps-root') : null
+        const area = root ? root.getBoundingClientRect() : { left: 0, top: 0, right: viewportWidth, bottom: viewportHeight }
+        const bounds = {
+          left: Math.max(area.left, 0) + 8,
+          top: Math.max(area.top, 0) + 8,
+          right: Math.min(area.right, viewportWidth) - 8,
+          bottom: Math.min(area.bottom, viewportHeight) - 8,
+        }
+        const width = origin.width
+        const height = origin.height
+        const gap = 10
+        const center = anchor.left + anchor.width / 2
+        const left = Math.max(bounds.left, Math.min(center - width / 2, bounds.right - width))
+        let top = anchor.top - gap - height
+        if (top < bounds.top) {
+          const below = anchor.top + anchor.height + gap
+          top = below + height <= bounds.bottom ? below : Math.max(bounds.top, Math.min(top, bounds.bottom - height))
+        }
+        element.style.left = `${Math.round(left - origin.left)}px`
+        element.style.top = `${Math.round(top - origin.top)}px`
+        element.style.visibility = 'visible'
+      })
+      if (!anchor) return null
+      return h(
+        'div',
+        { ref, className: 'dps-pop', role: 'tooltip', style: { left: '0px', top: '0px', visibility: 'hidden' } },
+        props.children,
+      )
+    }
+
+    /** 屏幕阅读器用的实时播报（键盘移动图表焦点时读出浮层内容）。 */
+    function LiveText(props) {
+      return h('span', { className: 'dps-sr', 'aria-live': 'polite', 'aria-atomic': 'true' }, props.text || '')
+    }
+
+    /* -------------------------------------------------------------- 活动图 */
+
+    function weekdayLabel(row) {
+      // 第 0 行是周一；2026-11-02 是周一，借它取本地化的星期名
+      const date = new Date(2026, 10, 2 + row)
+      return formatDate(date, isChineseLocale() ? { weekday: 'narrow' } : { weekday: 'short' })
+    }
+
+    function ActivityCard(props) {
+      const today = props.today
+      const [mode, setMode] = useState('day')
+      const [active, setActive] = useState(null)
+      const plotRef = useRef(null)
+      const data = useMemo(() => buildActivity(props.daily, today), [props.daily, localDateKey(today)])
+      const columns = Math.max(1, data.columns)
+      const width = columns * ACT_PITCH - (ACT_PITCH - ACT_CELL)
+      const height = ACT_HEIGHT
+      const daily = mode === 'day'
+
+      let maxValue = 0
+      for (const week of data.weeks) maxValue = Math.max(maxValue, mode === 'total' ? week.cumulative : week.tokens)
+      const scale = niceScale(maxValue > 0 ? maxValue : 1, 3)
+      const yOf = (value) => height - (scale.max > 0 ? (value / scale.max) * height : 0)
+
+      const cellAt = (col, row) => data.cells[col * 7 + row] || null
+      const clampActive = (col, row) => {
+        const safeCol = Math.max(0, Math.min(columns - 1, col))
+        let safeRow = Math.max(0, Math.min(6, row))
+        // 本周今天之后的格子不可选
+        while (safeRow > 0 && cellAt(safeCol, safeRow) && cellAt(safeCol, safeRow).future) safeRow -= 1
+        return { col: safeCol, row: safeRow }
+      }
+
+      const onMove = (event) => {
+        const element = plotRef.current
+        if (!element || typeof element.getBoundingClientRect !== 'function') return
+        const rect = element.getBoundingClientRect()
+        if (!(rect.width > 0)) return
+        const unit = rect.width / width
+        const col = Math.floor((event.clientX - rect.left) / unit / ACT_PITCH)
+        const row = Math.floor((event.clientY - rect.top) / unit / ACT_PITCH)
+        if (col < 0 || col >= columns) return
+        const next = daily ? clampActive(col, row) : { col, row: 0 }
+        if (daily && (row < 0 || row > 6 || (cellAt(col, row) && cellAt(col, row).future))) {
+          if (active) setActive(null)
+          return
+        }
+        if (!active || active.col !== next.col || active.row !== next.row) setActive(next)
+      }
+
+      const todayCell = data.cells.find((cell) => cell.today)
+      const onKeyDown = (event) => {
+        const current = active || (todayCell ? { col: todayCell.col, row: todayCell.row } : { col: columns - 1, row: 0 })
+        let next = null
+        if (event.key === 'ArrowLeft') next = { col: current.col - 1, row: current.row }
+        else if (event.key === 'ArrowRight') next = { col: current.col + 1, row: current.row }
+        else if (event.key === 'ArrowUp' && daily) next = { col: current.col, row: current.row - 1 }
+        else if (event.key === 'ArrowDown' && daily) next = { col: current.col, row: current.row + 1 }
+        else if (event.key === 'Home') next = { col: 0, row: current.row }
+        else if (event.key === 'End') next = { col: columns - 1, row: current.row }
+        else if (event.key === 'Escape') {
+          setActive(null)
+          return
+        }
+        if (!next) return
+        if (typeof event.preventDefault === 'function') event.preventDefault()
+        setActive(clampActive(next.col, daily ? next.row : 0))
+      }
+      const onFocus = () => {
+        if (!active) setActive(todayCell ? { col: todayCell.col, row: daily ? todayCell.row : 0 } : { col: columns - 1, row: 0 })
+      }
+
+      // —— 图形 ——
+      let layer
+      if (daily) {
+        layer = h(
+          'g',
+          { key: 'day', className: 'dps-act-layer', 'data-layer': 'day' },
+          data.cells
+            .filter((cell) => !cell.future)
+            .map((cell) =>
+              h('rect', {
+                key: cell.key,
+                className: 'dps-act-cell',
+                x: cell.col * ACT_PITCH,
+                y: cell.row * ACT_PITCH,
+                width: ACT_CELL,
+                height: ACT_CELL,
+                rx: 1.8,
+                'data-cell': cell.key,
+                'data-tokens': cell.tokens,
+                'data-level': cell.level,
+                'data-today': cell.today ? 'true' : 'false',
+              }),
+            ),
+        )
+      } else if (mode === 'week') {
+        layer = h(
+          'g',
+          { key: 'week', className: 'dps-act-layer', 'data-layer': 'week' },
+          data.weeks.map((week) => {
+            const top = yOf(week.tokens)
+            const barHeight = week.tokens > 0 ? Math.max(0.8, height - top) : 0
+            return h('rect', {
+              key: week.startKey,
+              className: 'dps-act-bar',
+              x: week.col * ACT_PITCH,
+              y: height - barHeight,
+              width: ACT_CELL,
+              height: barHeight,
+              rx: 1.5,
+              'data-week': week.startKey,
+              'data-tokens': week.tokens,
+              'data-active': active && active.col === week.col ? 'true' : 'false',
+            })
+          }),
+        )
+      } else {
+        const points = data.weeks.map((week) => [week.col * ACT_PITCH + ACT_CELL / 2, yOf(week.cumulative)])
+        const line = points.map((point, index) => `${index === 0 ? 'M' : 'L'}${point[0].toFixed(2)} ${point[1].toFixed(2)}`).join(' ')
+        const area = points.length > 0 ? `${line} L${points[points.length - 1][0].toFixed(2)} ${height} L${points[0][0].toFixed(2)} ${height} Z` : ''
+        const last = data.weeks[data.weeks.length - 1]
+        layer = h(
+          'g',
+          { key: 'total', className: 'dps-act-layer', 'data-layer': 'total' },
+          h('path', { className: 'dps-act-area', d: area }),
+          h('path', {
+            className: 'dps-act-line',
+            d: line,
+            'data-cumulative': 'true',
+            'data-points': data.weeks.length,
+            'data-last': last ? last.cumulative : 0,
+            'data-first': data.weeks.length > 0 ? data.weeks[0].cumulative : 0,
+          }),
+          active && points[active.col]
+            ? h('circle', { className: 'dps-act-dot', cx: points[active.col][0], cy: points[active.col][1], r: 2.4 })
+            : null,
+        )
+      }
+
+      const grid = daily
+        ? null
+        : h(
+            'g',
+            { className: 'dps-act-grid', 'aria-hidden': true },
+            scale.ticks.map((tick) => h('line', { key: tick, x1: 0, x2: width, y1: yOf(tick), y2: yOf(tick) })),
+          )
+
+      let highlight = null
+      if (active) {
+        if (daily) {
+          highlight = h('rect', {
+            className: 'dps-act-focus',
+            x: active.col * ACT_PITCH - 1,
+            y: active.row * ACT_PITCH - 1,
+            width: ACT_CELL + 2,
+            height: ACT_CELL + 2,
+            rx: 2.6,
+          })
+        } else {
+          highlight = h('rect', {
+            className: 'dps-act-band',
+            x: active.col * ACT_PITCH - 1,
+            y: 0,
+            width: ACT_CELL + 2,
+            height,
+            rx: 2,
+          })
+        }
+      }
+
+      // —— 浮层 ——
+      let tip = null
+      let liveText = ''
+      if (active && plotRef.current && typeof plotRef.current.getBoundingClientRect === 'function') {
+        const rect = plotRef.current.getBoundingClientRect()
+        const unit = rect.width / width
+        const week = data.weeks[active.col]
+        let title = ''
+        let value = 0
+        let anchorTop = rect.top
+        if (daily) {
+          const cell = cellAt(active.col, active.row)
+          if (cell) {
+            title = formatDate(parseDateKey(cell.key), { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' })
+            value = cell.tokens
+            anchorTop = rect.top + active.row * ACT_PITCH * unit
+          }
+        } else if (week) {
+          const startDate = parseDateKey(week.startKey)
+          const endDate = parseDateKey(week.endKey)
+          const short = { month: 'short', day: 'numeric' }
+          if (mode === 'week') {
+            title = t('tip.weekRange', { start: formatDate(startDate, short), end: formatDate(endDate, short) })
+            value = week.tokens
+          } else {
+            title = t('tip.through', { date: formatDate(endDate, { year: 'numeric', month: 'short', day: 'numeric' }) })
+            value = week.cumulative
+          }
+          anchorTop = rect.top + yOf(value) * unit
+        }
+        const valueText = value > 0 ? t('tip.tokens', { value: formatTokens(value) }) : t('tip.none')
+        liveText = `${title} ${valueText}`
+        tip = h(
+          Popover,
+          {
+            anchor: {
+              left: rect.left + active.col * ACT_PITCH * unit,
+              top: anchorTop,
+              width: ACT_CELL * unit,
+              height: daily ? ACT_CELL * unit : 1,
+            },
+          },
+          h('div', { className: 'dps-pop-title' }, title),
+          h('div', { className: 'dps-pop-value', 'data-dps-field': 'tip-value' }, valueText),
+        )
+      }
+
+      // —— 左侧标签：每天档是星期，另外两档是纵轴刻度 ——
+      const gutter = daily
+        ? [0, 2, 4].map((row) =>
+            h(
+              'span',
+              { key: `r${row}`, style: { top: `${((row * ACT_PITCH + ACT_CELL / 2) / height) * 100}%` } },
+              weekdayLabel(row),
+            ),
+          )
+        : scale.ticks
+            .filter((tick) => tick > 0)
+            .map((tick) => h('span', { key: `t${tick}`, style: { top: `${(yOf(tick) / height) * 100}%` } }, formatAxis(tick)))
+
+      // 图例行三档都占位（非每天档只是隐藏内容），切换时卡片高度不变
+      const legend = h(
+        'div',
+        { className: 'dps-act-legend', 'aria-hidden': true, 'data-hidden': daily ? 'false' : 'true' },
+        h('span', null, t('legend.less')),
+        [0, 1, 2, 3, 4].map((level) => h('i', { key: level, 'data-level': level })),
+        h('span', null, t('legend.more')),
+      )
+
+      return h(
+        'section',
+        { className: 'dps-panel dps-act', 'data-dps-card': 'activity', 'data-mode': mode },
+        h(
+          'header',
+          { className: 'dps-panel-head' },
+          h(
+            'div',
+            { className: 'dps-panel-title' },
+            h('h2', null, t('section.activity')),
+            h(
+              'span',
+              { className: 'dps-panel-meta', 'data-dps-field': 'window-total', 'data-value': data.windowTokens },
+              `${t('note.range')} · ${formatTokens(data.windowTokens)}`,
+            ),
+          ),
+          h(Segmented, {
+            control: 'activity-mode',
+            label: t('section.activity'),
+            value: mode,
+            onChange: (next) => {
+              setMode(next)
+              setActive(null)
+            },
+            options: [
+              { id: 'day', label: t('mode.day') },
+              { id: 'week', label: t('mode.week') },
+              { id: 'total', label: t('mode.total') },
+            ],
+          }),
+        ),
+        h(
+          'div',
+          { className: 'dps-act-body' },
+          h('div', { className: 'dps-act-gutter', 'data-kind': daily ? 'weekday' : 'axis', 'aria-hidden': true }, gutter),
+          h(
+              'div',
+              {
+                ref: plotRef,
+                className: 'dps-act-plot',
+                tabIndex: 0,
+                role: 'group',
+                'aria-label': t('aria.activity'),
+                onMouseMove: onMove,
+                onMouseLeave: () => setActive(null),
+                onKeyDown,
+                onFocus,
+                onBlur: () => setActive(null),
+              },
+              h(
+                'svg',
+                {
+                  className: 'dps-act-svg',
+                  viewBox: `0 0 ${width} ${height}`,
+                  'data-dps-chart': 'activity',
+                  'aria-hidden': true,
+                  focusable: 'false',
+                },
+                grid,
+                highlight && !daily ? highlight : null,
+                layer,
+                highlight && daily ? highlight : null,
+              ),
+            ),
+          h('span', { className: 'dps-act-corner', 'aria-hidden': true }),
+          h(
+            'div',
+            { className: 'dps-act-months', 'aria-hidden': true },
+            data.months.map((month) =>
+              h(
+                'span',
+                {
+                  key: month.key,
+                  // 最右侧两列放不下整段标签：改为右对齐，避免溢出卡片
+                  style: month.col > columns - 3 ? { right: 0 } : { left: `${((month.col * ACT_PITCH) / width) * 100}%` },
+                },
+                month.label,
+              ),
+            ),
+          ),
+        ),
+        legend,
+        h(LiveText, { text: liveText }),
+        tip,
+      )
+    }
+
     /* ------------------------------------------------------------------- 样式 */
 
     const CSS = `
@@ -1527,17 +1756,44 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 }
 @media (prefers-reduced-motion:reduce){.dps-root *,.dps-root *::before,.dps-root *::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}}
 
+.dps-panel{min-width:0;display:flex;flex-direction:column;gap:16px;padding:18px 20px 20px;border:1px solid var(--dps-line);border-radius:var(--dps-radius);background:var(--dps-card)}
+.dps-panel-head{display:flex;align-items:center;justify-content:space-between;gap:10px 14px;flex-wrap:wrap;min-height:30px}
+.dps-panel-title{display:flex;align-items:baseline;gap:10px;min-width:0;flex-wrap:wrap}
+.dps-panel-title h2{margin:0;font-size:14px;font-weight:650;line-height:1.3;color:var(--dps-ink)}
+.dps-panel-meta{font-size:12.5px;color:var(--dps-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.dps-act-body{display:grid;grid-template-columns:40px minmax(0,1fr);grid-template-rows:auto auto;column-gap:8px;row-gap:6px}
+.dps-act-gutter{position:relative;font-size:11px;color:var(--dps-faint);font-variant-numeric:tabular-nums}
+.dps-act-gutter span{position:absolute;right:0;transform:translateY(-50%);line-height:1;white-space:nowrap}
+.dps-act-plot{position:relative;min-width:0;border-radius:4px;cursor:default}
+.dps-act-plot:focus-visible{outline-offset:6px}
+.dps-act-svg{display:block;width:100%;height:auto;overflow:visible}
+.dps-act-cell{fill:var(--dps-track)}
+.dps-act-cell[data-level="1"],.dps-act-legend i[data-level="1"]{fill:color-mix(in srgb,var(--dps-accent) 28%,transparent);background:color-mix(in srgb,var(--dps-accent) 28%,transparent)}
+.dps-act-cell[data-level="2"],.dps-act-legend i[data-level="2"]{fill:color-mix(in srgb,var(--dps-accent) 50%,transparent);background:color-mix(in srgb,var(--dps-accent) 50%,transparent)}
+.dps-act-cell[data-level="3"],.dps-act-legend i[data-level="3"]{fill:color-mix(in srgb,var(--dps-accent) 74%,transparent);background:color-mix(in srgb,var(--dps-accent) 74%,transparent)}
+.dps-act-cell[data-level="4"],.dps-act-legend i[data-level="4"]{fill:var(--dps-accent);background:var(--dps-accent)}
+.dps-act-cell[data-today="true"]{stroke:var(--dps-ink);stroke-width:1.25;vector-effect:non-scaling-stroke}
+.dps-act-focus{fill:none;stroke:var(--dps-ink);stroke-width:1.6;vector-effect:non-scaling-stroke;pointer-events:none}
+.dps-act-band{fill:var(--dps-hover)}
+.dps-act-bar{fill:color-mix(in srgb,var(--dps-accent) 72%,transparent);transition:fill .12s ease}
+.dps-act-bar[data-active="true"]{fill:var(--dps-accent)}
+.dps-act-grid line{stroke:var(--dps-line);stroke-width:1;stroke-dasharray:2 3;vector-effect:non-scaling-stroke}
+.dps-act-area{fill:color-mix(in srgb,var(--dps-accent) 15%,transparent)}
+.dps-act-line{fill:none;stroke:var(--dps-accent);stroke-width:2;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.dps-act-dot{fill:var(--dps-card);stroke:var(--dps-accent);stroke-width:2;vector-effect:non-scaling-stroke}
+.dps-act-months{position:relative;height:14px;font-size:11px;line-height:14px;color:var(--dps-faint)}
+.dps-act-months span{position:absolute;top:0;white-space:nowrap}
+.dps-act-legend{display:flex;align-items:center;justify-content:flex-end;gap:3px;margin-top:-6px;font-size:11px;color:var(--dps-faint)}
+.dps-act-legend[data-hidden="true"]{visibility:hidden}
+.dps-act-legend span{margin:0 5px}
+.dps-act-legend i{display:block;width:10px;height:10px;border-radius:2.5px;background:var(--dps-track)}
+.dps-pop{position:fixed;z-index:60;pointer-events:none;min-width:128px;max-width:320px;padding:8px 11px 9px;border-radius:10px;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dps-line);box-shadow:0 10px 30px var(--dps-shadow);color:var(--dps-ink);font-size:12px;line-height:1.5}
+.dps-pop-title{font-size:11.5px;color:var(--dps-muted);white-space:nowrap}
+.dps-pop-value{font-size:13px;font-weight:650;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dps-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 /* —— 过渡期：以下是尚未重做的卡片沿用的旧样式，随各卡片重做逐步删除 —— */
-.dps-section{display:flex;flex-direction:column;gap:14px}
-.dps-section-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .dps-section-title{font-size:14px;font-weight:600}
-.dps-section-note{font-size:12px;color:var(--dsw-alias-label-secondary)}
 .dps-card{padding:14px;border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-layer-1)}
-.dps-heat{display:flex;flex-direction:column;gap:10px;overflow:visible}
-.dps-heat-grid{display:grid;grid-auto-flow:column;grid-template-rows:repeat(7,auto);grid-auto-columns:minmax(0,1fr);gap:2px;width:100%}
-.dps-cell{width:100%;aspect-ratio:1;height:auto;border-radius:2.5px;background:var(--dsw-alias-bg-layer-2);box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l1)}
-.dps-cell[data-future="true"]{opacity:.35}
-.dps-months{position:relative;height:14px;font-size:10px;color:var(--dsw-alias-label-secondary)}
 .dps-tip{position:fixed;z-index:9999;pointer-events:none;transform:translate(-50%,-100%);background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:6px 10px;box-shadow:0 10px 28px var(--dps-shadow);white-space:nowrap;text-align:left}
 .dps-tip-date{font-size:10px;line-height:1.5;color:var(--dsw-alias-label-secondary)}
 .dps-tip-value{font-size:12px;line-height:1.5;font-weight:600;font-variant-numeric:tabular-nums}
@@ -1578,9 +1834,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-switch{display:inline-flex;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;overflow:hidden}
 .dps-switch button{appearance:none;border:none;background:transparent;color:var(--dsw-alias-label-secondary);font-size:11px;padding:4px 10px;cursor:pointer;font-family:inherit}
 .dps-switch button[data-active="true"]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
-.dps-month{position:absolute;top:0;white-space:nowrap}
 .dps-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:1px}
-.dps-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .dps-lens{display:flex;flex-direction:column;gap:12px}
 .dps-lens-metrics{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding-top:2px}
 .dps-lens-big{font-size:26px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1}
@@ -1609,7 +1863,6 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-prov-top{display:flex;align-items:baseline;gap:10px;font-size:13px}
 .dps-prov-top .dps-prov-value{margin-left:auto;font-weight:600}
 .dps-card{padding:18px 20px;border:1px solid var(--dps-line);border-radius:var(--dps-radius);background:var(--dps-card)}
-.dps-section{display:flex;flex-direction:column;gap:12px}
 .dps-section-title{font-size:14px;font-weight:600}
 .dps-chart-plot{height:260px}
 `
@@ -1899,7 +2152,6 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
       const mounted = useMounted()
       const [refreshing, setRefreshing] = useState(false)
       const [updating, setUpdating] = useState(false)
-      const [activityMode, setActivityMode] = useState('day')
 
       const runRefresh = useCallback(async () => {
         setRefreshing(true)
@@ -1928,7 +2180,6 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
       const todayKey = localDateKey(today)
       const kpis = useMemo(() => deriveKpis(snapshot, today), [snapshot, todayKey])
       const todayEntry = daily.find((entry) => entry && entry.date === todayKey) || null
-      const heat = useMemo(() => buildHeatmap(daily), [daily, todayKey])
 
       useEffect(() => {
         if (!updating || !updateInfo) return
@@ -1968,37 +2219,6 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
         if (mounted.current) setUpdating(false)
       }
 
-      const activity = h(
-        'div',
-        { className: 'dps-section' },
-        h(
-          'div',
-          { className: 'dps-section-head' },
-          h('span', { className: 'dps-section-title' }, t('section.activity')),
-          h(
-            'div',
-            { className: 'dps-switch' },
-            [
-              ['day', t('mode.day')],
-              ['week', t('mode.week')],
-              ['total', t('mode.total')],
-            ].map(([id, label]) =>
-              h(
-                'button',
-                {
-                  key: id,
-                  type: 'button',
-                  'data-active': activityMode === id ? 'true' : 'false',
-                  onClick: () => setActivityMode(id),
-                },
-                label,
-              ),
-            ),
-          ),
-        ),
-        h(Heatmap, { heat, mode: activityMode, key: `heat-${activityMode}` }),
-      )
-
       return h(
         'div',
         { className: 'dps-root' },
@@ -2016,7 +2236,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
           }),
           h(StatusBar, { snapshot, error, hasData, onRetry: reload }),
           h(KpiStrip, { kpis, ready }),
-          activity,
+          h(ActivityCard, { daily, today }),
           h(
             'div',
             { className: 'dps-grid' },
