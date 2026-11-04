@@ -1,0 +1,162 @@
+/*
+ * 预览外壳样式。只负责两件事：
+ *   1. 复刻宿主的主题 token（取值抄自 @deepseek-ai/dsh-client-ui-theme 0.1.5-rc.1，MIT），
+ *      作用域也与宿主一致：浅色写在 body 上，深色写在 body[data-ds-dark-theme] 上；
+ *   2. 预览工具栏与模拟窗口的外观（不属于插件，可以写死颜色）。
+ * 插件页面自己的样式全部来自 client.js 注入的那一份 CSS，这里不覆盖任何 .dps-* 规则。
+ *
+ * 注意：宿主主题里没有 --dsw-alias-state-idle-primary，这里也刻意不定义，以免预览比真机好看。
+ */
+
+body {
+  --dsw-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --dsw-alias-bg-base: #fff;
+  --dsw-alias-bg-layer-1: #fff;
+  --dsw-alias-bg-layer-2: #fff;
+  --dsw-alias-bg-layer-3: #fff;
+  --dsw-alias-bg-overlay: #e9ecf2;
+  --dsw-alias-bg-mask-1: #0000003d;
+  --dsw-alias-bg-mask-2: #0000001f;
+  --dsw-alias-border-l1: #0000000a;
+  --dsw-alias-border-l2: #0000001a;
+  --dsw-alias-border-l3: #0000001f;
+  --dsw-alias-label-primary: #0f1115;
+  --dsw-alias-label-secondary: #61666b;
+  --dsw-alias-label-tertiary: #81858c;
+  --dsw-alias-brand-primary: #0f1115;
+  --dsw-alias-state-success-primary: #22c55e;
+  --dsw-alias-state-warn-primary: #f59e0b;
+  --dsw-alias-state-error-primary: #ec1313;
+  --dsw-alias-state-business-primary: #4176e6;
+  --dsw-alias-link: #4176e6;
+  --pv-stage: #e9ebee;
+}
+
+body[data-ds-dark-theme] {
+  --dsw-alias-bg-base: #151517;
+  --dsw-alias-bg-layer-1: #232324;
+  --dsw-alias-bg-layer-2: #2c2c2e;
+  --dsw-alias-bg-layer-3: #353638;
+  --dsw-alias-bg-overlay: #61666b;
+  --dsw-alias-bg-mask-1: #00000080;
+  --dsw-alias-bg-mask-2: #0003;
+  --dsw-alias-border-l1: #ffffff0f;
+  --dsw-alias-border-l2: #ffffff1f;
+  --dsw-alias-border-l3: #ffffff29;
+  --dsw-alias-label-primary: #f9fafb;
+  --dsw-alias-label-secondary: #cfd3d6;
+  --dsw-alias-label-tertiary: #adb2b8;
+  --dsw-alias-brand-primary: #f9fafb;
+  --dsw-alias-state-success-primary: #22c55e;
+  --dsw-alias-state-warn-primary: #f59e0b;
+  --dsw-alias-state-error-primary: #f25a5a;
+  --dsw-alias-state-business-primary: #679efe;
+  --dsw-alias-link: #679efe;
+  --pv-stage: #09090a;
+}
+
+html, body { margin: 0; height: 100%; }
+body {
+  font-family: var(--dsw-font-family);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-primary);
+  background: var(--pv-stage);
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ------------------------------------------------------------ 工具栏（预览自身） */
+.pv-bar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  padding: 10px 16px;
+  background: #1d1f23;
+  color: #e8eaed;
+  font-size: 12px;
+  border-bottom: 1px solid #000;
+  position: relative;
+  z-index: 2;
+}
+.pv-group { display: inline-flex; align-items: center; gap: 2px; }
+.pv-label { color: #8b9098; margin-right: 6px; }
+.pv-bar button {
+  appearance: none;
+  border: 1px solid #3a3d43;
+  background: #2a2c31;
+  color: #d5d8dd;
+  font: inherit;
+  padding: 3px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.pv-bar button:hover { background: #33363c; }
+.pv-bar button[aria-pressed="true"] { background: #e8eaed; color: #111; border-color: #e8eaed; }
+.pv-bar button:focus-visible { outline: 2px solid #8ab4ff; outline-offset: 1px; }
+.pv-meta { margin-left: auto; display: inline-flex; align-items: center; gap: 10px; color: #8b9098; font-variant-numeric: tabular-nums; }
+
+/* ---------------------------------------------------------- 模拟的 DSH 窗口 */
+.pv-stage {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px;
+  box-sizing: border-box;
+}
+.pv-window {
+  margin: 0 auto;
+  height: calc(100vh - 92px);
+  min-height: 560px;
+  display: flex;
+  background: var(--dsw-alias-bg-base);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px var(--dsw-alias-border-l2), 0 18px 50px #00000033;
+}
+.pv-sidebar {
+  flex: 0 0 56px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 0;
+  border-right: 1px solid var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-bg-layer-1);
+  box-sizing: border-box;
+}
+.pv-sidebar-dot {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--dsw-alias-border-l2);
+}
+.pv-sidebar-item {
+  appearance: none;
+  border: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-border-l2);
+  cursor: default;
+}
+.pv-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  position: relative;
+}
+.pv-missing {
+  max-width: 560px;
+  margin: 40px auto;
+  padding: 16px;
+  border-radius: 8px;
+  background: #fff3cd;
+  color: #5c4500;
+}

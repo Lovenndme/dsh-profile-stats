@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dsh-profile-stats 预览</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="preview.css">
+</head>
+<body>
+<header class="pv-bar" role="toolbar" aria-label="预览控制">
+  <div class="pv-group" data-pv-group="theme">
+    <span class="pv-label">主题</span>
+    <button type="button" data-value="light">浅色</button>
+    <button type="button" data-value="dark">深色</button>
+  </div>
+  <div class="pv-group" data-pv-group="width">
+    <span class="pv-label">窗口宽</span>
+    <button type="button" data-value="1280">1280</button>
+    <button type="button" data-value="900">900</button>
+    <button type="button" data-value="760">760</button>
+  </div>
+  <div class="pv-group" data-pv-group="view">
+    <span class="pv-label">视图</span>
+    <button type="button" data-value="default">默认</button>
+    <button type="button" data-value="model-month">模型按月</button>
+    <button type="button" data-value="lens-zoom">Cache Lens 放大</button>
+    <button type="button" data-value="empty">空数据</button>
+    <button type="button" data-value="scanning">扫描中</button>
+    <button type="button" data-value="error">接口失败</button>
+  </div>
+  <div class="pv-group" data-pv-group="lang">
+    <span class="pv-label">语言</span>
+    <button type="button" data-value="zh-CN">中文</button>
+    <button type="button" data-value="en">English</button>
+  </div>
+  <div class="pv-group" data-pv-group="update">
+    <span class="pv-label">新版本</span>
+    <button type="button" data-value="off">无</button>
+    <button type="button" data-value="on">有</button>
+  </div>
+  <div class="pv-meta">
+    <span id="pv-log" title="插件发出的请求（全部被预览拦截，不会离开本页）"></span>
+    <button type="button" id="pv-remount">重新挂载</button>
+  </div>
+</header>
+
+<main class="pv-stage">
+  <div class="pv-window" id="pv-window">
+    <nav class="pv-sidebar" aria-label="DSH 图标栏（模拟）">
+      <span class="pv-sidebar-dot"></span>
+      <span class="pv-sidebar-dot"></span>
+      <button type="button" class="pv-sidebar-item" id="pv-sidebar-entry" data-active="true"></button>
+      <span class="pv-sidebar-dot"></span>
+    </nav>
+    <section class="pv-main" id="pv-main"></section>
+  </div>
+  <p class="pv-missing" id="pv-missing" hidden>没有加载到 ../client.js：请从仓库里的 preview/ 目录打开本页，或运行 <code>node tools/preview.mjs</code>。</p>
+</main>
+
+<!-- 与宿主同一大版本的 React 18（官方 UMD 构建，MIT），宿主运行时以 require('react') 提供。 -->
+<script src="vendor/react.production.min.js"></script>
+<script src="vendor/react-dom.production.min.js"></script>
+<!-- 假宿主：模块加载器 / slots / locale / fetch 都在这里，必须先于插件加载。 -->
+<script src="preview.js"></script>
+<!-- 插件浏览器半区本体：就是要发布的那一份文件，不是副本。 -->
+<script src="../client.js"></script>
+</body>
+</html>
