@@ -1138,11 +1138,17 @@ window.__ModuleLoader__.load({
      * 型号家族：用户只关心版本 + 档位，不关心供应商写法。
      * deepseek-v4-flash / deepseek-v4-flash-vision → v4 flash；deepseek-v4-1-flash / -economy → v4.1 flash；
      * 无版本别名按 MODEL_ALIASES 归并；其余保留各自的归一化 id。
+     *
+     * 只有 DeepSeek 自家型号才按 flash / pro 归族，而且 flash / pro 必须是独立的一段：
+     * 旧实现对任何含 "pro" / "flash" 子串的 id 都套 DeepSeek 家族，gemini-2-5-pro 被叫成
+     * 「DeepSeek V4.1 Pro」、glm-4-flash 被并进「DeepSeek V4.1 Flash」、deepseek-prover-v2 成了「V2 Pro」。
      */
     function modelFamily(id) {
       const text = String(id || '').toLowerCase()
-      const tier = text.includes('pro') ? 'pro' : text.includes('flash') ? 'flash' : ''
-      if (!tier) return MODEL_ALIASES[text] || text
+      if (MODEL_ALIASES[text]) return MODEL_ALIASES[text]
+      if (!/^deepseek(-|$)/.test(text)) return text
+      const tier = /(^|-)pro(-|$)/.test(text) ? 'pro' : /(^|-)flash(-|$)/.test(text) ? 'flash' : ''
+      if (!tier) return text
       // 版本号是家族的一部分：v4-flash 与 v4-1-flash 是两个家族
       const match = text.match(/-v(\d+)(?:-(\d+))?/)
       const version = match ? (match[2] ? `v${match[1]}-${match[2]}` : `v${match[1]}`) : ''
@@ -1172,6 +1178,12 @@ window.__ModuleLoader__.load({
         }
         if (/^v\d+$/.test(piece) && index + 1 < parts.length && /^\d+$/.test(parts[index + 1])) {
           out.push(`${piece.toUpperCase()}.${parts[index + 1]}`)
+          index += 1
+          continue
+        }
+        // 宿主把版本号里的点归一成了短横线：claude-3-5-sonnet → 「Claude 3.5 Sonnet」，gemini-2-5-pro → 「Gemini 2.5 Pro」
+        if (/^\d+$/.test(piece) && index + 1 < parts.length && /^\d+$/.test(parts[index + 1])) {
+          out.push(`${piece}.${parts[index + 1]}`)
           index += 1
           continue
         }
