@@ -12,9 +12,10 @@
  * 一切都可以从日志重建，磁盘缓存只是把「已经折过的会话」记下来，避免每次打开
  * 页面都重读几十 MB 日志；缓存丢了只是慢一次，不会出现和日志不一致的数字。
  *
- * 浏览器半区通过两个只读 GET 路由取数：
- *   GET  /api/dsh-profile-stats/snapshot  当前快照（扫描中也会返回进度）
- *   POST /api/dsh-profile-stats/refresh   强制后台重扫（页面打开/点刷新时用）
+ * 浏览器半区只走这三个同源路由：
+ *   GET  /api/dsh-profile-stats/snapshot  当前快照（扫描中也会返回进度），唯一的数据来源
+ *   POST /api/dsh-profile-stats/refresh   请求后台重扫（页面打开/点刷新时用）
+ *   POST /api/dsh-profile-stats/update    一键升级（仅 registry 安装且有新版本时）
  */
 
 import fs from 'node:fs'
