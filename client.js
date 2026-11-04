@@ -278,7 +278,8 @@ window.__ModuleLoader__.load({
     function formatTokens(value) {
       const number = toNumber(value)
       if (number <= 0) return '0'
-      if (number >= 1e8) return `${(number / 1e8).toFixed(1)} 亿`
+      // 单位按「取一位小数之后」的值来选：99,999,999 旧实现会显示成「10000.0 万」。
+      if (number >= 1e8 || Number((number / 1e4).toFixed(1)) >= 1e4) return `${(number / 1e8).toFixed(1)} 亿`
       if (number >= 1e4) return `${(number / 1e4).toFixed(1)} 万`
       return number.toLocaleString(currentLocaleId())
     }
@@ -297,7 +298,8 @@ window.__ModuleLoader__.load({
       const magnitude = Math.pow(10, Math.floor(Math.log10(rough)))
       const normalized = rough / magnitude
       const multiplier = normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 2.5 ? 2.5 : normalized <= 5 ? 5 : 10
-      return multiplier * magnitude
+      // token 是整数：刻度不能出现 0.25 这种小数档
+      return Math.max(1, multiplier * magnitude)
     }
 
     function formatDuration(ms) {
