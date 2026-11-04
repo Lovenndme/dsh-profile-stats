@@ -1326,17 +1326,26 @@ window.__ModuleLoader__.load({
       const labelOf = (key) => key.slice(5).replace('-', '/')
 
       const showTip = (bucket) => (event) => {
-        const target = event && event.currentTarget
-        if (!target || typeof target.getBoundingClientRect !== 'function') return
-        const rect = target.getBoundingClientRect()
-        const halfWidth = 130
-        const centerX = rect.left + rect.width / 2
+        // 悬浮层跟随鼠标：优先用 clientX/clientY，容器边框做兜底。
+        const clientX = typeof event.clientX === 'number' ? event.clientX : null
+        const clientY = typeof event.clientY === 'number' ? event.clientY : null
         const viewportWidth = typeof window !== 'undefined' && window.innerWidth ? window.innerWidth : 1200
-        setTip({
-          bucket,
-          x: Math.min(Math.max(centerX, halfWidth), Math.max(halfWidth, viewportWidth - halfWidth)),
-          y: rect.top - 8,
-        })
+        const viewportHeight = typeof window !== 'undefined' && window.innerHeight ? window.innerHeight : 800
+        let x
+        let y
+        if (clientX !== null && clientY !== null) {
+          const tipWidth = 240
+          x = clientX + 14
+          if (x + tipWidth > viewportWidth - 8) x = clientX - tipWidth - 8
+          y = clientY + 16
+          if (y + 120 > viewportHeight - 8) y = clientY - 120
+        } else {
+          const target = event && event.currentTarget
+          const rect = target && typeof target.getBoundingClientRect === 'function' ? target.getBoundingClientRect() : null
+          x = rect ? rect.left + rect.width / 2 : viewportWidth / 2
+          y = rect ? rect.top - 8 : 60
+        }
+        setTip({ bucket, x, y, follow: clientX !== null })
       }
 
       const toggle = buildRangeToggle(range, setRange)
@@ -1389,6 +1398,7 @@ window.__ModuleLoader__.load({
                   className: 'dps-chart-bucket',
                   key: bucket.key,
                   onMouseEnter: showTip(bucket),
+                  onMouseMove: showTip(bucket),
                   onMouseLeave: () => setTip(null),
                 },
                 h(
@@ -1425,7 +1435,14 @@ window.__ModuleLoader__.load({
       const tooltip = tip
         ? h(
             'div',
-            { className: 'dps-tip', style: { left: `${tip.x}px`, top: `${tip.y}px`, transform: 'translate(-50%, -100%)' } },
+            {
+              className: 'dps-tip',
+              style: {
+                left: `${tip.x}px`,
+                top: `${tip.y}px`,
+                transform: tip.follow ? 'translate(0, 0)' : 'translate(-50%, -100%)',
+              },
+            },
             h('div', { className: 'dps-tip-date' }, range === 'recent' ? tip.bucket.key : `${tip.bucket.key} 起的一周`),
             series.map((item) => {
               const value = valueOf(tip.bucket, item.key)
