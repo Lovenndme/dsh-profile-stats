@@ -18,7 +18,7 @@
  *   POST /api/dsh-profile-stats/update    一键升级（仅 registry 安装且有新版本时）
  */
 
-import fs from 'node:fs'
+import fs, { appendFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -687,10 +687,12 @@ export function apply(ctx) {
         }
         pending.sort((left, right) => Number(right.live) - Number(left.live))
 
+        /** 埋点：readSession（宿主内部解压+解析）与本插件 fold 分开计时，写 timing.log。 */
+        const stats = { read: 0, readMs: 0, foldMs: 0, events: 0 }
         state.progress = { done: 0, total: pending.length }
         // 并行读几个会话（zstd 解压 + JSON 解析有 I/O 成分，串行会让冷启动白等），
         // 同时每 4 个会话才重建一次聚合，避免 O(n²) 的重复合并。
-        const CONCURRENCY = Math.min(4, Math.max(1, pending.length))
+        const CONCURRENCY = Math.min(8, Math.max(1, pending.length))
         let cursor = 0
         let done = 0
         const worker = async () => {
@@ -700,8 +702,14 @@ export function apply(ctx) {
             if (index >= pending.length) return
             const target = pending[index]
             try {
+              const _t0 = Date.now()
               const snapshot = await ctx.sessionQuery.readSession(target.id)
+              const _t1 = Date.now()
               state.cache.sessions[target.id] = foldSnapshot(snapshot)
+              stats.read += 1
+              stats.readMs += _t1 - _t0
+              stats.foldMs += Date.now() - _t1
+              stats.events += Array.isArray(snapshot && snapshot.events) ? snapshot.events.length : 0
               delete state.errors[target.id]
             } catch (error) {
               state.errors[target.id] = error && error.message ? String(error.message) : String(error)
@@ -725,6 +733,16 @@ export function apply(ctx) {
         }
         await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()))
 
+          // 把「到底慢在哪」记成一行：readSession 是宿主服务内部的解压+解析，fold 是本插件自己。
+          if (stats.read > 0) {
+            const line = `[${new Date().toISOString()}] reason=${reason} sessions=${stats.read} events=${stats.events} readSession=${stats.readMs}ms fold=${stats.foldMs}ms total=${Date.now() - startedAt}ms concurrency=${CONCURRENCY}
+`
+            try {
+              appendFileSync(path.join(dshHome(), 'dsh-profile-stats', 'timing.log'), line)
+            } catch {
+              /* 日志写不进去不影响扫描 */
+            }
+          }
         state.generatedAt = Date.now()
         state.cache.generatedAt = state.generatedAt
         state.cache.complete = true
