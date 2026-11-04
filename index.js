@@ -14,7 +14,7 @@
  *
  * 浏览器半区只走这三个同源路由：
  *   GET  /api/dsh-profile-stats/snapshot  当前快照（扫描中也会返回进度），唯一的数据来源
- *   POST /api/dsh-profile-stats/refresh   请求后台重扫（页面打开/点刷新时用）
+ *   POST /api/dsh-profile-stats/refresh   请求立即重扫（点刷新按钮时用；平时由后台定时保鲜）
  *   POST /api/dsh-profile-stats/update    一键升级（仅 registry 安装且有新版本时）
  */
 
@@ -41,8 +41,13 @@ const UPDATE_CHECK_TTL_MS = 6 * 60 * 60 * 1000
  */
 const CACHE_VERSION = 12
 const DAY_MS = 86400000
-/** 打开页面时如果快照比这个更旧，就顺手在后台重扫。 */
-const STALE_AFTER_MS = 5 * 60 * 1000
+/**
+ * 数据保鲜不依赖用户打开页面：宿主运行期间每分钟看一眼，快照超过 5 分钟就在后台静默补扫；
+ * 页面读快照时更在意新鲜度，超过 60 秒也顺手静默补扫一次（先回旧快照，补扫完页面自己刷新数字）。
+ */
+const BACKGROUND_CHECK_MS = 60 * 1000
+const BACKGROUND_STALE_MS = 5 * 60 * 1000
+const VIEW_STALE_MS = 60 * 1000
 
 /* ------------------------------------------------------------------ 基础工具 */
 
@@ -552,7 +557,7 @@ function aggregate(sessions, now, knownIds) {
 /* ---------------------------------------------------------------- 缓存读写 */
 
 function readCache() {
-  const empty = { version: CACHE_VERSION, generatedAt: 0, sessions: {} }
+  const empty = { version: CACHE_VERSION, generatedAt: 0, sessions: {}, complete: false }
   try {
     const parsed = JSON.parse(fs.readFileSync(cacheFile(), 'utf8'))
     if (!parsed || parsed.version !== CACHE_VERSION || typeof parsed.sessions !== 'object') return empty
@@ -560,6 +565,8 @@ function readCache() {
       version: CACHE_VERSION,
       generatedAt: toNumber(parsed.generatedAt),
       sessions: parsed.sessions,
+      // 只有首次全量扫描中途落盘时才显式写 false；没有这个字段的旧缓存视为完整
+      complete: parsed.complete !== false,
     }
   } catch {
     return empty
@@ -635,6 +642,8 @@ export function apply(ctx) {
     errors: {},
     inflight: null,
     lastKick: 0,
+    /** 本轮是不是「首次全量扫描」（缓存为空、或上次首扫被打断）。只有这种扫描页面才显示进度。 */
+    firstScan: false,
     /** 语料里现存的所有会话 id，用来判断继承前缀的「原件」还在不在。 */
     knownIds: new Set(Object.keys(cache.sessions)),
   }
@@ -650,6 +659,7 @@ export function apply(ctx) {
     if (state.inflight) return state.inflight
     state.inflight = (async () => {
       const startedAt = Date.now()
+      state.firstScan = Object.keys(state.cache.sessions).length === 0 || state.cache.complete === false
       state.scanning = true
       try {
         const records = await ctx.sessionQuery.listSessions()
@@ -707,6 +717,7 @@ export function apply(ctx) {
             // 下次启动只需补扫剩下的部分，不必从头再来。
             if (done % 16 === 0) {
               state.cache.generatedAt = Date.now()
+              if (state.firstScan) state.cache.complete = false
               writeCache(state.cache)
             }
             await yieldToLoop()
@@ -716,6 +727,7 @@ export function apply(ctx) {
 
         state.generatedAt = Date.now()
         state.cache.generatedAt = state.generatedAt
+        state.cache.complete = true
         writeCache(state.cache)
         rebuild()
         console.info(
@@ -726,6 +738,7 @@ export function apply(ctx) {
         console.warn('[dsh-profile-stats] 扫描失败：', error && error.message ? error.message : error)
       } finally {
         state.scanning = false
+        state.firstScan = false
         state.progress = { done: 0, total: 0 }
         state.inflight = null
       }
@@ -733,15 +746,24 @@ export function apply(ctx) {
     return state.inflight
   }
 
-  const kick = (forced) => {
-    const stale = Date.now() - state.generatedAt > STALE_AFTER_MS
-    const cold = Object.keys(state.cache.sessions).length === 0
-    // 页面每次挂载都会 POST 一次强制刷新；刚扫过就别重复烧磁盘。
-    if (forced && Date.now() - state.generatedAt < 15000) return
-    if (!forced && !stale && !cold) return
-    if (!forced && Date.now() - state.lastKick < 5000) return
+  /**
+   * 何时补扫：
+   *   'forced'     点刷新按钮——15 秒内刚扫过就不重复烧磁盘
+   *   'view'       页面读快照——快照超过 60 秒就静默补扫
+   *   'background' 宿主启动与每分钟的保鲜检查——快照超过 5 分钟（或从没扫过）就静默补扫
+   */
+  const kick = (reason) => {
+    const age = Date.now() - state.generatedAt
+    if (reason === 'forced') {
+      if (age < 15000) return
+    } else {
+      const cold = Object.keys(state.cache.sessions).length === 0
+      const staleAfter = reason === 'view' ? VIEW_STALE_MS : BACKGROUND_STALE_MS
+      if (!cold && age <= staleAfter) return
+      if (Date.now() - state.lastKick < 5000) return
+    }
     state.lastKick = Date.now()
-    scan(forced ? 'forced' : 'stale').catch(() => {})
+    scan(reason).catch(() => {})
   }
 
   const identity = () => {
@@ -907,6 +929,8 @@ export function apply(ctx) {
       ok: true,
       generatedAt: state.generatedAt,
       scanning: state.scanning,
+      /** 正在进行的是首次全量扫描（数字还不完整）；后台保鲜补扫为 false，页面不必提示。 */
+      firstScan: state.scanning && state.firstScan,
       progress: state.progress,
       identity: identity(),
       update: updateInfo(),
@@ -935,7 +959,7 @@ export function apply(ctx) {
           return
         }
         // 先回当前快照（可能略旧），再在后台补扫，页面永远不用等一次全量扫描。
-        kick(false)
+        kick('view')
         sendJson(res, 200, snapshotBody())
       },
     }),
@@ -950,7 +974,7 @@ export function apply(ctx) {
           sendJson(res, 405, { ok: false, error: 'method-not-allowed' })
           return
         }
-        kick(true)
+        kick('forced')
         sendJson(res, 200, { ok: true, accepted: true, scanning: state.scanning })
       },
     }),
@@ -970,14 +994,16 @@ export function apply(ctx) {
     }),
   )
 
-  // 冷启动就把扫描排上，第一次打开页面时通常已经能直接给数。
+  // 冷启动就把扫描排上，之后每分钟做一次保鲜检查：用户打开页面时数据已经是新的，不用等扫描。
   ctx.effect(() => {
-    const timer = setTimeout(() => kick(false), 1500)
+    const timer = setTimeout(() => kick('background'), 1500)
+    const ticker = setInterval(() => kick('background'), BACKGROUND_CHECK_MS)
     const updateTimer = setTimeout(() => {
       refreshUpdateInfo(false).catch(() => {})
     }, 4000)
     return () => {
       clearTimeout(timer)
+      clearInterval(ticker)
       clearTimeout(updateTimer)
     }
   })
