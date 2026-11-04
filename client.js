@@ -408,8 +408,14 @@ window.__ModuleLoader__.load({
         }
       }
       const today = startOfDay(new Date())
-      const start = addDays(today, -(HEAT_WEEKS * 7 - 1))
-      start.setDate(start.getDate() - start.getDay())
+      // 一周从周一开始，与模型分布「按周」同一口径（旧实现这里按周日起算，同一周两处合计对不上）。
+      const start = startOfWeek(addDays(today, -(HEAT_WEEKS * 7 - 1)))
+      const startKey = localDateKey(start)
+      // 「累计总量」是截至每周的全部用量：窗口之前的天也要算进起点，而不是从窗口第一天的 0 开始。
+      let baseline = 0
+      for (const [key, day] of totals) {
+        if (/^\d{4}-\d{2}-\d{2}$/.test(key) && key < startKey) baseline += day.tokens
+      }
 
       const cells = []
       const weeks = []
@@ -417,7 +423,7 @@ window.__ModuleLoader__.load({
       const cursor = new Date(start.getTime())
       let column = 0
       let previousMonth = -1
-      let cumulative = 0
+      let cumulative = baseline
 
       while (cursor.getTime() <= today.getTime()) {
         const weekStart = new Date(cursor.getTime())
