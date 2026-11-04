@@ -730,7 +730,8 @@ window.__ModuleLoader__.load({
       const byDate = indexDaily(daily)
       const todayStart = startOfDay(today)
       const todayKey = localDateKey(todayStart)
-      const start = startOfWeek(addDays(todayStart, -(HEAT_WEEKS * 7 - 1)))
+      // 恰好 53 列：本周 + 之前 52 周（「今天 − 370 天再对齐到周一」会多出一列）
+      const start = addDays(startOfWeek(todayStart), -(HEAT_WEEKS - 1) * 7)
       const startKey = localDateKey(start)
 
       // 窗口之前的用量是「累计」的起点。键已校验为 YYYY-MM-DD（定长、补零），字典序即日期序。
@@ -828,8 +829,10 @@ window.__ModuleLoader__.load({
         let top = anchor.top - gap - height
         if (top < bounds.top) {
           const below = anchor.top + anchor.height + gap
-          top = below + height <= bounds.bottom ? below : Math.max(bounds.top, Math.min(top, bounds.bottom - height))
+          top = below + height <= bounds.bottom ? below : top
         }
+        // 锚点本身可能在可视区外（图表下半截滚出了视口）：最后再上下夹一次，浮层永远完整可见
+        top = Math.max(bounds.top, Math.min(top, bounds.bottom - height))
         element.style.left = `${Math.round(left - origin.left)}px`
         element.style.top = `${Math.round(top - origin.top)}px`
         element.style.visibility = 'visible'
