@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.4.13 — 2026-11-04
+
+- perf(host): measure the scan phases and raise readSession concurrency to 8
+- fix(lens): take uncached input from totals.inputTokens so a subtraction artifact can no longer fake a 100% hit rate
+- fix(lens): divide the cache table by input, so the hit rate and the rows can never disagree
+
+
 ## 2.4.12 — 2026-11-04
 
 - docs(findings): correct C-6 — the release workflow is active; the 10 earlier commits simply landed after its last run
