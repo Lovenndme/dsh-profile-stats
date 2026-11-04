@@ -1099,9 +1099,13 @@ window.__ModuleLoader__.load({
         return sum
       }
 
+      // 纵轴按整根堆叠柱的合计取最大值：旧实现取的是单个分段的最大值，
+      // 合计更高的柱子会超出坐标轴、被 overflow:hidden 截掉顶部。
       let max = 0
       for (const bucket of buckets) {
-        for (const item of series) max = Math.max(max, valueOf(bucket, item.key))
+        let stack = 0
+        for (const item of series) stack += valueOf(bucket, item.key)
+        max = Math.max(max, stack)
       }
       if (!(max > 0)) max = 1
 
