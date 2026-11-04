@@ -1912,7 +1912,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-mc-empty{position:absolute;inset:0;display:grid;place-items:center;font-size:12.5px;color:var(--dps-faint);pointer-events:none}
 .dps-mc-ticks{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));font-size:11px;color:var(--dps-faint);text-align:center;font-variant-numeric:tabular-nums}
 .dps-mc-ticks span{white-space:nowrap;overflow:hidden}
-.dps-legend{list-style:none;margin:0;padding:2px 0 0;display:flex;flex-wrap:wrap;gap:8px 18px;font-size:12px}
+.dps-legend{list-style:none;margin:0;padding:2px 0 0 52px;display:flex;flex-wrap:wrap;justify-content:center;gap:8px 18px;font-size:12px}
 .dps-legend li{display:inline-flex;align-items:center;gap:7px;min-width:0}
 .dps-legend i{width:9px;height:9px;border-radius:2.5px;flex:0 0 auto}
 .dps-legend-name{color:var(--dps-muted);white-space:nowrap}
