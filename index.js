@@ -94,10 +94,22 @@ function dayIndex(key) {
   return Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]))
 }
 
-function nextDayKey(key) {
+/**
+ * 日历键 ± 若干天。全程留在 UTC 里算：dayIndex 给的是 UTC 零点，必须再按 UTC 读回日期。
+ * 旧实现用 localDayKey（本地时区）读回，在 UTC− 时区里 UTC 零点落在前一天晚上，
+ * 「下一天」读回来还是同一天、「前一天」读回来是前两天，连续天数在美洲时区恒为 1。
+ */
+function shiftDayKey(key, days) {
   const index = dayIndex(key)
   if (!Number.isFinite(index)) return ''
-  return localDayKey(index + DAY_MS)
+  const date = new Date(index + days * DAY_MS)
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(date.getUTCDate()).padStart(2, '0')
+  return `${date.getUTCFullYear()}-${month}-${day}`
+}
+
+function nextDayKey(key) {
+  return shiftDayKey(key, 1)
 }
 
 function yieldToLoop() {
@@ -350,13 +362,14 @@ function computeStreaks(activeDays, now) {
     }
   }
   const today = localDayKey(now)
-  const yesterday = localDayKey(now - DAY_MS)
+  // 「昨天」按日历减一天，而不是 now − 24h：夏令时切换日只有 23/25 小时。
+  const yesterday = shiftDayKey(today, -1)
   const active = new Set(sorted)
   let cursor = active.has(today) ? today : active.has(yesterday) ? yesterday : null
   let current = 0
   while (cursor !== null && active.has(cursor)) {
     current += 1
-    const previous = localDayKey(dayIndex(cursor) - DAY_MS)
+    const previous = shiftDayKey(cursor, -1)
     cursor = active.has(previous) ? previous : null
   }
   return { longestStreak: longest, currentStreak: current }
