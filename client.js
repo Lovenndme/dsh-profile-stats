@@ -61,6 +61,13 @@ window.__ModuleLoader__.load({
       'range.7': '7 days',
       'range.30': '30 days',
       'range.allRange': 'All',
+      'grain.day': 'Daily',
+      'grain.week': 'Weekly',
+      'grain.month': 'Monthly',
+      'grain.bar': 'Bars',
+      'grain.line': 'Line',
+      'grain.lineTotal': 'Usage',
+      'grain.lineAverage': 'Average',
       'stat.rangeTokens': 'Tokens in range',
       'tip.none': 'No activity',
       'tip.tokens': '{value} tokens',
@@ -136,6 +143,13 @@ window.__ModuleLoader__.load({
       'range.7': '7 天',
       'range.30': '30 天',
       'range.allRange': '全部',
+      'grain.day': '按日',
+      'grain.week': '按周',
+      'grain.month': '按月',
+      'grain.bar': '柱状',
+      'grain.line': '折线',
+      'grain.lineTotal': '具体使用量',
+      'grain.lineAverage': '平均使用量',
       'stat.rangeTokens': '区间 Token 数',
       'tip.none': '无活动',
       'tip.tokens': '{value} tokens',
@@ -586,6 +600,8 @@ window.__ModuleLoader__.load({
 .dps-chart{display:flex;flex-direction:column;gap:14px}
 .dps-chart-head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
 .dps-chart-title{display:flex;align-items:baseline;gap:8px;font-size:14px;font-weight:600;color:var(--dsw-alias-label-primary)}
+.dps-chart-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dps-line{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 .dps-chart-total{font-size:12px;font-weight:400;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
 .dps-chart-legend{display:flex;align-items:center;justify-content:center;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--dsw-alias-label-secondary)}
 .dps-chart-legend-item{display:inline-flex;align-items:center;gap:6px}
@@ -1184,21 +1200,19 @@ window.__ModuleLoader__.load({
     }
 
     /** 模型图自带的范围开关（页面级范围生效时隐藏）。 */
-    function buildRangeToggle(range, setRange) {
+    /** 通用分段开关：id / label 列表 + 当前值 + 回调。 */
+    function segmentedSwitch(options, active, onPick) {
       return h(
         'div',
         { className: 'dps-switch' },
-        [
-          { id: 'recent', label: t('range.recent') },
-          { id: 'all', label: t('range.all') },
-        ].map((option) =>
+        options.map((option) =>
           h(
             'button',
             {
               key: option.id,
               type: 'button',
-              'data-active': range === option.id ? 'true' : 'false',
-              onClick: () => setRange(option.id),
+              'data-active': active === option.id ? 'true' : 'false',
+              onClick: () => onPick(option.id),
             },
             option.label,
           ),
@@ -1206,88 +1220,138 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /**
-     * 范围内没有任何用量时的模型图：卡片、标题和绘图区都保留，只是没有柱子。
-     * 之前这种情况直接 return null，导致整块从页面上消失（2026-11-03 反馈）。
-     */
-    function emptyModelChart(range, setRange, lockRange) {
+    /** 模型分布自己的时间窗：日 / 周 / 月 各 12 个桶。 */
+    const MODEL_WINDOW = 12
 
-      return h(
-        'div',
-        { className: 'dps-card dps-chart' },
-        h(
-          'div',
-          { className: 'dps-chart-head' },
-          h(
-            'div',
-            { className: 'dps-chart-title' },
-            t('section.model'),
-            h('span', { className: 'dps-chart-total' }, t('chart.total', { value: formatTokens(0) })),
-          ),
-          lockRange ? null : buildRangeToggle(range, setRange),
-        ),
-        h('div', { className: 'dps-chart-plot' }),
-      )
-    }
-    /**
-     * 按时间的竖向柱状图：时间轴连续（没有数据的日期也占位），近 14 天按天分桶、全部按周汇总。
-     * 模型来自宿主的动态识别（任意模型 id 都会被统计）：范围内用量前 2 的模型各占一根柱，
-     * 其余模型聚合为「其他模型」一根柱，所以接中转站、用别的模型也不会漏。
-     */
-    function ModelChart(props) {
-      const lockRange = Boolean(props.lockRange)
-      const [range, setRange] = useState(lockRange ? 'all' : 'recent')
-      const [tip, setTip] = useState(null)
-      const daily = props.daily || []
-
+    function modelBuckets(daily, granularity) {
       const byDate = new Map()
       for (const entry of daily) {
         if (entry && typeof entry.date === 'string') byDate.set(entry.date, entry)
       }
-
       const today = startOfDay(new Date())
-      const todayKey = localDateKey(today)
-      const dateFromKey = (key) =>
-        new Date(Number(key.slice(0, 4)), Number(key.slice(5, 7)) - 1, Number(key.slice(8, 10)))
-
-      const keys = [...byDate.keys()].sort()
-      const firstDataKey = keys.length > 0 ? keys[0] : todayKey
-      const startKey = range === 'recent' ? localDateKey(new Date(today.getTime() - 13 * DAY_MS)) : firstDataKey
-      if (dateFromKey(startKey).getTime() > today.getTime()) return emptyModelChart(range, setRange, lockRange)
-
-      // 连续铺满每一天，再按范围折叠成「天」或「周」
-      const days = []
-      const cursor = dateFromKey(startKey)
-      for (let guard = 0; guard < 800; guard += 1) {
-        const key = localDateKey(cursor)
-        days.push({ key, entry: byDate.get(key) })
-        if (cursor.getTime() >= today.getTime()) break
-        cursor.setDate(cursor.getDate() + 1)
+      const keys = []
+      if (granularity === 'day') {
+        for (let offset = MODEL_WINDOW - 1; offset >= 0; offset -= 1) {
+          keys.push(localDateKey(new Date(today.getTime() - offset * DAY_MS)))
+        }
+      } else if (granularity === 'month') {
+        for (let offset = MODEL_WINDOW - 1; offset >= 0; offset -= 1) {
+          const point = new Date(today.getFullYear(), today.getMonth() - offset, 1)
+          keys.push(`${point.getFullYear()}-${String(point.getMonth() + 1).padStart(2, '0')}`)
+        }
+      } else {
+        const thisWeek = startOfWeek(today)
+        for (let offset = MODEL_WINDOW - 1; offset >= 0; offset -= 1) {
+          keys.push(localDateKey(new Date(thisWeek.getTime() - offset * 7 * DAY_MS)))
+        }
       }
 
-      const bucketMap = new Map()
-      const familyTotals = new Map()
-      for (const day of days) {
-        const bucketKey =
-          range === 'recent' ? day.key : localDateKey(startOfWeek(dateFromKey(day.key)))
-        const bucket = bucketMap.get(bucketKey) || { key: bucketKey, values: {} }
-        const byModel = (day.entry && day.entry.byModel) || {}
-        for (const [family, raw] of Object.entries(byModel)) {
+      const bucketOf = (dateKey) => {
+        if (granularity === 'month') return dateKey.slice(0, 7)
+        if (granularity === 'week') {
+          const parts = dateKey.split('-')
+          return localDateKey(startOfWeek(new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]))))
+        }
+        return dateKey
+      }
+
+      const buckets = new Map(keys.map((key) => [key, { key, values: {} }]))
+      for (const [dateKey, entry] of byDate) {
+        const bucket = buckets.get(bucketOf(dateKey))
+        if (!bucket) continue
+        for (const [family, raw] of Object.entries(entry.byModel || {})) {
           const value = toNumber(raw)
           if (!(value > 0)) continue
           const group = modelFamily(family)
           bucket.values[group] = (bucket.values[group] || 0) + value
-          familyTotals.set(group, (familyTotals.get(group) || 0) + value)
         }
-        bucketMap.set(bucketKey, bucket)
       }
-      const buckets = [...bucketMap.values()].sort((left, right) => (left.key < right.key ? -1 : 1))
+      return { list: keys.map((key) => buckets.get(key)), keys }
+    }
 
+    function bucketLabel(key, granularity) {
+      if (granularity === 'month') return `${Number(key.slice(5, 7))}月`
+      return key.slice(5).replace('-', '/')
+    }
+
+    /**
+     * 模型分布：自带「日 / 周 / 月」与「柱状 / 折线」两套开关，不受页面级时间范围影响。
+     * 柱状 = 前 6 个模型家族堆叠；折线 = 每桶总量 + 平均线。
+     */
+    function ModelChart(props) {
+      const [granularity, setGranularity] = useState('week')
+      const [chartType, setChartType] = useState('bar')
+      const [tip, setTip] = useState(null)
+      const daily = props.daily || []
+
+      const { list: buckets } = modelBuckets(daily, granularity)
+      const familyTotals = new Map()
+      for (const bucket of buckets) {
+        for (const [family, value] of Object.entries(bucket.values)) {
+          familyTotals.set(family, (familyTotals.get(family) || 0) + value)
+        }
+      }
       const ranked = [...familyTotals.entries()].sort((left, right) => right[1] - left[1]).filter(([, value]) => value > 0)
-      if (ranked.length === 0) return emptyModelChart(range, setRange, lockRange)
+      const rangeTotal = ranked.reduce((sum, [, value]) => sum + value, 0)
+
+      const heads = h(
+        'div',
+        { className: 'dps-chart-head' },
+        h(
+          'div',
+          { className: 'dps-chart-title' },
+          t('section.model'),
+          h('span', { className: 'dps-chart-total' }, t('chart.total', { value: formatTokens(rangeTotal) })),
+        ),
+        h(
+          'div',
+          { className: 'dps-chart-tools' },
+          segmentedSwitch(
+            [
+              { id: 'day', label: t('grain.day') },
+              { id: 'week', label: t('grain.week') },
+              { id: 'month', label: t('grain.month') },
+            ],
+            granularity,
+            setGranularity,
+          ),
+          segmentedSwitch(
+            [
+              { id: 'bar', label: t('grain.bar') },
+              { id: 'line', label: t('grain.line') },
+            ],
+            chartType,
+            setChartType,
+          ),
+        ),
+      )
+
+      const showTip = (bucket) => (event) => {
+        const clientX = typeof event.clientX === 'number' ? event.clientX : null
+        const clientY = typeof event.clientY === 'number' ? event.clientY : null
+        const viewportWidth = typeof window !== 'undefined' && window.innerWidth ? window.innerWidth : 1200
+        const viewportHeight = typeof window !== 'undefined' && window.innerHeight ? window.innerHeight : 800
+        let x = viewportWidth / 2
+        let y = 60
+        if (clientX !== null && clientY !== null) {
+          const tipWidth = 240
+          x = clientX + 14 + tipWidth > viewportWidth - 8 ? clientX - tipWidth - 8 : clientX + 14
+          y = clientY + 16 + 120 > viewportHeight - 8 ? clientY - 120 : clientY + 16
+        }
+        setTip({ bucket, x, y })
+      }
+
+      if (ranked.length === 0) {
+        return h(
+          'div',
+          { className: 'dps-card dps-chart' },
+          heads,
+          h('div', { className: 'dps-chart-plot' }),
+        )
+      }
 
       const top = ranked.slice(0, 6)
-      const rest = ranked.slice(2)
+      const rest = ranked.slice(6)
       const series = top.map(([family], index) => ({
         key: family,
         name: familyLabel(family),
@@ -1311,171 +1375,202 @@ window.__ModuleLoader__.load({
         }
         return sum
       }
+      const totalOf = (bucket) => Object.values(bucket.values).reduce((sum, value) => sum + toNumber(value), 0)
 
-      const rangeTotal = series.reduce((sum, item) => sum + item.total, 0)
+      const average = buckets.length > 0 ? rangeTotal / buckets.length : 0
       let max = 0
       for (const bucket of buckets) {
-        for (const item of series) {
-          const value = valueOf(bucket, item.key)
-          if (value > max) max = value
-        }
+        const value = chartType === 'line' ? Math.max(totalOf(bucket), average) : 0
+        const barMax = series.reduce((best, item) => Math.max(best, valueOf(bucket, item.key)), 0)
+        max = Math.max(max, chartType === 'line' ? value : barMax)
       }
-      if (max <= 0) return emptyModelChart(range, setRange, lockRange)
+      if (!(max > 0)) max = average > 0 ? average : 1
 
-      const stride = Math.max(1, Math.ceil(buckets.length / 14))
-      const labelOf = (key) => key.slice(5).replace('-', '/')
-
-      const showTip = (bucket) => (event) => {
-        // 悬浮层跟随鼠标：优先用 clientX/clientY，容器边框做兜底。
-        const clientX = typeof event.clientX === 'number' ? event.clientX : null
-        const clientY = typeof event.clientY === 'number' ? event.clientY : null
-        const viewportWidth = typeof window !== 'undefined' && window.innerWidth ? window.innerWidth : 1200
-        const viewportHeight = typeof window !== 'undefined' && window.innerHeight ? window.innerHeight : 800
-        let x
-        let y
-        if (clientX !== null && clientY !== null) {
-          const tipWidth = 240
-          x = clientX + 14
-          if (x + tipWidth > viewportWidth - 8) x = clientX - tipWidth - 8
-          y = clientY + 16
-          if (y + 120 > viewportHeight - 8) y = clientY - 120
-        } else {
-          const target = event && event.currentTarget
-          const rect = target && typeof target.getBoundingClientRect === 'function' ? target.getBoundingClientRect() : null
-          x = rect ? rect.left + rect.width / 2 : viewportWidth / 2
-          y = rect ? rect.top - 8 : 60
-        }
-        setTip({ bucket, x, y, follow: clientX !== null })
-      }
-
-      const toggle = buildRangeToggle(range, setRange)
-
-
-      const legend = h(
-        'div',
-        { className: 'dps-chart-legend' },
-        series.map((item) =>
-          h(
-            'span',
-            { className: 'dps-chart-legend-item', key: item.key },
-            h('span', { className: 'dps-dot', style: { background: item.color } }),
-            item.name,
-            h('span', { className: 'dps-chart-legend-total' }, formatTokens(item.total)),
-          ),
-        ),
-      )
-
-      // 纵轴：步长取整齐值，轴顶向上取整到步长整数倍
       const step = niceStep(max)
       const axisMax = Math.max(step, Math.ceil(max / step) * step)
       const tickValues = []
       for (let value = 0; value <= axisMax + step / 1000; value += step) tickValues.push(value)
 
-      const plot = h(
+      const stride = Math.max(1, Math.ceil(buckets.length / 12))
+      const ticks = h(
         'div',
-        { className: 'dps-chart-plot' },
-        h(
-          'div',
-          { className: 'dps-chart-ticks' },
-          tickValues.map((value) =>
-            h(
-              'div',
-              { className: 'dps-chart-tick', key: value, style: { bottom: `${(value / axisMax) * 100}%` } },
-              h('span', null, formatAxis(value)),
-            ),
-          ),
-        ),
-        h(
-          'div',
-          { className: 'dps-chart-scroll' },
+        { className: 'dps-chart-ticks' },
+        tickValues.map((value) =>
           h(
             'div',
-            { className: 'dps-chart-bars', key: `bars-${range}`, style: { minWidth: `${buckets.length * 14}px` } },
-            buckets.map((bucket, index) =>
-              h(
-                'div',
-                {
-                  className: 'dps-chart-bucket',
-                  key: bucket.key,
-                  onMouseEnter: showTip(bucket),
-                  onMouseMove: showTip(bucket),
-                  onMouseLeave: () => setTip(null),
-                },
-                h(
-                  'div',
-                  {
-                    className: 'dps-chart-stack',
-                    style: { animationDelay: `${Math.min(index * 18, 320)}ms` },
-                  },
-                  // 反转顺序：用量最大的排在最底下（DOM 里放最后）
-                  series
-                    .slice()
-                    .reverse()
-                    .map((item) => {
-                      const value = valueOf(bucket, item.key)
-                      if (!(value > 0)) return null
-                      return h('div', {
-                        key: item.key,
-                        className: 'dps-chart-seg',
-                        title: `${item.name} ${formatTokens(value)}`,
-                        style: {
-                          height: `${axisMax > 0 ? (value / axisMax) * 100 : 0}%`,
-                          background: item.color,
-                        },
-                      })
-                    }),
-                ),
-                index % stride === 0 ? h('div', { className: 'dps-chart-label' }, labelOf(bucket.key)) : null,
-              ),
-            ),
+            { className: 'dps-chart-tick', key: value, style: { bottom: `${(value / axisMax) * 100}%` } },
+            h('span', null, formatAxis(value)),
           ),
         ),
       )
+
+      const labelNodes = (index, bucket) =>
+        index % stride === 0 ? h('div', { className: 'dps-chart-label' }, bucketLabel(bucket.key, granularity)) : null
+
+      let plot
+      if (chartType === 'line') {
+        const width = 1000
+        const height = 400
+        const pointOf = (index, value) => {
+          const x = buckets.length === 1 ? width / 2 : ((index + 0.5) / buckets.length) * width
+          const y = height - (axisMax > 0 ? (value / axisMax) * height : 0)
+          return `${x.toFixed(1)},${y.toFixed(1)}`
+        }
+        const totalPoints = buckets.map((bucket, index) => pointOf(index, totalOf(bucket))).join(' ')
+        const averageY = height - (axisMax > 0 ? (average / axisMax) * height : 0)
+        plot = h(
+          'div',
+          { className: 'dps-chart-plot' },
+          ticks,
+          h(
+            'svg',
+            { className: 'dps-line', viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: 'none', 'aria-hidden': true },
+            h('polyline', {
+              points: totalPoints,
+              fill: 'none',
+              stroke: 'var(--dsw-alias-brand-primary)',
+              'stroke-width': 2,
+              'stroke-linejoin': 'round',
+              'stroke-linecap': 'round',
+              'vector-effect': 'non-scaling-stroke',
+            }),
+            h('line', {
+              x1: 0,
+              y1: averageY.toFixed(1),
+              x2: width,
+              y2: averageY.toFixed(1),
+              stroke: 'var(--dsw-alias-label-secondary)',
+              'stroke-width': 1.5,
+              'stroke-dasharray': '6 6',
+              'vector-effect': 'non-scaling-stroke',
+            }),
+          ),
+          h(
+            'div',
+            { className: 'dps-chart-scroll' },
+            h(
+              'div',
+              { className: 'dps-chart-bars', key: `line-${granularity}`, style: { minWidth: `${buckets.length * 14}px` } },
+              buckets.map((bucket, index) =>
+                h(
+                  'div',
+                  {
+                    className: 'dps-chart-bucket',
+                    key: bucket.key,
+                    onMouseEnter: showTip(bucket),
+                    onMouseMove: showTip(bucket),
+                    onMouseLeave: () => setTip(null),
+                  },
+                  labelNodes(index, bucket),
+                ),
+              ),
+            ),
+          ),
+        )
+      } else {
+        plot = h(
+          'div',
+          { className: 'dps-chart-plot' },
+          ticks,
+          h(
+            'div',
+            { className: 'dps-chart-scroll' },
+            h(
+              'div',
+              { className: 'dps-chart-bars', key: `bar-${granularity}`, style: { minWidth: `${buckets.length * 14}px` } },
+              buckets.map((bucket, index) =>
+                h(
+                  'div',
+                  {
+                    className: 'dps-chart-bucket',
+                    key: bucket.key,
+                    onMouseEnter: showTip(bucket),
+                    onMouseMove: showTip(bucket),
+                    onMouseLeave: () => setTip(null),
+                  },
+                  h(
+                    'div',
+                    { className: 'dps-chart-stack', style: { animationDelay: `${Math.min(index * 18, 320)}ms` } },
+                    series
+                      .slice()
+                      .reverse()
+                      .map((item) => {
+                        const value = valueOf(bucket, item.key)
+                        if (!(value > 0)) return null
+                        return h('div', {
+                          key: item.key,
+                          className: 'dps-chart-seg',
+                          style: {
+                            height: `${axisMax > 0 ? (value / axisMax) * 100 : 0}%`,
+                            background: item.color,
+                          },
+                        })
+                      }),
+                  ),
+                  labelNodes(index, bucket),
+                ),
+              ),
+            ),
+          ),
+        )
+      }
+
+      const legend =
+        chartType === 'line'
+          ? h(
+              'div',
+              { className: 'dps-chart-legend' },
+              h(
+                'span',
+                { className: 'dps-chart-legend-item' },
+                h('span', { className: 'dps-dot', style: { background: 'var(--dsw-alias-brand-primary)' } }),
+                t('grain.lineTotal'),
+                h('span', { className: 'dps-chart-legend-total' }, formatTokens(rangeTotal)),
+              ),
+              h(
+                'span',
+                { className: 'dps-chart-legend-item' },
+                h('span', { className: 'dps-dot', style: { background: 'var(--dsw-alias-label-secondary)' } }),
+                t('grain.lineAverage'),
+                h('span', { className: 'dps-chart-legend-total' }, formatTokens(average)),
+              ),
+            )
+          : h(
+              'div',
+              { className: 'dps-chart-legend' },
+              series.map((item) =>
+                h(
+                  'span',
+                  { className: 'dps-chart-legend-item', key: item.key },
+                  h('span', { className: 'dps-dot', style: { background: item.color } }),
+                  item.name,
+                  h('span', { className: 'dps-chart-legend-total' }, formatTokens(item.total)),
+                ),
+              ),
+            )
 
       const tooltip = tip
         ? h(
             'div',
-            {
-              className: 'dps-tip',
-              style: {
-                left: `${tip.x}px`,
-                top: `${tip.y}px`,
-                transform: tip.follow ? 'translate(0, 0)' : 'translate(-50%, -100%)',
-              },
-            },
-            h('div', { className: 'dps-tip-date' }, range === 'recent' ? tip.bucket.key : `${tip.bucket.key} 起的一周`),
-            series.map((item) => {
-              const value = valueOf(tip.bucket, item.key)
-              if (!(value > 0)) return null
-              return h(
-                'div',
-                { className: 'dps-tip-row', key: item.key },
-                h('span', { className: 'dps-dot', style: { background: item.color } }),
-                h('span', null, item.name),
-                h('span', { className: 'dps-tip-value' }, formatTokens(value)),
-              )
-            }),
+            { className: 'dps-tip', style: { left: `${tip.x}px`, top: `${tip.y}px`, transform: 'translate(0, 0)' } },
+            h('div', { className: 'dps-tip-date' }, bucketLabel(tip.bucket.key, granularity)),
+            chartType === 'line'
+              ? h('div', { className: 'dps-tip-row' }, h('span', null, t('grain.lineTotal')), h('span', { className: 'dps-tip-value' }, formatTokens(totalOf(tip.bucket))))
+              : series.map((item) => {
+                  const value = valueOf(tip.bucket, item.key)
+                  if (!(value > 0)) return null
+                  return h(
+                    'div',
+                    { className: 'dps-tip-row', key: item.key },
+                    h('span', { className: 'dps-dot', style: { background: item.color } }),
+                    h('span', null, item.name),
+                    h('span', { className: 'dps-tip-value' }, formatTokens(value)),
+                  )
+                }),
           )
         : null
 
-      return h(
-        'div',
-        { className: 'dps-card dps-chart' },
-        h(
-          'div',
-          { className: 'dps-chart-head' },
-          h(
-            'div',
-            { className: 'dps-chart-title' },
-            t('section.model'),
-            h('span', { className: 'dps-chart-total' }, t('chart.total', { value: formatTokens(rangeTotal) })),
-          ),
-          lockRange ? null : toggle,
-        ),
-        plot,
-        legend,
-        tooltip,
-      )
+      return h('div', { className: 'dps-card dps-chart' }, heads, plot, legend, tooltip)
     }
     function ProfilePage() {
       useLocaleRevision()
@@ -1651,7 +1746,7 @@ window.__ModuleLoader__.load({
       )
       const mixSection = totals && hasAnySession ? h('div', { className: 'dps-section' }, h(Breakdown, { totals: scoped.totals })) : null
       const modelSection =
-        totals && hasAnySession ? h('div', { className: 'dps-section' }, h(ModelChart, { daily: scoped.days, totals: scoped.totals, lockRange: true })) : null
+        totals && hasAnySession ? h('div', { className: 'dps-section' }, h(ModelChart, { daily })) : null
       const providerSection =
         totals && hasAnySession
           ? h('div', { className: 'dps-section' }, h(ProviderBreakdown, { today: todayEntry, totals: scoped.totals }))
