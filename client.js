@@ -76,7 +76,7 @@ window.__ModuleLoader__.load({
       'lens.uncachedTitle': 'Uncached token mix',
       'lens.colType': 'Type',
       'lens.colAmount': 'Tokens',
-      'lens.colShareTotal': 'of total',
+      'lens.colShareTotal': 'of input',
       'lens.colShareUncached': 'of uncached',
       'provider.wincode': 'WinCode relay',
       'provider.arkcli-coding-plan': 'Ark Coding Plan',
@@ -146,7 +146,7 @@ window.__ModuleLoader__.load({
       'lens.uncachedTitle': '非缓存 Token 构成',
       'lens.colType': '类型',
       'lens.colAmount': '用量',
-      'lens.colShareTotal': '占总 Token',
+      'lens.colShareTotal': '占输入',
       'lens.colShareUncached': '占非缓存合计',
       'provider.wincode': '卫宁中转 WinCode',
       'provider.arkcli-coding-plan': '火山 Coding Plan',
@@ -1500,6 +1500,7 @@ window.__ModuleLoader__.load({
         uncached,
         output,
         uncachedTotal,
+        inputTotal: cache + uncached,
         hitRate: cache + uncached > 0 ? (cache / (cache + uncached)) * 100 : 0,
         uncachedShare: uncachedTotal > 0 ? (uncached / uncachedTotal) * 100 : 0,
       }
@@ -1517,8 +1518,14 @@ window.__ModuleLoader__.load({
       const [hover, setHover] = useState(null)
       const segmentRefs = useRef({})
 
+      // 柱宽描述的是「构成本身」，分母是总量（放大视图是非缓存合计）。
       const denominator = zoomed ? lens.uncachedTotal : lens.total
-      const share = (value) => (denominator > 0 ? (value / denominator) * 100 : 0)
+      const barShare = (value) => (denominator > 0 ? (value / denominator) * 100 : 0)
+      // 百分比列统一除以「输入」：缓存与未缓存输入同源，命中率就是缓存在这两段里的占比，
+      // 于是 100% 与 0% 不再互相矛盾。输出不属于输入，这一列不给百分比。
+      const percentBasis = zoomed ? lens.uncachedTotal : lens.inputTotal
+      const share = (value) => (percentBasis > 0 ? (value / percentBasis) * 100 : 0)
+      const percentCell = (row) => (zoomed || row.key !== 'output' ? formatPercent(share(row.value)) : '')
       const rows = [
         { key: 'cache', label: t('lens.cache'), value: lens.cache, visible: !zoomed },
         { key: 'input', label: t('lens.input'), value: lens.uncached, visible: true },
@@ -1540,7 +1547,7 @@ window.__ModuleLoader__.load({
         const shown = row.visible && row.value > 0
         const separator = shown && visibleBefore
         if (shown) visibleBefore = true
-        const ratio = row.visible ? share(row.value) : 0
+        const ratio = row.visible ? barShare(row.value) : 0
         return h('span', {
           key: row.key,
           ref: (node) => {
@@ -1629,7 +1636,7 @@ window.__ModuleLoader__.load({
             role: 'img',
             'aria-label': `${t('aria.lens')}: ${rows
               .filter((row) => row.visible)
-              .map((row) => `${row.label} ${formatPercent(share(row.value))}`)
+              .map((row) => `${row.label} ${formatPercent(barShare(row.value))}`)
               .join(', ')}`,
           },
           segments,
@@ -1666,7 +1673,7 @@ window.__ModuleLoader__.load({
                 h('i', { className: 'dps-lens-dot', style: { background: LENS_COLORS[row.key] }, 'aria-hidden': true }),
                 h('span', { className: 'dps-lens-name', role: 'cell' }, row.label),
                 h('span', { className: 'dps-lens-value', role: 'cell' }, formatTokens(row.value)),
-                h('span', { className: 'dps-lens-share', role: 'cell' }, formatPercent(share(row.value))),
+                h('span', { className: 'dps-lens-share', role: 'cell' }, percentCell(row)),
               ),
             ),
         ),
