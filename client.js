@@ -529,6 +529,48 @@ window.__ModuleLoader__.load({
       return { snapshot, error, refresh, reload }
     }
 
+    function prefersReducedMotion() {
+      try {
+        return typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      } catch {
+        return false
+      }
+    }
+
+    /**
+     * 数值过渡：目标值变化时用 requestAnimationFrame 从当前显示值缓动到新值（三次缓出）。
+     * 只影响显示，data-value 等属性始终给原始整数；没有 rAF 或用户要求减少动效时直接跳到终值。
+     */
+    function useTween(target, duration) {
+      const [shown, setShown] = useState(target)
+      const current = useRef(target)
+      useEffect(() => {
+        const raf = typeof window !== 'undefined' ? window.requestAnimationFrame : undefined
+        const from = current.current
+        if (typeof raf !== 'function' || prefersReducedMotion() || from === target) {
+          current.current = target
+          setShown(target)
+          return undefined
+        }
+        let frame = 0
+        let began = null
+        const step = (time) => {
+          if (began === null) began = time
+          const progress = Math.min(1, (time - began) / duration)
+          const eased = 1 - Math.pow(1 - progress, 3)
+          const value = progress >= 1 ? target : from + (target - from) * eased
+          current.current = value
+          setShown(value)
+          if (progress < 1) frame = raf(step)
+        }
+        frame = raf(step)
+        return () => {
+          if (typeof window.cancelAnimationFrame === 'function') window.cancelAnimationFrame(frame)
+        }
+      }, [target, duration])
+      return shown
+    }
+
     /** 组件是否仍挂载（异步流程里决定还要不要 setState）。 */
     function useMounted() {
       const mounted = useRef(true)
@@ -911,6 +953,7 @@ window.__ModuleLoader__.load({
             return h('rect', {
               key: week.startKey,
               className: 'dps-act-bar',
+              style: { '--i': week.col },
               x: week.col * ACT_PITCH,
               y: height - barHeight,
               width: ACT_CELL,
@@ -1300,7 +1343,7 @@ window.__ModuleLoader__.load({
           },
           h(
             'div',
-            { className: 'dps-mc-stack', style: { height: `${height}%` } },
+            { className: 'dps-mc-stack', style: { height: `${height}%`, '--i': position } },
             bucket.segments
               .filter((segment) => segment.value > 0)
               .map((segment) =>
@@ -1605,7 +1648,18 @@ window.__ModuleLoader__.load({
             ),
           ),
         ),
-        h('div', { className: 'dps-lens-bar', role: 'img', 'aria-label': t('aria.lens') }, segments),
+        h(
+          'div',
+          {
+            className: 'dps-lens-bar',
+            role: 'img',
+            'aria-label': `${t('aria.lens')}: ${rows
+              .filter((row) => row.visible)
+              .map((row) => `${row.label} ${formatPercent(share(row.value))}`)
+              .join(', ')}`,
+          },
+          segments,
+        ),
         h(
           'div',
           { className: 'dps-lens-table', role: 'table' },
@@ -1813,6 +1867,21 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-num{font-size:24px}
 .dps-kpi[data-hero="true"] .dps-num{font-size:30px}
 }
+@keyframes dps-enter{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes dps-fade{from{opacity:0}to{opacity:1}}
+@keyframes dps-rise{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+@keyframes dps-wipe{from{clip-path:inset(0 100% 0 0)}to{clip-path:inset(0 0 0 0)}}
+.dps-page > *{animation:dps-enter .5s cubic-bezier(.2,.7,.2,1) backwards}
+.dps-page > :nth-child(2){animation-delay:40ms}
+.dps-page > :nth-child(3){animation-delay:80ms}
+.dps-page > :nth-child(4){animation-delay:130ms}
+.dps-page > :nth-child(5){animation-delay:180ms}
+.dps-page > :nth-child(6){animation-delay:230ms}
+.dps-spark rect{transform-box:fill-box;transform-origin:50% 100%;animation:dps-rise .5s cubic-bezier(.2,.7,.2,1) backwards;animation-delay:calc(260ms + var(--i,0) * 22ms)}
+.dps-act-layer{animation:dps-fade .32s ease backwards}
+.dps-act-layer[data-layer="week"] .dps-act-bar{transform-box:fill-box;transform-origin:50% 100%;animation:dps-rise .5s cubic-bezier(.2,.7,.2,1) backwards;animation-delay:calc(var(--i,0) * 6ms)}
+.dps-act-layer[data-layer="total"]{animation:dps-wipe .7s cubic-bezier(.3,.6,.2,1) backwards}
+.dps-mc-stack{transform-origin:50% 100%;animation:dps-rise .55s cubic-bezier(.2,.7,.2,1) backwards;animation-delay:calc(var(--i,0) * 26ms);transition:height .45s cubic-bezier(.3,.7,.2,1)}
 @media (prefers-reduced-motion:reduce){.dps-root *,.dps-root *::before,.dps-root *::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}}
 
 .dps-panel{min-width:0;display:flex;flex-direction:column;gap:16px;padding:18px 20px 20px;border:1px solid var(--dps-line);border-radius:var(--dps-radius);background:var(--dps-card)}
@@ -1951,6 +2020,19 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
           'aria-label': props.label,
           'data-dps-control': props.control,
           style: { '--index': index, '--count': options.length },
+          // ←/→ 在选项间移动并切换，焦点跟着走
+          onKeyDown: (event) => {
+            const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0
+            if (!step) return
+            if (typeof event.preventDefault === 'function') event.preventDefault()
+            const next = options[(index + step + options.length) % options.length]
+            props.onChange(next.id)
+            const group = event.currentTarget
+            if (group && typeof group.querySelector === 'function') {
+              const button = group.querySelector(`button[data-value="${next.id}"]`)
+              if (button && typeof button.focus === 'function') button.focus()
+            }
+          },
         },
         h('span', { className: 'dps-seg-thumb', 'aria-hidden': true }),
         options.map((option) =>
@@ -2124,6 +2206,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
             rx: 1.2,
             'data-today': point.today ? 'true' : 'false',
             'data-zero': point.tokens > 0 ? 'false' : 'true',
+            style: { '--i': index },
           })
         }),
       )
@@ -2151,10 +2234,13 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
     function KpiStrip(props) {
       const k = props.kpis
       const ready = props.ready
-      const tokenValue = (value) => {
-        const parts = tokenParts(value)
-        return [parts]
-      }
+      // 首次拿到数据时从 0 计数到目标值，之后的变化做短过渡；未就绪时目标为 0（显示「—」）
+      const shownTokens = useTween(ready ? k.tokens : 0, 900)
+      const shownToday = useTween(ready ? k.today : 0, 900)
+      const shownTurn = useTween(ready ? k.longestTurnMs : 0, 900)
+      const shownLongest = useTween(ready ? k.longestStreak : 0, 700)
+      const shownCurrent = useTween(ready ? k.currentStreak : 0, 700)
+      const tokenValue = (value) => [tokenParts(Math.round(value))]
       const dayValue = (value) => [{ value: String(Math.max(0, Math.round(toNumber(value)))), unit: t('unit.day') }]
       return h(
         'section',
@@ -2165,30 +2251,30 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
           hero: true,
           label: t('stat.tokens'),
           raw: ready ? k.tokens : undefined,
-          parts: ready ? tokenValue(k.tokens) : null,
+          parts: ready ? tokenValue(shownTokens) : null,
           extra: h(Sparkline, { points: ready ? k.spark : [] }),
         }),
-        h(Kpi, { id: 'today', icon: 'today', label: t('stat.today'), raw: ready ? k.today : undefined, parts: ready ? tokenValue(k.today) : null }),
+        h(Kpi, { id: 'today', icon: 'today', label: t('stat.today'), raw: ready ? k.today : undefined, parts: ready ? tokenValue(shownToday) : null }),
         h(Kpi, {
           id: 'longestTurn',
           icon: 'clock',
           label: t('stat.longestTurn'),
           raw: ready ? k.longestTurnMs : undefined,
-          parts: ready ? durationParts(k.longestTurnMs) : null,
+          parts: ready ? durationParts(k.longestTurnMs > 0 ? Math.max(60000, shownTurn) : 0) : null,
         }),
         h(Kpi, {
           id: 'longestStreak',
           icon: 'calendar',
           label: t('stat.longestStreak'),
           raw: ready ? k.longestStreak : undefined,
-          parts: ready ? dayValue(k.longestStreak) : null,
+          parts: ready ? dayValue(shownLongest) : null,
         }),
         h(Kpi, {
           id: 'currentStreak',
           icon: 'flame',
           label: t('stat.currentStreak'),
           raw: ready ? k.currentStreak : undefined,
-          parts: ready ? dayValue(k.currentStreak) : null,
+          parts: ready ? dayValue(shownCurrent) : null,
         }),
       )
     }
