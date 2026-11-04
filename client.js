@@ -2097,8 +2097,8 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
     /* ---------------------------------------------------------------- 状态条 */
 
     /**
-     * 只在有事可说时出现：首扫进度 / 后台重扫进度、读取失败（带重试）、没有任何会话。
-     * 都是状态，不是说明文字。
+     * 只在有事可说时出现：首次全量扫描的进度、读取失败（带重试）、没有任何会话。
+     * 宿主在后台定时保鲜补扫时不提示——数字补扫完会自己更新。都是状态，不是说明文字。
      */
     function StatusBar(props) {
       const { snapshot, error, hasData } = props
@@ -2120,7 +2120,8 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
       const progress = snapshot.progress || {}
       const done = toNumber(progress.done)
       const total = toNumber(progress.total)
-      if (snapshot.scanning) {
+      // 只有首次全量扫描（数字还不完整）或者还没有任何数据时才显示进度
+      if (snapshot.scanning && (snapshot.firstScan || !hasData)) {
         const ratio = total > 0 ? Math.min(1, done / total) : 0
         return h(
           'div',
@@ -2260,21 +2261,20 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
       const { snapshot, error, refresh, reload } = useSnapshot()
       const mounted = useMounted()
       const [refreshing, setRefreshing] = useState(false)
+      // 用户亲手点的刷新：图标一直转到这次重扫结束；宿主后台的保鲜补扫不转
+      const [manualScan, setManualScan] = useState(false)
       const [updating, setUpdating] = useState(false)
 
+      // 打开页面不再强制重扫：宿主在后台定时保鲜，读快照时数据旧了也会自己静默补扫。
       const runRefresh = useCallback(async () => {
         setRefreshing(true)
+        setManualScan(true)
         try {
           await refresh()
         } finally {
           if (mounted.current) setRefreshing(false)
         }
       }, [refresh, mounted])
-
-      useEffect(() => {
-        // 打开页面就请求一次后台补扫：页面先画旧快照，补扫开始后快照带 scanning，切到快轮询。
-        runRefresh()
-      }, [runRefresh])
 
       const totals = (snapshot && snapshot.totals) || {}
       const daily = snapshot && Array.isArray(snapshot.daily) ? snapshot.daily : []
@@ -2288,6 +2288,10 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
       const today = startOfDay(new Date())
       const todayKey = localDateKey(today)
       const kpis = useMemo(() => deriveKpis(snapshot, today), [snapshot, todayKey])
+
+      useEffect(() => {
+        if (manualScan && !refreshing && snapshot && !snapshot.scanning) setManualScan(false)
+      }, [manualScan, refreshing, snapshot])
       const todayEntry = daily.find((entry) => entry && entry.date === todayKey) || null
 
       useEffect(() => {
@@ -2340,7 +2344,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
             update: updateInfo,
             updating,
             onUpdate: startUpdate,
-            busy: refreshing || scanning,
+            busy: refreshing || (manualScan && scanning),
             onRefresh: runRefresh,
           }),
           h(StatusBar, { snapshot, error, hasData, onRetry: reload }),

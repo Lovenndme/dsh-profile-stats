@@ -266,15 +266,16 @@
     if (state.view === 'scanning') {
       // 首次扫描：每轮轮询推进一点，停在 68/69，保持「扫描中」画面
       hostState.firstScanDone = Math.min(68, hostState.firstScanDone + 3)
-      return { ok: true, identity: identity, totals: emptyTotals(), daily: [], scanning: true, progress: { done: hostState.firstScanDone, total: 69 }, generatedAt: 0, update: updateBlock() }
+      return { ok: true, identity: identity, totals: emptyTotals(), daily: [], scanning: true, firstScan: true, progress: { done: hostState.firstScanDone, total: 69 }, generatedAt: 0, update: updateBlock() }
     }
     var body = JSON.parse(JSON.stringify(fullSnapshot))
     body.generatedAt = Date.now()
     body.update = updateBlock()
     if (hostState.scanLeft > 0) {
-      // 点了刷新：后台重扫两三轮，带着已有数据显示进度
+      // 点了刷新：后台重扫两三轮（不是首次扫描，页面只转刷新图标）
       hostState.scanLeft -= 1
       body.scanning = true
+      body.firstScan = false
       body.progress = { done: 69 - hostState.scanLeft * 2, total: 69 }
     }
     return body
