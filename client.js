@@ -18,6 +18,7 @@ window.__ModuleLoader__.load({
     const useEffect = React.useEffect
     const useMemo = React.useMemo
     const useCallback = React.useCallback
+    const useRef = React.useRef
 
     const NS = 'dsh-profile-stats'
     const SNAPSHOT_URL = '/api/dsh-profile-stats/snapshot'
@@ -515,45 +516,79 @@ window.__ModuleLoader__.load({
 
     /* -------------------------------------------------------------- 数据拉取 */
 
+    /**
+     * 快照轮询。`reload()` 立刻重拉一次；`refresh()` 先请求宿主重扫，再立刻重拉——
+     * 新快照带 scanning: true，于是切到 900ms 快轮询，扫描进度和新数字马上可见。
+     * （旧实现的刷新只 POST，要等下一轮 45 秒轮询才看得到变化；重试则整页 reload。）
+     */
     function useSnapshot(intervalMs = 45000) {
       const [snapshot, setSnapshot] = useState(null)
       const [error, setError] = useState(null)
+      const loaderRef = useRef(null)
 
       useEffect(() => {
         let alive = true
         let timer = null
+        // 每次请求一个序号：连点刷新时，先发出的慢请求不能覆盖后发出的新结果。
+        let ticket = 0
+
+        const schedule = (delay) => {
+          if (timer) clearTimeout(timer)
+          timer = setTimeout(load, delay)
+        }
 
         const load = async () => {
+          ticket += 1
+          const mine = ticket
+          if (timer) {
+            clearTimeout(timer)
+            timer = null
+          }
+          // 宿主卡住时不能让轮询永久停摆：15 秒没回应就当失败，按失败节奏重试。
+          const controller = typeof AbortController === 'function' ? new AbortController() : null
+          const abortTimer = controller ? setTimeout(() => controller.abort(), 15000) : null
           try {
             const response = await fetch(SNAPSHOT_URL, {
               headers: { accept: 'application/json' },
               cache: 'no-store',
+              signal: controller ? controller.signal : undefined,
             })
             if (!response.ok) throw new Error(`HTTP ${response.status}`)
             const payload = await response.json()
-            if (!alive) return
+            if (!alive || mine !== ticket) return
             setSnapshot(payload)
             setError(null)
-            timer = setTimeout(load, payload && payload.scanning ? 900 : intervalMs)
+            schedule(payload && payload.scanning ? 900 : intervalMs)
           } catch (failure) {
-            if (!alive) return
+            if (!alive || mine !== ticket) return
             setError(failure)
-            timer = setTimeout(load, 4000)
+            schedule(4000)
+          } finally {
+            if (abortTimer) clearTimeout(abortTimer)
           }
         }
 
+        loaderRef.current = load
         load()
         return () => {
           alive = false
+          loaderRef.current = null
           if (timer) clearTimeout(timer)
         }
       }, [intervalMs])
 
-      const refresh = useCallback(() => {
-        fetch(REFRESH_URL, { method: 'POST' }).catch(() => {})
-      }, [])
+      const reload = useCallback(() => (loaderRef.current ? loaderRef.current() : undefined), [])
 
-      return { snapshot, error, refresh }
+      const refresh = useCallback(async () => {
+        try {
+          await fetch(REFRESH_URL, { method: 'POST' })
+        } catch {
+          /* 宿主没回应也照样重拉一次快照，错误态由快照请求呈现 */
+        }
+        return reload()
+      }, [reload])
+
+      return { snapshot, error, refresh, reload }
     }
 
     /* ------------------------------------------------------------------- 样式 */
@@ -1485,7 +1520,7 @@ window.__ModuleLoader__.load({
     }
     function ProfilePage() {
       useLocaleRevision()
-      const { snapshot, error, refresh } = useSnapshot()
+      const { snapshot, error, refresh, reload } = useSnapshot()
       const [updating, setUpdating] = useState(false)
 
       useEffect(() => {
@@ -1573,9 +1608,9 @@ window.__ModuleLoader__.load({
                 {
                   type: 'button',
                   className: 'dps-button',
+                  // 只重拉本插件的快照；旧实现 window.location.reload() 会重载整个 DSH 应用。
                   onClick: () => {
-                    refresh()
-                    window.location.reload()
+                    reload()
                   },
                 },
                 t('action.retry'),
@@ -1652,13 +1687,17 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { className: 'dps-header-actions' },
-              updateReady
+              // 升级进行中优先显示「更新中…」：旧实现按钮在升级期间仍可点击，连点会并发触发两轮卸载重装。
+              updating
+                ? h('span', { className: 'dps-section-note' }, t('action.updating'))
+                : updateReady
                 ? h(
                     'button',
                     {
                       type: 'button',
                       className: 'dps-button',
                       onClick: async () => {
+                        if (updating) return
                         const target = updateInfo.latest
                         setUpdating(true)
                         await fetch(UPDATE_URL, { method: 'POST' }).catch(() => {})
@@ -1680,9 +1719,7 @@ window.__ModuleLoader__.load({
                     },
                     t('action.update', { version: updateInfo.latest }),
                   )
-                : updating
-                  ? h('span', { className: 'dps-section-note' }, t('action.updating'))
-                  : null,
+                : null,
                 h(
                   'button',
                   {
