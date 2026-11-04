@@ -1640,7 +1640,7 @@ window.__ModuleLoader__.load({
         totals && hasAnySession ? h('div', { className: 'dps-section' }, h(ModelChart, { daily })) : null
       const providerSection =
         totals && hasAnySession
-          ? h('div', { className: 'dps-section' }, h(ProviderBreakdown, { today: todayEntry, totals: scoped.totals }))
+          ? h('div', { className: 'dps-section' }, h(ProviderBreakdown, { today: todayEntry, totals }))
           : null
       return h(
         'div',
