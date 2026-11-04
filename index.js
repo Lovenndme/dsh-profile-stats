@@ -864,6 +864,8 @@ export function apply(ctx) {
     }
     if (!updateState.canUpdate) return { ok: false, error: 'not-registry-install' }
     if (!target) return { ok: false, error: 'no-target' }
+    // 防重入：连点两次曾经会并发跑两轮 removeBundle → installBundle，第二轮卸掉刚装好的包。
+    if (updateState.running) return { ok: false, error: 'in-progress', target }
     if (compareVersions(target, updateState.installed) <= 0) return { ok: false, error: 'up-to-date' }
 
     updateState.running = true
