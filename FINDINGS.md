@@ -218,10 +218,12 @@
 ### [C-5] 刷新距上次扫描不足 15 秒时宿主忽略重扫
 - `kick(true)` 的保护：15 秒内的强制刷新不重扫，此时刷新按钮只是重拉一次快照。这是有意的节流，保留。
 
-### [C-6] 远端 `origin/main` 在 `v2.4.11` 之后已有 10 个提交却没有发版
-- `.github/workflows/publish-pending.yml` 每 4 小时会把 `origin/main` 上「上次发版标签之后的提交」自动发布到 npm。远端已经积压了 10 个提交却没有新版本，
-  说明该 workflow 目前可能失败或被停用（没有排查）。**注意：一旦它恢复工作，推送到 `origin/main` 的任何提交都会在 4 小时内被自动发布给所有用户。**
-  本次所有提交都只在本地，没有推送。本机的计划任务「DSH publish pending plugin versions」当前为 Disabled。
+### [C-6] 推送到 `origin/main` 会触发自动发版
+- `.github/workflows/publish-pending.yml`（已启用，最近几次运行都成功）每 4 小时检查一次 `origin/main`：上次 `v*` 标签之后有提交，就自动升补丁版本、
+  写 CHANGELOG、发布到 npm、打标签。GitHub 的定时任务是尽力而为，实际运行时间可能比整点晚，偶尔会跳过一轮。
+- 2026-11-04 09:22 UTC 本次全部提交已按主人要求推送；`v2.4.11` 之后共 38 个提交待发布，下一次定时运行会发布为 2.4.12。
+  （初稿里写「远端积压 10 个提交却没发版，workflow 可能失败或停用」是误判：那 10 个提交是在最近一次运行之后才推上去的。）
+- 本机的计划任务「DSH publish pending plugin versions」为 Disabled。
 
 ### [C-7] 测试不在仓库里
 - 两份测试在仓库外的 `../profile-stats-verify/`，不受版本控制，回退仓库不会回退测试。建议移进仓库（例如 `test/`），并让 `tools/*.ps1` 与 workflow 引用新位置。
