@@ -852,10 +852,7 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** 模型系列配色（超出前几名的一律聚合成「其他」）。 */
-    const MODEL_PALETTE = PROVIDER_COLORS
-    /** 「其他模型」单独一色：旧实现复用了 MODEL_PALETTE[2]，和第三名家族同色、分不出来。 */
-    const MODEL_OTHER_COLOR = 'color-mix(in srgb, var(--dsw-alias-label-secondary) 45%, transparent)'
+    /* ------------------------------------------------------------ 模型名称 */
 
     const MODEL_VENDORS = {
       deepseek: 'DeepSeek', claude: 'Claude', gpt: 'GPT', gemini: 'Gemini', qwen: 'Qwen',
@@ -931,284 +928,6 @@ window.__ModuleLoader__.load({
       return out.join(' ')
     }
 
-    /** 模型图自带的范围开关（页面级范围生效时隐藏）。 */
-    /** 通用分段开关：id / label 列表 + 当前值 + 回调。 */
-    function segmentedSwitch(options, active, onPick) {
-      return h(
-        'div',
-        { className: 'dps-switch' },
-        options.map((option) =>
-          h(
-            'button',
-            {
-              key: option.id,
-              type: 'button',
-              'data-active': active === option.id ? 'true' : 'false',
-              onClick: () => onPick(option.id),
-            },
-            option.label,
-          ),
-        ),
-      )
-    }
-
-    /** 模型分布自己的时间窗：日 / 周 / 月 各 12 个桶。 */
-    const MODEL_WINDOW = 12
-
-    function modelBuckets(daily, granularity) {
-      const byDate = new Map()
-      for (const entry of daily) {
-        if (entry && typeof entry.date === 'string') byDate.set(entry.date, entry)
-      }
-      const today = startOfDay(new Date())
-      const keys = []
-      if (granularity === 'day') {
-        for (let offset = MODEL_WINDOW - 1; offset >= 0; offset -= 1) {
-          keys.push(localDateKey(addDays(today, -offset)))
-        }
-      } else if (granularity === 'month') {
-        for (let offset = MODEL_WINDOW - 1; offset >= 0; offset -= 1) {
-          const point = new Date(today.getFullYear(), today.getMonth() - offset, 1)
-          keys.push(`${point.getFullYear()}-${String(point.getMonth() + 1).padStart(2, '0')}`)
-        }
-      } else {
-        const thisWeek = startOfWeek(today)
-        for (let offset = MODEL_WINDOW - 1; offset >= 0; offset -= 1) {
-          keys.push(localDateKey(addDays(thisWeek, -offset * 7)))
-        }
-      }
-
-      const bucketOf = (dateKey) => {
-        if (granularity === 'month') return dateKey.slice(0, 7)
-        if (granularity === 'week') {
-          const parts = dateKey.split('-')
-          return localDateKey(startOfWeek(new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]))))
-        }
-        return dateKey
-      }
-
-      const buckets = new Map(keys.map((key) => [key, { key, values: {} }]))
-      for (const [dateKey, entry] of byDate) {
-        const bucket = buckets.get(bucketOf(dateKey))
-        if (!bucket) continue
-        for (const [family, raw] of Object.entries(entry.byModel || {})) {
-          const value = toNumber(raw)
-          if (!(value > 0)) continue
-          const group = modelFamily(family)
-          bucket.values[group] = (bucket.values[group] || 0) + value
-        }
-      }
-      return { list: keys.map((key) => buckets.get(key)), keys }
-    }
-
-    function bucketLabel(key, granularity) {
-      // 月份名走 Intl（旧实现硬编码「月」，英文界面也显示「11月」）
-      if (granularity === 'month') return monthLabel(new Date(Number(key.slice(0, 4)), Number(key.slice(5, 7)) - 1, 1))
-      return key.slice(5).replace('-', '/')
-    }
-
-    /**
-     * 模型分布：自带「日 / 周 / 月」与「柱状 / 折线」两套开关，不受页面级时间范围影响。
-     * 柱状 = 前 6 个模型家族堆叠；折线 = 每桶总量 + 平均线。
-     */
-    /**
-     * 模型分布：自带「日 / 周 / 月」开关，不受页面级时间范围影响。
-     * 柱状 = 前 6 个模型家族堆叠（其余合成「其他模型」）。
-     */
-    function ModelChart(props) {
-      const [granularity, setGranularity] = useState('week')
-      const [tip, setTip] = useState(null)
-      const daily = props.daily || []
-
-      const { list: buckets } = modelBuckets(daily, granularity)
-      const familyTotals = new Map()
-      for (const bucket of buckets) {
-        for (const [family, value] of Object.entries(bucket.values)) {
-          familyTotals.set(family, (familyTotals.get(family) || 0) + value)
-        }
-      }
-      const ranked = [...familyTotals.entries()].sort((left, right) => right[1] - left[1]).filter(([, value]) => value > 0)
-      const rangeTotal = ranked.reduce((sum, [, value]) => sum + value, 0)
-
-      const heads = h(
-        'div',
-        { className: 'dps-chart-head' },
-        h(
-          'div',
-          { className: 'dps-chart-title' },
-          t('section.model'),
-          h('span', { className: 'dps-chart-total' }, t('chart.total', { value: formatTokens(rangeTotal) })),
-        ),
-        h(
-          'div',
-          { className: 'dps-chart-tools' },
-          segmentedSwitch(
-            [
-              { id: 'day', label: t('grain.day') },
-              { id: 'week', label: t('grain.week') },
-              { id: 'month', label: t('grain.month') },
-            ],
-            granularity,
-            setGranularity,
-          ),
-        ),
-      )
-
-      const showTip = (bucket) => (event) => {
-        const clientX = typeof event.clientX === 'number' ? event.clientX : null
-        const clientY = typeof event.clientY === 'number' ? event.clientY : null
-        const viewportWidth = typeof window !== 'undefined' && window.innerWidth ? window.innerWidth : 1200
-        const viewportHeight = typeof window !== 'undefined' && window.innerHeight ? window.innerHeight : 800
-        let x = viewportWidth / 2
-        let y = 60
-        if (clientX !== null && clientY !== null) {
-          const tipWidth = 240
-          x = clientX + 14 + tipWidth > viewportWidth - 8 ? clientX - tipWidth - 8 : clientX + 14
-          y = clientY + 16 + 120 > viewportHeight - 8 ? clientY - 120 : clientY + 16
-        }
-        setTip({ bucket, x, y })
-      }
-
-      if (ranked.length === 0) {
-        return h('div', { className: 'dps-card dps-chart' }, heads, h('div', { className: 'dps-chart-plot' }))
-      }
-
-      const top = ranked.slice(0, 6)
-      const rest = ranked.slice(6)
-      const series = top.map(([family], index) => ({
-        key: family,
-        name: familyLabel(family),
-        color: MODEL_PALETTE[index % MODEL_PALETTE.length],
-        total: familyTotals.get(family) || 0,
-      }))
-      if (rest.length > 0) {
-        series.push({
-          key: '__other',
-          name: `${t('model.others')} (${rest.length})`,
-          color: MODEL_OTHER_COLOR,
-          total: rest.reduce((sum, [, value]) => sum + value, 0),
-        })
-      }
-      const restKeys = new Set(rest.map(([family]) => family))
-      const valueOf = (bucket, key) => {
-        if (key !== '__other') return toNumber(bucket.values[key])
-        let sum = 0
-        for (const [family, value] of Object.entries(bucket.values)) {
-          if (restKeys.has(family)) sum += value
-        }
-        return sum
-      }
-
-      // 纵轴按整根堆叠柱的合计取最大值：旧实现取的是单个分段的最大值，
-      // 合计更高的柱子会超出坐标轴、被 overflow:hidden 截掉顶部。
-      let max = 0
-      for (const bucket of buckets) {
-        let stack = 0
-        for (const item of series) stack += valueOf(bucket, item.key)
-        max = Math.max(max, stack)
-      }
-      if (!(max > 0)) max = 1
-
-      const step = niceStep(max)
-      const axisMax = Math.max(step, Math.ceil(max / step) * step)
-      const tickValues = []
-      for (let value = 0; value <= axisMax + step / 1000; value += step) tickValues.push(value)
-
-      const stride = Math.max(1, Math.ceil(buckets.length / 12))
-
-      const plot = h(
-        'div',
-        { className: 'dps-chart-plot' },
-        h(
-          'div',
-          { className: 'dps-chart-ticks' },
-          tickValues.map((value) =>
-            h(
-              'div',
-              { className: 'dps-chart-tick', key: value, style: { bottom: `${(value / axisMax) * 100}%` } },
-              h('span', null, formatAxis(value)),
-            ),
-          ),
-        ),
-        h(
-          'div',
-          { className: 'dps-chart-scroll' },
-          h(
-            'div',
-            { className: 'dps-chart-bars', key: `bar-${granularity}`, style: { minWidth: `${buckets.length * 14}px` } },
-            buckets.map((bucket, index) =>
-              h(
-                'div',
-                {
-                  className: 'dps-chart-bucket',
-                  key: bucket.key,
-                  onMouseEnter: showTip(bucket),
-                  onMouseMove: showTip(bucket),
-                  onMouseLeave: () => setTip(null),
-                },
-                h(
-                  'div',
-                  { className: 'dps-chart-stack', style: { animationDelay: `${Math.min(index * 18, 320)}ms` } },
-                  series
-                    .slice()
-                    .reverse()
-                    .map((item) => {
-                      const value = valueOf(bucket, item.key)
-                      if (!(value > 0)) return null
-                      return h('div', {
-                        key: item.key,
-                        className: 'dps-chart-seg',
-                        style: {
-                          height: `${axisMax > 0 ? (value / axisMax) * 100 : 0}%`,
-                          background: item.color,
-                        },
-                      })
-                    }),
-                ),
-                index % stride === 0
-                  ? h('div', { className: 'dps-chart-label' }, bucketLabel(bucket.key, granularity))
-                  : null,
-              ),
-            ),
-          ),
-        ),
-      )
-
-      const legend = h(
-        'div',
-        { className: 'dps-chart-legend' },
-        series.map((item) =>
-          h(
-            'span',
-            { className: 'dps-chart-legend-item', key: item.key },
-            h('span', { className: 'dps-dot', style: { background: item.color } }),
-            item.name,
-            h('span', { className: 'dps-chart-legend-total' }, formatTokens(item.total)),
-          ),
-        ),
-      )
-
-      const tooltip = tip
-        ? h(
-            'div',
-            { className: 'dps-tip', style: { left: `${tip.x}px`, top: `${tip.y}px`, transform: 'translate(0, 0)' } },
-            h('div', { className: 'dps-tip-date' }, bucketLabel(tip.bucket.key, granularity)),
-            series.map((item) => {
-              const value = valueOf(tip.bucket, item.key)
-              if (!(value > 0)) return null
-              return h(
-                'div',
-                { className: 'dps-tip-row', key: item.key },
-                h('span', { className: 'dps-dot', style: { background: item.color } }),
-                h('span', null, item.name),
-                h('span', { className: 'dps-tip-value' }, formatTokens(value)),
-              )
-            }),
-          )
-        : null
-
-      return h('div', { className: 'dps-card dps-chart' }, heads, plot, legend, tooltip)
-    }
     /* ------------------------------------------------------------ 活动图数据 */
 
     /** 活动图几何（SVG 用户单位）：格距 10、格子 8，三档共用同一坐标系，所以切换时高度不变。 */
@@ -1670,6 +1389,334 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /* ------------------------------------------------------------ 模型分布数据 */
+
+    /** 模型分布自己的时间窗：日 / 周 / 月 各 12 个桶；前 6 个家族各自一段，其余合成「其他模型」。 */
+    const MODEL_WINDOW = 12
+    const MODEL_TOP = 6
+    const SERIES_COLORS = ['var(--dps-s1)', 'var(--dps-s2)', 'var(--dps-s3)', 'var(--dps-s4)', 'var(--dps-s5)', 'var(--dps-s6)']
+    const OTHER_COLOR = 'var(--dps-other)'
+
+    /** 窗口内的桶（含没有活动的桶）：key + 起止日期。周一起算；本周/本月的终点截到今天。 */
+    function modelBucketFrames(granularity, today) {
+      const todayStart = startOfDay(today)
+      const frames = []
+      for (let offset = MODEL_WINDOW - 1; offset >= 0; offset -= 1) {
+        if (granularity === 'month') {
+          const start = new Date(todayStart.getFullYear(), todayStart.getMonth() - offset, 1)
+          const last = new Date(start.getFullYear(), start.getMonth() + 1, 0)
+          const key = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}`
+          frames.push({ key, start, end: last.getTime() > todayStart.getTime() ? todayStart : last })
+        } else if (granularity === 'week') {
+          const start = addDays(startOfWeek(todayStart), -offset * 7)
+          const last = addDays(start, 6)
+          frames.push({ key: localDateKey(start), start, end: last.getTime() > todayStart.getTime() ? todayStart : last })
+        } else {
+          const day = addDays(todayStart, -offset)
+          frames.push({ key: localDateKey(day), start: day, end: day })
+        }
+      }
+      return frames
+    }
+
+    function modelBucketKeyOf(date, granularity) {
+      if (granularity === 'month') return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+      if (granularity === 'week') return localDateKey(startOfWeek(date))
+      return localDateKey(date)
+    }
+
+    /**
+     * 12 个桶 × 模型家族。全程原始整数：桶合计、家族合计、头部总计都是同一批整数相加，
+     * 纵轴按最高的那根堆叠柱取整齐刻度。
+     */
+    function buildModelSeries(daily, granularity, today) {
+      const buckets = modelBucketFrames(granularity, today).map((frame) => ({ ...frame, values: {}, total: 0 }))
+      const index = new Map(buckets.map((bucket) => [bucket.key, bucket]))
+      for (const entry of indexDaily(daily).values()) {
+        const bucket = index.get(modelBucketKeyOf(parseDateKey(entry.date), granularity))
+        if (!bucket) continue
+        for (const [raw, amount] of Object.entries(entry.byModel || {})) {
+          const value = toNumber(amount)
+          if (!(value > 0)) continue
+          const family = modelFamily(raw)
+          bucket.values[family] = (bucket.values[family] || 0) + value
+          bucket.total += value
+        }
+      }
+      const familyTotals = new Map()
+      for (const bucket of buckets) {
+        for (const [family, value] of Object.entries(bucket.values)) familyTotals.set(family, (familyTotals.get(family) || 0) + value)
+      }
+      const ranked = [...familyTotals.entries()]
+        .filter(([, value]) => value > 0)
+        .sort((left, right) => right[1] - left[1] || (left[0] < right[0] ? -1 : 1))
+      const top = ranked.slice(0, MODEL_TOP)
+      const rest = ranked.slice(MODEL_TOP)
+      const series = top.map(([family, value], position) => ({
+        key: family,
+        name: familyLabel(family),
+        color: SERIES_COLORS[position],
+        total: value,
+        members: [family],
+      }))
+      if (rest.length > 0) {
+        series.push({
+          key: '__other',
+          name: `${t('model.others')} (${rest.length})`,
+          color: OTHER_COLOR,
+          total: rest.reduce((sum, [, value]) => sum + value, 0),
+          members: rest.map(([family]) => family),
+        })
+      }
+      const restSet = new Set(rest.map(([family]) => family))
+      let total = 0
+      let max = 0
+      for (const bucket of buckets) {
+        bucket.segments = series.map((item) => {
+          let value = 0
+          if (item.key === '__other') {
+            for (const [family, amount] of Object.entries(bucket.values)) if (restSet.has(family)) value += amount
+          } else {
+            value = bucket.values[item.key] || 0
+          }
+          return { key: item.key, value }
+        })
+        total += bucket.total
+        max = Math.max(max, bucket.total)
+      }
+      return { granularity, buckets, series, total, axis: niceScale(max > 0 ? max : 1, 4) }
+    }
+
+    function bucketTick(bucket, granularity) {
+      if (granularity === 'month') return monthLabel(bucket.start)
+      return formatDate(bucket.start, { month: 'numeric', day: 'numeric' })
+    }
+
+    function bucketTitle(bucket, granularity) {
+      if (granularity === 'month') return formatDate(bucket.start, { year: 'numeric', month: 'long' })
+      if (granularity === 'week') {
+        const short = { month: 'short', day: 'numeric' }
+        return t('tip.weekRange', { start: formatDate(bucket.start, short), end: formatDate(bucket.end, short) })
+      }
+      return formatDate(bucket.start, { month: 'long', day: 'numeric', weekday: 'short' })
+    }
+
+    /* -------------------------------------------------------------- 模型分布 */
+
+    function ModelCard(props) {
+      const today = props.today
+      const [granularity, setGranularity] = useState('week')
+      const [active, setActive] = useState(null)
+      const barsRef = useRef(null)
+      const data = useMemo(() => buildModelSeries(props.daily, granularity, today), [props.daily, granularity, localDateKey(today)])
+      const count = data.buckets.length
+      const empty = data.total <= 0
+
+      const indexFromEvent = (event) => {
+        const element = barsRef.current
+        if (!element || typeof element.getBoundingClientRect !== 'function') return null
+        const rect = element.getBoundingClientRect()
+        if (!(rect.width > 0)) return null
+        const position = Math.floor(((event.clientX - rect.left) / rect.width) * count)
+        return position >= 0 && position < count ? position : null
+      }
+      const onMove = (event) => {
+        const position = indexFromEvent(event)
+        if (position !== active) setActive(position)
+      }
+      const onKeyDown = (event) => {
+        const current = active === null ? count - 1 : active
+        let next = null
+        if (event.key === 'ArrowLeft') next = Math.max(0, current - 1)
+        else if (event.key === 'ArrowRight') next = Math.min(count - 1, current + 1)
+        else if (event.key === 'Home') next = 0
+        else if (event.key === 'End') next = count - 1
+        else if (event.key === 'Escape') {
+          setActive(null)
+          return
+        }
+        if (next === null) return
+        if (typeof event.preventDefault === 'function') event.preventDefault()
+        setActive(next)
+      }
+
+      const ticks = data.axis.ticks
+      const axisMax = data.axis.max
+
+      const columns = data.buckets.map((bucket, position) => {
+        const height = axisMax > 0 ? (bucket.total / axisMax) * 100 : 0
+        return h(
+          'div',
+          {
+            key: bucket.key,
+            className: 'dps-mc-col',
+            'data-bucket': bucket.key,
+            'data-total': bucket.total,
+            'data-active': active === position ? 'true' : 'false',
+            'data-dim': active !== null && active !== position ? 'true' : 'false',
+          },
+          h(
+            'div',
+            { className: 'dps-mc-stack', style: { height: `${height}%` } },
+            bucket.segments
+              .filter((segment) => segment.value > 0)
+              .map((segment) =>
+                h('span', {
+                  key: segment.key,
+                  className: 'dps-mc-seg',
+                  'data-series': segment.key,
+                  'data-value': segment.value,
+                  style: {
+                    height: `${(segment.value / bucket.total) * 100}%`,
+                    background: (data.series.find((item) => item.key === segment.key) || {}).color,
+                  },
+                }),
+              ),
+          ),
+        )
+      })
+
+      let tip = null
+      let liveText = ''
+      if (active !== null && data.buckets[active] && barsRef.current && typeof barsRef.current.getBoundingClientRect === 'function') {
+        const bucket = data.buckets[active]
+        const rect = barsRef.current.getBoundingClientRect()
+        const columnWidth = rect.width / count
+        const top = rect.top + rect.height * (1 - (axisMax > 0 ? bucket.total / axisMax : 0))
+        const title = bucketTitle(bucket, granularity)
+        const rows = data.series
+          .map((item, position) => ({ item, value: bucket.segments[position] ? bucket.segments[position].value : 0 }))
+          .filter((row) => row.value > 0)
+        liveText = `${title} ${t('tip.total')} ${formatTokens(bucket.total)}`
+        tip = h(
+          Popover,
+          { anchor: { left: rect.left + active * columnWidth, top, width: columnWidth, height: 1 } },
+          h('div', { className: 'dps-pop-title' }, title),
+          rows.length === 0
+            ? h('div', { className: 'dps-pop-value' }, t('tip.none'))
+            : h(
+                'div',
+                { className: 'dps-pop-rows' },
+                rows.map((row) =>
+                  h(
+                    'div',
+                    { key: row.item.key, className: 'dps-pop-row' },
+                    h('i', { style: { background: row.item.color } }),
+                    h('span', { className: 'dps-pop-name' }, row.item.name),
+                    h('span', { className: 'dps-pop-num' }, formatTokens(row.value)),
+                  ),
+                ),
+                rows.length > 1
+                  ? h(
+                      'div',
+                      { className: 'dps-pop-row dps-pop-sum' },
+                      h('i', null),
+                      h('span', { className: 'dps-pop-name' }, t('tip.total')),
+                      h('span', { className: 'dps-pop-num' }, formatTokens(bucket.total)),
+                    )
+                  : null,
+              ),
+        )
+      }
+
+      const legend = data.series.length
+        ? h(
+            'ul',
+            { className: 'dps-legend' },
+            data.series.map((item) =>
+              h(
+                'li',
+                {
+                  key: item.key,
+                  'data-series': item.key,
+                  'data-value': item.total,
+                  title: item.key === '__other' ? item.members.map(familyLabel).join('、') : undefined,
+                },
+                h('i', { style: { background: item.color } }),
+                h('span', { className: 'dps-legend-name' }, item.name),
+                h('span', { className: 'dps-legend-value' }, formatTokens(item.total)),
+              ),
+            ),
+          )
+        : null
+
+      return h(
+        'section',
+        { className: 'dps-panel dps-mc', 'data-dps-card': 'model', 'data-grain': granularity, 'data-empty': empty ? 'true' : 'false' },
+        h(
+          'header',
+          { className: 'dps-panel-head' },
+          h(
+            'div',
+            { className: 'dps-panel-title' },
+            h('h2', null, t('section.model')),
+            h(
+              'span',
+              { className: 'dps-panel-meta', 'data-dps-field': 'model-total', 'data-value': data.total },
+              t('chart.total', { value: formatTokens(data.total) }),
+            ),
+          ),
+          h(Segmented, {
+            control: 'model-grain',
+            label: t('section.model'),
+            value: granularity,
+            onChange: (next) => {
+              setGranularity(next)
+              setActive(null)
+            },
+            options: [
+              { id: 'day', label: t('grain.day') },
+              { id: 'week', label: t('grain.week') },
+              { id: 'month', label: t('grain.month') },
+            ],
+          }),
+        ),
+        h(
+          'div',
+          { className: 'dps-mc-chart' },
+          h(
+            'div',
+            { className: 'dps-mc-axis', 'aria-hidden': true },
+            ticks.map((tick) =>
+              h('span', { key: tick, 'data-tick': tick, style: { bottom: `${(tick / axisMax) * 100}%` } }, empty && tick > 0 ? '' : formatAxis(tick)),
+            ),
+          ),
+          h(
+            'div',
+            {
+              className: 'dps-mc-plot',
+              tabIndex: 0,
+              role: 'group',
+              'aria-label': t('aria.model'),
+              onMouseMove: onMove,
+              onMouseLeave: () => setActive(null),
+              onKeyDown,
+              onFocus: () => {
+                if (active === null) setActive(count - 1)
+              },
+              onBlur: () => setActive(null),
+            },
+            h(
+              'div',
+              { className: 'dps-mc-grid', 'aria-hidden': true },
+              ticks.map((tick) => h('i', { key: tick, style: { bottom: `${(tick / axisMax) * 100}%` } })),
+            ),
+            h('div', { ref: barsRef, className: 'dps-mc-bars', 'data-dps-chart': 'model', key: granularity }, columns),
+            empty ? h('div', { className: 'dps-mc-empty' }, t('chart.empty')) : null,
+          ),
+          h('span', { className: 'dps-mc-corner', 'aria-hidden': true }),
+          h(
+            'div',
+            { className: 'dps-mc-ticks', 'aria-hidden': true },
+            data.buckets.map((bucket) => h('span', { key: bucket.key }, bucketTick(bucket, granularity))),
+          ),
+        ),
+        legend,
+        h(LiveText, { text: liveText }),
+        tip,
+      )
+    }
+
     /* ------------------------------------------------------------------- 样式 */
 
     const CSS = `
@@ -1687,6 +1734,13 @@ window.__ModuleLoader__.load({
 --dps-hover:color-mix(in srgb,var(--dsw-alias-label-primary) 5%,transparent);
 --dps-shadow:var(--dsw-alias-bg-mask-2,transparent);
 --dps-radius:16px;
+--dps-s1:var(--dps-accent);
+--dps-s2:var(--dsw-alias-state-success-primary);
+--dps-s3:var(--dsw-alias-state-warn-primary);
+--dps-s4:color-mix(in srgb,var(--dps-accent) 55%,var(--dsw-alias-state-error-primary));
+--dps-s5:color-mix(in srgb,var(--dps-accent) 50%,var(--dsw-alias-state-success-primary));
+--dps-s6:var(--dsw-alias-state-error-primary);
+--dps-other:color-mix(in srgb,var(--dsw-alias-label-secondary) 50%,transparent);
 height:100%;min-height:0;overflow-y:auto;overflow-x:hidden;box-sizing:border-box;
 background:var(--dps-page);color:var(--dps-ink);
 font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
@@ -1795,6 +1849,37 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-pop-title{font-size:11.5px;color:var(--dps-muted);white-space:nowrap}
 .dps-pop-value{font-size:13px;font-weight:650;font-variant-numeric:tabular-nums;white-space:nowrap}
 .dps-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.dps-mc{height:100%}
+.dps-mc-chart{flex:1 1 auto;min-height:250px;display:grid;grid-template-columns:44px minmax(0,1fr);grid-template-rows:minmax(200px,1fr) auto;column-gap:8px;row-gap:8px}
+.dps-mc-axis{position:relative;font-size:11px;color:var(--dps-faint);font-variant-numeric:tabular-nums}
+.dps-mc-axis span{position:absolute;right:0;transform:translateY(50%);line-height:1;white-space:nowrap}
+.dps-mc-plot{position:relative;min-width:0;border-radius:4px}
+.dps-mc-plot:focus-visible{outline-offset:4px}
+.dps-mc-grid{position:absolute;inset:0;pointer-events:none}
+.dps-mc-grid i{position:absolute;left:0;right:0;height:0;border-top:1px dashed var(--dps-line)}
+.dps-mc-grid i:first-child{border-top-style:solid}
+.dps-mc-bars{position:absolute;inset:0;display:grid;grid-template-columns:repeat(12,minmax(0,1fr))}
+.dps-mc-col{position:relative;min-width:0;display:flex;align-items:flex-end;justify-content:center;border-radius:7px 7px 0 0;transition:opacity .15s ease,background-color .15s ease}
+.dps-mc-col[data-active="true"]{background:var(--dps-hover)}
+.dps-mc-col[data-dim="true"]{opacity:.45}
+.dps-mc-stack{width:min(30px,58%);min-height:0;display:flex;flex-direction:column-reverse;border-radius:5px 5px 1.5px 1.5px;overflow:hidden}
+.dps-mc-seg{display:block;flex:0 0 auto;width:100%}
+.dps-mc-seg + .dps-mc-seg{box-shadow:inset 0 -1.5px 0 var(--dps-card)}
+.dps-mc-empty{position:absolute;inset:0;display:grid;place-items:center;font-size:12.5px;color:var(--dps-faint);pointer-events:none}
+.dps-mc-ticks{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));font-size:11px;color:var(--dps-faint);text-align:center;font-variant-numeric:tabular-nums}
+.dps-mc-ticks span{white-space:nowrap;overflow:hidden}
+.dps-legend{list-style:none;margin:0;padding:2px 0 0;display:flex;flex-wrap:wrap;gap:8px 18px;font-size:12px}
+.dps-legend li{display:inline-flex;align-items:center;gap:7px;min-width:0}
+.dps-legend i{width:9px;height:9px;border-radius:2.5px;flex:0 0 auto}
+.dps-legend-name{color:var(--dps-muted);white-space:nowrap}
+.dps-legend-value{color:var(--dps-ink);font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dps-pop-rows{display:flex;flex-direction:column;gap:3px;margin-top:6px;min-width:190px}
+.dps-pop-row{display:grid;grid-template-columns:8px minmax(0,1fr) auto;align-items:center;gap:8px;font-size:12px}
+.dps-pop-row i{display:block;width:8px;height:8px;border-radius:2px}
+.dps-pop-name{color:var(--dps-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dps-pop-num{font-weight:600;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.dps-pop-sum{margin-top:3px;padding-top:6px;border-top:1px solid var(--dps-line)}
+.dps-pop-sum .dps-pop-name{color:var(--dps-ink)}
 /* —— 过渡期：以下是尚未重做的卡片沿用的旧样式，随各卡片重做逐步删除 —— */
 .dps-section-title{font-size:14px;font-weight:600}
 .dps-card{padding:14px;border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-layer-1)}
@@ -1810,35 +1895,11 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-prov-bar > span{display:block;height:100%;border-radius:999px}
 .dps-prov-value{font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap}
 .dps-prov-share{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary);text-align:right}
-.dps-chart{display:flex;flex-direction:column;gap:14px}
 .dps-chart-head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
 .dps-chart-title{display:flex;align-items:baseline;gap:8px;font-size:14px;font-weight:600;color:var(--dsw-alias-label-primary)}
-.dps-chart-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.dps-chart-total{font-size:12px;font-weight:400;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
-.dps-chart-legend{display:flex;align-items:center;justify-content:center;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--dsw-alias-label-secondary)}
-.dps-chart-legend-item{display:inline-flex;align-items:center;gap:6px}
-.dps-chart-legend-total{color:var(--dsw-alias-label-primary);font-variant-numeric:tabular-nums;margin-left:2px}
-.dps-chart-plot{position:relative;height:240px;min-width:0;flex:1 1 auto}
-.dps-chart-ticks{position:absolute;left:0;right:0;top:0;bottom:18px;pointer-events:none}
-.dps-chart-tick{position:absolute;left:0;right:0;border-top:1px solid var(--dsw-alias-border-l2);opacity:.55}
-.dps-chart-tick > span{position:absolute;left:0;top:-8px;font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;padding-right:6px}
-.dps-chart-scroll{position:absolute;left:40px;right:0;top:0;bottom:0;overflow-x:auto;overflow-y:hidden}
-.dps-chart-bars{position:relative;height:100%;display:flex;align-items:stretch;gap:6px}
-@keyframes dps-grow{from{transform:scaleY(0)}to{transform:scaleY(1)}}
-.dps-chart-stack{transform-origin:bottom center;animation:dps-grow .58s cubic-bezier(.22,.61,.36,1) both}
-@media (prefers-reduced-motion:reduce){.dps-chart-stack{animation:none}}
-.dps-chart-bucket{flex:1 1 0;min-width:0;min-height:0;height:100%;display:flex;flex-direction:column}
-.dps-chart-stack{display:flex;flex-direction:column;justify-content:flex-end;align-items:stretch;width:100%;max-width:22px;margin:0 auto;flex:1 1 0;min-height:0;border-radius:2px 2px 0 0;overflow:hidden}
-.dps-chart-seg{width:100%;min-height:0;transition:opacity .12s ease-out}
-.dps-chart-bucket:hover .dps-chart-seg{opacity:.82}
-.dps-chart-label{height:18px;line-height:18px;text-align:center;font-size:11px;color:var(--dsw-alias-label-secondary);white-space:nowrap;overflow:hidden}
-.dps-tip-row{display:flex;align-items:center;gap:6px;font-size:12px;white-space:nowrap}
-.dps-tip-row .dps-dot{width:8px;height:8px;border-radius:2px;flex:0 0 auto}
-.dps-tip-row .dps-tip-value{margin-left:auto;padding-left:12px}
 .dps-switch{display:inline-flex;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;overflow:hidden}
 .dps-switch button{appearance:none;border:none;background:transparent;color:var(--dsw-alias-label-secondary);font-size:11px;padding:4px 10px;cursor:pointer;font-family:inherit}
 .dps-switch button[data-active="true"]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
-.dps-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px;vertical-align:1px}
 .dps-lens{display:flex;flex-direction:column;gap:12px}
 .dps-lens-metrics{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding-top:2px}
 .dps-lens-big{font-size:26px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1}
@@ -1868,7 +1929,6 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-prov-top .dps-prov-value{margin-left:auto;font-weight:600}
 .dps-card{padding:18px 20px;border:1px solid var(--dps-line);border-radius:var(--dps-radius);background:var(--dps-card)}
 .dps-section-title{font-size:14px;font-weight:600}
-.dps-chart-plot{height:260px}
 `
 
     /* ------------------------------------------------------------ 通用组件 */
@@ -2244,7 +2304,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
           h(
             'div',
             { className: 'dps-grid' },
-            h(ModelChart, { daily }),
+            h(ModelCard, { daily, today }),
             h('div', { className: 'dps-side' }, h(Breakdown, { totals }), h(ProviderBreakdown, { today: todayEntry, totals })),
           ),
         ),
