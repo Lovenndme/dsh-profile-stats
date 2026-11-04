@@ -1274,7 +1274,8 @@ window.__ModuleLoader__.load({
     }
 
     function bucketLabel(key, granularity) {
-      if (granularity === 'month') return `${Number(key.slice(5, 7))}月`
+      // 月份名走 Intl（旧实现硬编码「月」，英文界面也显示「11月」）
+      if (granularity === 'month') return monthLabel(new Date(Number(key.slice(0, 4)), Number(key.slice(5, 7)) - 1, 1))
       return key.slice(5).replace('-', '/')
     }
 
