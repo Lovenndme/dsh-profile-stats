@@ -47,6 +47,7 @@ window.__ModuleLoader__.load({
       'breakdown.totalLabel': 'total tokens',
       'lens.total': 'Total tokens',
       'lens.cacheShare': 'Cache share',
+      'lens.cacheHit': 'Cache hit rate',
       'lens.uncachedTotal': 'Uncached total',
       'lens.uncachedShare': 'Uncached input share',
       'lens.cache': 'Cache hit',
@@ -121,6 +122,7 @@ window.__ModuleLoader__.load({
       'breakdown.totalLabel': '总 Token',
       'lens.total': '总 Token',
       'lens.cacheShare': '缓存 Token 占比',
+      'lens.cacheHit': '缓存命中率',
       'lens.uncachedTotal': '非缓存 Token 合计',
       'lens.uncachedShare': '未缓存输入占比',
       'lens.cache': '缓存命中',
@@ -894,10 +896,12 @@ window.__ModuleLoader__.load({
 
       const primary = zoomed ? uncachedTotal : total
       const primaryLabel = zoomed ? t('lens.uncachedTotal') : t('lens.total')
-      // 放大的视图里分母是非缓存合计，第二个指标必须也随之换成「未缓存输入」，
-      // 否则会拿缓存总量去除以非缓存合计，出现 3979% 这种荒谬数字。
-      const secondary = zoomed ? share(uncached) : share(cache)
-      const secondaryLabel = zoomed ? t('lens.uncachedShare') : t('lens.cacheShare')
+      // 顶部第二个指标用官方口径：缓存命中率 = 缓存 ÷（缓存 + 未缓存输入），与官方用量弹窗一致。
+      // 明细行的百分比仍是「占总量」，两者分母不同但各自自洽。
+      // 全程用精确值参与运算，只有到渲染那一步才 toFixed。
+      const cacheHitRate = cache + uncached > 0 ? (cache / (cache + uncached)) * 100 : 0
+      const secondary = zoomed ? share(uncached) : cacheHitRate
+      const secondaryLabel = zoomed ? t('lens.uncachedShare') : t('lens.cacheHit')
 
       const showTip = (row) => (event) => {
         const target = event && event.currentTarget
