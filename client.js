@@ -1021,12 +1021,16 @@ window.__ModuleLoader__.load({
         tooltip,
       )
     }
+    /**
+     * 宿主主题（dsh-client-ui-theme）里没有 --dsw-alias-state-idle-primary 这个 token，
+     * 用它的那一段会是透明的；第五色改由两个已定义的状态色混出来。
+     */
     const PROVIDER_COLORS = [
       'var(--dsw-alias-brand-primary)',
       'var(--dsw-alias-state-success-primary)',
       'var(--dsw-alias-state-warn-primary)',
       'var(--dsw-alias-state-error-primary)',
-      'var(--dsw-alias-state-idle-primary)',
+      'color-mix(in srgb, var(--dsw-alias-state-success-primary) 50%, var(--dsw-alias-state-error-primary))',
       'var(--dsw-alias-label-secondary)',
     ]
 
@@ -1116,14 +1120,9 @@ window.__ModuleLoader__.load({
     }
 
     /** 模型系列配色（超出前几名的一律聚合成「其他」）。 */
-    const MODEL_PALETTE = [
-      'var(--dsw-alias-brand-primary)',
-      'var(--dsw-alias-state-success-primary)',
-      'var(--dsw-alias-state-warn-primary)',
-      'var(--dsw-alias-state-error-primary)',
-      'var(--dsw-alias-state-idle-primary)',
-      'var(--dsw-alias-label-secondary)',
-    ]
+    const MODEL_PALETTE = PROVIDER_COLORS
+    /** 「其他模型」单独一色：旧实现复用了 MODEL_PALETTE[2]，和第三名家族同色、分不出来。 */
+    const MODEL_OTHER_COLOR = 'color-mix(in srgb, var(--dsw-alias-label-secondary) 45%, transparent)'
 
     const MODEL_VENDORS = {
       deepseek: 'DeepSeek', claude: 'Claude', gpt: 'GPT', gemini: 'Gemini', qwen: 'Qwen',
@@ -1352,7 +1351,7 @@ window.__ModuleLoader__.load({
         series.push({
           key: '__other',
           name: `${t('model.others')} (${rest.length})`,
-          color: MODEL_PALETTE[2],
+          color: MODEL_OTHER_COLOR,
           total: rest.reduce((sum, [, value]) => sum + value, 0),
         })
       }
