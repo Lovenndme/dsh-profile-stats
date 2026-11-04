@@ -9,10 +9,10 @@ a split by model, and a split by billing route — all folded from this machine'
 
 ## What you get
 
-- Cumulative tokens, drawn as an input / output / cache-hit donut
-- Today's tokens, longest task time, and active-day streaks
-- A 12-month activity heatmap (daily, weekly, running total)
-- Tokens by model over time (Flash / Pro)
+- Cumulative tokens with a 14-day sparkline, today's tokens, longest task time, and active-day streaks
+- 12-month token activity: a day grid, weekly totals, or the running total
+- Tokens by model family over the last 12 days / weeks / months (stacked)
+- Token mix (Cache Lens): cache hit rate and the cache / uncached input / output split, with a zoom into the uncached part
 - Tokens by provider (today or all time), for reconciling gateway billing
 
 ## Install

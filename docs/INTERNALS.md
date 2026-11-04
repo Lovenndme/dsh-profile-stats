@@ -10,9 +10,11 @@ Back to the [README](../README.md) · [中文 README](../README.zh.md)
 | Today's tokens | The same per-step sum restricted to today's local calendar day. |
 | Longest task | Longest span between a `turn/start` and its `turn/end`. Turns interrupted without a `turn/end` are not counted. |
 | Streaks | An active day has at least one token. The current streak ends today, or yesterday when today has no activity yet. |
-| Token mix | Input / output / cache-hit totals. **Input counts only uncached prompt tokens**; cache hits are separate, so input + cache-hit is the full prompt. |
-| Model split | Model class is a substring match on the model id: names containing `pro` count as Pro, names containing `flash` as Flash, everything else as Other. A bar labelled with the current model name therefore aggregates older variants of that family. |
-| Provider breakdown | Per-step `data.message.source.provider`, e.g. `wincode`, `arkcli-coding-plan`, `myapi`, `deepseek-account`. |
+| Token activity | Last 53 weeks (this week plus 52), weeks start on Monday. *Daily* colours each day by the quartile of non-zero days; *Weekly* draws one bar per week total; *Cumulative* is the running total including usage older than the window, so its last point equals the cumulative tokens. |
+| Token mix (Cache Lens) | Three mutually exclusive parts that add up to the total exactly: cache = `cacheReadTokens + cacheWriteTokens`, output = `outputTokens`, **uncached input = total − cache − output**. `inputTokens` is not used because providers disagree on whether it includes cache hits (measured: +1.6%). Cache hit rate = cache ÷ (cache + uncached input). Row shares are of the total; the zoomed view switches the denominator to the uncached total (uncached input + output), which its column header says. If upstream data is inconsistent (cache + output > total), output and then cache are clamped so the parts still add up. |
+| Model split | Last 12 days / weeks (Monday) / months, including empty buckets. DeepSeek ids are grouped by version and tier (`deepseek-v4-1-flash-261017`, `deepseek-v4.1-flash` → DeepSeek V4.1 Flash; the unversioned official `deepseek-flash` alias → V4.1 Flash). Other vendors keep their own family (`gemini-2-5-pro` → Gemini 2.5 Pro). The top six families get their own colour; the rest are merged into "Other models (N)". |
+| Provider breakdown | Per-step `data.message.source.provider`, e.g. `wincode`, `arkcli-coding-plan`, `myapi`, `deepseek-account`. Shares are of the selected scope's total (today or all time); unknown ids are shown as they are. |
+| Number format | ≥ 1 亿 → 亿, ≥ 1 万 → 万, one decimal; every sum and share is computed on raw integers and formatted only when drawn. Shares below 0.05% read "<0.1%". |
 
 ### Why the provider breakdown exists
 
@@ -57,7 +59,7 @@ update:  installed, latest, available, canUpdate, running, lastResult
 ## Updating
 
 **In-panel button.** When the package was installed from the registry, the panel reads its own `latest`
-version from npm once every six hours and shows an `Update to x.y.z` button in the footer. Clicking it asks
+version from npm once every six hours and shows an `Update to x.y.z` button in the header. Clicking it asks
 the host to remove and reinstall the bundle; the page reloads by itself once the new version is in place.
 
 **Third-party updaters.** An install from the registry can also be followed by a plugin such as
@@ -111,9 +113,18 @@ $DSH_HOME/dsh-profile-stats/update.json     # last in-panel update result
 - Numbers move while a session is active; expect sub-1% drift between two scans a few minutes apart.
 - A day is bucketed by the host's local timezone; moving machines shifts historical buckets.
 - A session whose log cannot be read is counted in `failedSessions` and skipped, never guessed.
-- Model classes are substring matches, so a Pro/Flash label describes a family, not a single model id.
+- A model family label describes a family (version + tier for DeepSeek), not a single model id.
 
 ## Development and release
+
+- **Local preview:** `node tools/preview.mjs` (or double-click `preview/index.html`) renders the real `client.js`
+  against built-in data, with switches for light / dark theme, window width (1280 / 900 / 760), the model chart's
+  monthly view, the zoomed Cache Lens, empty / first-scan / failed-request states, language and the update button.
+  Nothing leaves the page. The page state is kept in the URL hash.
+- Tests live next to the repository in `../profile-stats-verify/`: `client-smoke.mjs` (behaviour of the browser half,
+  dependency-free) and `host-integration.mjs` (the host half against fake sessions). The host test re-runs itself in
+  America/Los_Angeles and the client test runs a DST suite in America/New_York, to catch date arithmetic that only
+  works in UTC+ zones without daylight saving.
 
 - Host changes need a fresh module generation: toggle `include:dsh-profile-stats` off and on via
   `plugin_manager`, or restart Harness. Client changes only need a page refresh.
