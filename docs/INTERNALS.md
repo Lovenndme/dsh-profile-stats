@@ -28,11 +28,16 @@ time and the totals line up.
 
 Host half (`index.js`):
 
-- `GET  /api/dsh-profile-stats/snapshot` — current snapshot; `scanning: true` carries `progress`
-- `POST /api/dsh-profile-stats/refresh` — request a background rescan
+- `GET  /api/dsh-profile-stats/snapshot` — current snapshot; `scanning: true` carries `progress`, and
+  `firstScan: true` marks the first full scan (empty cache, or resuming an interrupted first scan)
+- `POST /api/dsh-profile-stats/refresh` — force an immediate rescan (the refresh button)
 - `POST /api/dsh-profile-stats/update` — request the in-panel update (registry installs only)
 - Reads sessions through `ctx.sessionQuery` (`listSessions`, `readSession`), folds each session and caches
   the fold; only sessions that are still running or were never folded get re-read.
+- Freshness does not depend on the page being open: the host checks every minute and rescans silently once
+  the snapshot is older than 5 minutes; reading the snapshot rescans silently when it is older than 60 seconds
+  (the old snapshot is answered first and the page picks up the new numbers on its next poll). The page only
+  shows scan progress for the first full scan; background top-ups are silent.
 - Fork/seed sessions copy their source events into the log header (`inheritedEventCount`). Those copies are
   excluded — unless the source session is gone from this machine, in which case the copies are the only
   record and are counted.
@@ -48,6 +53,7 @@ leave the machine.
 Snapshot fields:
 
 ```
+top:     ok, generatedAt, scanning, firstScan, progress {done, total}, identity, failedSessions
 totals:  tokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, calls,
          sessions, activeDays, firstDay, lastDay,
          peakDay {date, tokens}, peakStepTokens, peakSessionTokens, longestTurnMs,
