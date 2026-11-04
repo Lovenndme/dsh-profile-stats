@@ -64,10 +64,6 @@ window.__ModuleLoader__.load({
       'grain.day': 'Daily',
       'grain.week': 'Weekly',
       'grain.month': 'Monthly',
-      'grain.bar': 'Bars',
-      'grain.line': 'Line',
-      'grain.lineTotal': 'Usage',
-      'grain.lineAverage': 'Average',
       'stat.rangeTokens': 'Tokens in range',
       'tip.none': 'No activity',
       'tip.tokens': '{value} tokens',
@@ -146,10 +142,6 @@ window.__ModuleLoader__.load({
       'grain.day': '按日',
       'grain.week': '按周',
       'grain.month': '按月',
-      'grain.bar': '柱状',
-      'grain.line': '折线',
-      'grain.lineTotal': '具体使用量',
-      'grain.lineAverage': '平均使用量',
       'stat.rangeTokens': '区间 Token 数',
       'tip.none': '无活动',
       'tip.tokens': '{value} tokens',
@@ -601,7 +593,6 @@ window.__ModuleLoader__.load({
 .dps-chart-head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
 .dps-chart-title{display:flex;align-items:baseline;gap:8px;font-size:14px;font-weight:600;color:var(--dsw-alias-label-primary)}
 .dps-chart-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.dps-line{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 .dps-chart-total{font-size:12px;font-weight:400;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
 .dps-chart-legend{display:flex;align-items:center;justify-content:center;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--dsw-alias-label-secondary)}
 .dps-chart-legend-item{display:inline-flex;align-items:center;gap:6px}
@@ -1278,9 +1269,12 @@ window.__ModuleLoader__.load({
      * 模型分布：自带「日 / 周 / 月」与「柱状 / 折线」两套开关，不受页面级时间范围影响。
      * 柱状 = 前 6 个模型家族堆叠；折线 = 每桶总量 + 平均线。
      */
+    /**
+     * 模型分布：自带「日 / 周 / 月」开关，不受页面级时间范围影响。
+     * 柱状 = 前 6 个模型家族堆叠（其余合成「其他模型」）。
+     */
     function ModelChart(props) {
       const [granularity, setGranularity] = useState('week')
-      const [chartType, setChartType] = useState('bar')
       const [tip, setTip] = useState(null)
       const daily = props.daily || []
 
@@ -1315,14 +1309,6 @@ window.__ModuleLoader__.load({
             granularity,
             setGranularity,
           ),
-          segmentedSwitch(
-            [
-              { id: 'bar', label: t('grain.bar') },
-              { id: 'line', label: t('grain.line') },
-            ],
-            chartType,
-            setChartType,
-          ),
         ),
       )
 
@@ -1342,12 +1328,7 @@ window.__ModuleLoader__.load({
       }
 
       if (ranked.length === 0) {
-        return h(
-          'div',
-          { className: 'dps-card dps-chart' },
-          heads,
-          h('div', { className: 'dps-chart-plot' }),
-        )
+        return h('div', { className: 'dps-card dps-chart' }, heads, h('div', { className: 'dps-chart-plot' }))
       }
 
       const top = ranked.slice(0, 6)
@@ -1375,16 +1356,12 @@ window.__ModuleLoader__.load({
         }
         return sum
       }
-      const totalOf = (bucket) => Object.values(bucket.values).reduce((sum, value) => sum + toNumber(value), 0)
 
-      const average = buckets.length > 0 ? rangeTotal / buckets.length : 0
       let max = 0
       for (const bucket of buckets) {
-        const value = chartType === 'line' ? Math.max(totalOf(bucket), average) : 0
-        const barMax = series.reduce((best, item) => Math.max(best, valueOf(bucket, item.key)), 0)
-        max = Math.max(max, chartType === 'line' ? value : barMax)
+        for (const item of series) max = Math.max(max, valueOf(bucket, item.key))
       }
-      if (!(max > 0)) max = average > 0 ? average : 1
+      if (!(max > 0)) max = 1
 
       const step = niceStep(max)
       const axisMax = Math.max(step, Math.ceil(max / step) * step)
@@ -1392,181 +1369,95 @@ window.__ModuleLoader__.load({
       for (let value = 0; value <= axisMax + step / 1000; value += step) tickValues.push(value)
 
       const stride = Math.max(1, Math.ceil(buckets.length / 12))
-      const ticks = h(
+
+      const plot = h(
         'div',
-        { className: 'dps-chart-ticks' },
-        tickValues.map((value) =>
+        { className: 'dps-chart-plot' },
+        h(
+          'div',
+          { className: 'dps-chart-ticks' },
+          tickValues.map((value) =>
+            h(
+              'div',
+              { className: 'dps-chart-tick', key: value, style: { bottom: `${(value / axisMax) * 100}%` } },
+              h('span', null, formatAxis(value)),
+            ),
+          ),
+        ),
+        h(
+          'div',
+          { className: 'dps-chart-scroll' },
           h(
             'div',
-            { className: 'dps-chart-tick', key: value, style: { bottom: `${(value / axisMax) * 100}%` } },
-            h('span', null, formatAxis(value)),
+            { className: 'dps-chart-bars', key: `bar-${granularity}`, style: { minWidth: `${buckets.length * 14}px` } },
+            buckets.map((bucket, index) =>
+              h(
+                'div',
+                {
+                  className: 'dps-chart-bucket',
+                  key: bucket.key,
+                  onMouseEnter: showTip(bucket),
+                  onMouseMove: showTip(bucket),
+                  onMouseLeave: () => setTip(null),
+                },
+                h(
+                  'div',
+                  { className: 'dps-chart-stack', style: { animationDelay: `${Math.min(index * 18, 320)}ms` } },
+                  series
+                    .slice()
+                    .reverse()
+                    .map((item) => {
+                      const value = valueOf(bucket, item.key)
+                      if (!(value > 0)) return null
+                      return h('div', {
+                        key: item.key,
+                        className: 'dps-chart-seg',
+                        style: {
+                          height: `${axisMax > 0 ? (value / axisMax) * 100 : 0}%`,
+                          background: item.color,
+                        },
+                      })
+                    }),
+                ),
+                index % stride === 0
+                  ? h('div', { className: 'dps-chart-label' }, bucketLabel(bucket.key, granularity))
+                  : null,
+              ),
+            ),
           ),
         ),
       )
 
-      const labelNodes = (index, bucket) =>
-        index % stride === 0 ? h('div', { className: 'dps-chart-label' }, bucketLabel(bucket.key, granularity)) : null
-
-      let plot
-      if (chartType === 'line') {
-        const width = 1000
-        const height = 400
-        const pointOf = (index, value) => {
-          const x = buckets.length === 1 ? width / 2 : ((index + 0.5) / buckets.length) * width
-          const y = height - (axisMax > 0 ? (value / axisMax) * height : 0)
-          return `${x.toFixed(1)},${y.toFixed(1)}`
-        }
-        const totalPoints = buckets.map((bucket, index) => pointOf(index, totalOf(bucket))).join(' ')
-        const averageY = height - (axisMax > 0 ? (average / axisMax) * height : 0)
-        plot = h(
-          'div',
-          { className: 'dps-chart-plot' },
-          ticks,
+      const legend = h(
+        'div',
+        { className: 'dps-chart-legend' },
+        series.map((item) =>
           h(
-            'svg',
-            { className: 'dps-line', viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: 'none', 'aria-hidden': true },
-            h('polyline', {
-              points: totalPoints,
-              fill: 'none',
-              stroke: 'var(--dsw-alias-brand-primary)',
-              'stroke-width': 2,
-              'stroke-linejoin': 'round',
-              'stroke-linecap': 'round',
-              'vector-effect': 'non-scaling-stroke',
-            }),
-            h('line', {
-              x1: 0,
-              y1: averageY.toFixed(1),
-              x2: width,
-              y2: averageY.toFixed(1),
-              stroke: 'var(--dsw-alias-label-secondary)',
-              'stroke-width': 1.5,
-              'stroke-dasharray': '6 6',
-              'vector-effect': 'non-scaling-stroke',
-            }),
+            'span',
+            { className: 'dps-chart-legend-item', key: item.key },
+            h('span', { className: 'dps-dot', style: { background: item.color } }),
+            item.name,
+            h('span', { className: 'dps-chart-legend-total' }, formatTokens(item.total)),
           ),
-          h(
-            'div',
-            { className: 'dps-chart-scroll' },
-            h(
-              'div',
-              { className: 'dps-chart-bars', key: `line-${granularity}`, style: { minWidth: `${buckets.length * 14}px` } },
-              buckets.map((bucket, index) =>
-                h(
-                  'div',
-                  {
-                    className: 'dps-chart-bucket',
-                    key: bucket.key,
-                    onMouseEnter: showTip(bucket),
-                    onMouseMove: showTip(bucket),
-                    onMouseLeave: () => setTip(null),
-                  },
-                  labelNodes(index, bucket),
-                ),
-              ),
-            ),
-          ),
-        )
-      } else {
-        plot = h(
-          'div',
-          { className: 'dps-chart-plot' },
-          ticks,
-          h(
-            'div',
-            { className: 'dps-chart-scroll' },
-            h(
-              'div',
-              { className: 'dps-chart-bars', key: `bar-${granularity}`, style: { minWidth: `${buckets.length * 14}px` } },
-              buckets.map((bucket, index) =>
-                h(
-                  'div',
-                  {
-                    className: 'dps-chart-bucket',
-                    key: bucket.key,
-                    onMouseEnter: showTip(bucket),
-                    onMouseMove: showTip(bucket),
-                    onMouseLeave: () => setTip(null),
-                  },
-                  h(
-                    'div',
-                    { className: 'dps-chart-stack', style: { animationDelay: `${Math.min(index * 18, 320)}ms` } },
-                    series
-                      .slice()
-                      .reverse()
-                      .map((item) => {
-                        const value = valueOf(bucket, item.key)
-                        if (!(value > 0)) return null
-                        return h('div', {
-                          key: item.key,
-                          className: 'dps-chart-seg',
-                          style: {
-                            height: `${axisMax > 0 ? (value / axisMax) * 100 : 0}%`,
-                            background: item.color,
-                          },
-                        })
-                      }),
-                  ),
-                  labelNodes(index, bucket),
-                ),
-              ),
-            ),
-          ),
-        )
-      }
-
-      const legend =
-        chartType === 'line'
-          ? h(
-              'div',
-              { className: 'dps-chart-legend' },
-              h(
-                'span',
-                { className: 'dps-chart-legend-item' },
-                h('span', { className: 'dps-dot', style: { background: 'var(--dsw-alias-brand-primary)' } }),
-                t('grain.lineTotal'),
-                h('span', { className: 'dps-chart-legend-total' }, formatTokens(rangeTotal)),
-              ),
-              h(
-                'span',
-                { className: 'dps-chart-legend-item' },
-                h('span', { className: 'dps-dot', style: { background: 'var(--dsw-alias-label-secondary)' } }),
-                t('grain.lineAverage'),
-                h('span', { className: 'dps-chart-legend-total' }, formatTokens(average)),
-              ),
-            )
-          : h(
-              'div',
-              { className: 'dps-chart-legend' },
-              series.map((item) =>
-                h(
-                  'span',
-                  { className: 'dps-chart-legend-item', key: item.key },
-                  h('span', { className: 'dps-dot', style: { background: item.color } }),
-                  item.name,
-                  h('span', { className: 'dps-chart-legend-total' }, formatTokens(item.total)),
-                ),
-              ),
-            )
+        ),
+      )
 
       const tooltip = tip
         ? h(
             'div',
             { className: 'dps-tip', style: { left: `${tip.x}px`, top: `${tip.y}px`, transform: 'translate(0, 0)' } },
             h('div', { className: 'dps-tip-date' }, bucketLabel(tip.bucket.key, granularity)),
-            chartType === 'line'
-              ? h('div', { className: 'dps-tip-row' }, h('span', null, t('grain.lineTotal')), h('span', { className: 'dps-tip-value' }, formatTokens(totalOf(tip.bucket))))
-              : series.map((item) => {
-                  const value = valueOf(tip.bucket, item.key)
-                  if (!(value > 0)) return null
-                  return h(
-                    'div',
-                    { className: 'dps-tip-row', key: item.key },
-                    h('span', { className: 'dps-dot', style: { background: item.color } }),
-                    h('span', null, item.name),
-                    h('span', { className: 'dps-tip-value' }, formatTokens(value)),
-                  )
-                }),
+            series.map((item) => {
+              const value = valueOf(tip.bucket, item.key)
+              if (!(value > 0)) return null
+              return h(
+                'div',
+                { className: 'dps-tip-row', key: item.key },
+                h('span', { className: 'dps-dot', style: { background: item.color } }),
+                h('span', null, item.name),
+                h('span', { className: 'dps-tip-value' }, formatTokens(value)),
+              )
+            }),
           )
         : null
 
