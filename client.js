@@ -45,7 +45,6 @@ window.__ModuleLoader__.load({
       'section.model': 'Token by model',
       'section.breakdown': 'Token mix',
       'section.provider': 'Provider split',
-      'note.range': 'Last 12 months',
       'mode.day': 'Daily',
       'mode.week': 'Weekly',
       'mode.total': 'Cumulative',
@@ -116,7 +115,6 @@ window.__ModuleLoader__.load({
       'section.model': '模型分布',
       'section.breakdown': 'Token 构成',
       'section.provider': '供应商分类',
-      'note.range': '近 12 个月',
       'mode.day': '每天',
       'mode.week': '每周',
       'mode.total': '累计总量',
@@ -1075,20 +1073,11 @@ window.__ModuleLoader__.load({
 
       return h(
         'section',
-        { className: 'dps-panel dps-act', 'data-dps-card': 'activity', 'data-mode': mode },
+        { className: 'dps-panel dps-act', 'data-dps-card': 'activity', 'data-mode': mode, 'data-window-total': data.windowTokens },
         h(
           'header',
           { className: 'dps-panel-head' },
-          h(
-            'div',
-            { className: 'dps-panel-title' },
-            h('h2', null, t('section.activity')),
-            h(
-              'span',
-              { className: 'dps-panel-meta', 'data-dps-field': 'window-total', 'data-value': data.windowTokens },
-              `${t('note.range')} · ${formatTokens(data.windowTokens)}`,
-            ),
-          ),
+          h('div', { className: 'dps-panel-title' }, h('h2', null, t('section.activity'))),
           h(Segmented, {
             control: 'activity-mode',
             label: t('section.activity'),
