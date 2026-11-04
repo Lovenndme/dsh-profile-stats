@@ -568,7 +568,6 @@ window.__ModuleLoader__.load({
 .dps-card{padding:14px;border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-layer-1)}
 .dps-heat{display:flex;flex-direction:column;gap:10px;overflow:visible}
 .dps-heat-grid{display:grid;grid-auto-flow:column;grid-template-rows:repeat(7,auto);grid-auto-columns:minmax(0,1fr);gap:2px;width:100%}
-.dps-heat-grid[data-weekly='true']{grid-template-rows:repeat(1,auto)}
 .dps-cell{width:100%;aspect-ratio:1;height:auto;border-radius:2.5px;background:var(--dsw-alias-bg-layer-2);box-shadow:inset 0 0 0 1px var(--dsw-alias-border-l1)}
 .dps-cell[data-future="true"]{opacity:.35}
 .dps-months{position:relative;height:14px;font-size:10px;color:var(--dsw-alias-label-secondary)}
@@ -769,60 +768,43 @@ window.__ModuleLoader__.load({
       const weekOf = (cell) => heat.weeks[cell.column] || { weekTokens: 0, cumulativeTokens: 0 }
 
       const showTip = (cell) => (event) => {
-        // 与模型图一致：浮层跟随鼠标，靠近边缘自动翻边，避免被裁掉。
-        const clientX = typeof event.clientX === 'number' ? event.clientX : null
-        const clientY = typeof event.clientY === 'number' ? event.clientY : null
-        const viewportWidth = typeof window !== 'undefined' && window.innerWidth ? window.innerWidth : 1200
-        const viewportHeight = typeof window !== 'undefined' && window.innerHeight ? window.innerHeight : 800
-        if (clientX !== null && clientY !== null) {
-          const tipWidth = 208
-          const x = clientX + 14 + tipWidth > viewportWidth - 8 ? clientX - tipWidth - 8 : clientX + 14
-          const y = clientY + 16 + 90 > viewportHeight - 8 ? clientY - 90 : clientY + 16
-          setTip({ cell, week: weekOf(cell), x, y, below: false, follow: true })
-          return
-        }
         const target = event && event.currentTarget
-        const rect = target && typeof target.getBoundingClientRect === 'function' ? target.getBoundingClientRect() : null
+        if (!target || typeof target.getBoundingClientRect !== 'function') return
+        const rect = target.getBoundingClientRect()
+        const viewportWidth = typeof window !== 'undefined' && window.innerWidth ? window.innerWidth : 1200
+        const halfWidth = 104
+        const centerX = rect.left + rect.width / 2
         setTip({
           cell,
           week: weekOf(cell),
-          x: rect ? rect.left + rect.width / 2 : viewportWidth / 2,
-          y: rect ? (rect.top < 96 ? rect.bottom + 8 : rect.top - 8) : 60,
-          below: rect ? rect.top < 96 : false,
-          follow: false,
+          x: Math.min(Math.max(centerX, halfWidth), Math.max(halfWidth, viewportWidth - halfWidth)),
+          /** 靠近视口顶部时改到格子下方，避免浮层被裁掉。 */
+          y: rect.top < 96 ? rect.bottom + 8 : rect.top - 8,
+          below: rect.top < 96,
         })
       }
       const hideTip = () => setTip(null)
 
-      // 「每天」渲染 365 个日格（7 行）；「每周 / 累计」渲染 53 个周格（1 行）。
-      // 这样切换时图形本身会变（密集日格 ↔ 大块周格），而不只是颜色深浅变化。
-      const weekly = mode !== 'day'
-      const cells = weekly
-        ? heat.weeks.map((week, column) => {
-            const value = mode === 'week' ? toNumber(week.weekTokens) : toNumber(week.cumulativeTokens)
-            const level = value > 0 ? heat.levels[mode](value) : 0
-            const cell = { key: `w-${week.startKey}`, column, tokens: value, future: false, date: new Date(week.startKey) }
-            return h('div', {
-              key: cell.key,
-              className: 'dps-cell',
-              'data-future': 'false',
-              onMouseEnter: showTip(cell),
-              onMouseLeave: hideTip,
-              style: level > 0 ? { background: heatBackground(level), boxShadow: 'none' } : undefined,
-            })
-          })
-        : heat.cells.map((cell) => {
-            // 只有「每天」这一档尊重未来日期（今天之后留白）。
-            const level = cell.future ? 0 : heat.levels.day(cell.tokens)
-            return h('div', {
-              key: cell.key,
-              className: 'dps-cell',
-              'data-future': cell.future ? 'true' : 'false',
-              onMouseEnter: showTip(cell),
-              onMouseLeave: hideTip,
-              style: level > 0 ? { background: heatBackground(level), boxShadow: 'none' } : undefined,
-            })
-          })
+      const cells = heat.cells.map((cell) => {
+        // 只有「每天」这一档尊重未来日期（今天之后留白）；
+        // 「每周 / 累计」是按整列聚合的，整列同色才看得出这一周的份量。
+        const level =
+          mode === 'week'
+            ? heat.levels.week(weekOf(cell).weekTokens)
+            : mode === 'total'
+              ? heat.levels.total(weekOf(cell).cumulativeTokens)
+              : cell.future
+                ? 0
+                : heat.levels.day(cell.tokens)
+        return h('div', {
+          key: cell.key,
+          className: 'dps-cell',
+          'data-future': cell.future ? 'true' : 'false',
+          onMouseEnter: showTip(cell),
+          onMouseLeave: hideTip,
+          style: level > 0 ? { background: heatBackground(level), boxShadow: 'none' } : undefined,
+        })
+      })
 
       // 悬浮浮层只保留「时间 + 缩写用量」两行：精确数字与请求数不再展示。
       const tipLines = (() => {
@@ -874,7 +856,7 @@ window.__ModuleLoader__.load({
           h('span', { className: 'dps-section-note' }, t('note.range')),
           h('span', { className: 'dps-section-note' }, t('note.total', { value: formatTokens(heat.windowTokens) })),
         ),
-        h('div', null, h('div', { className: 'dps-heat-grid', 'data-weekly': weekly ? 'true' : 'false' }, cells), h('div', { className: 'dps-months' }, monthNodes)),
+        h('div', null, h('div', { className: 'dps-heat-grid' }, cells), h('div', { className: 'dps-months' }, monthNodes)),
         tooltip,
       )
     }
