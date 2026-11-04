@@ -1,5 +1,48 @@
 # Changelog
 
+## 2.4.12 — 2026-11-04
+
+- docs(findings): correct C-6 — the release workflow is active; the 10 earlier commits simply landed after its last run
+- style(ui): center the model chart legend under the plot area
+- docs: background freshness, the firstScan field and the refresh button's new meaning (INTERNALS, FINDINGS B-12)
+- fix(ui): stop showing "scanning" on every open; only the first full scan shows progress
+- feat(host): keep the snapshot fresh in the background and flag only the first full scan
+- style(ui): drop the "last 12 months · total" note next to the Token activity title
+- docs: FINDINGS.md for the review pass, and README / INTERNALS brought in line with the new page
+- chore: drop the unused partsText helper and seven dictionary keys left from the old UI; name the activity window constant after what it is
+- fix(ui): the activity window is exactly 53 weeks, and tooltips stay fully on screen
+- feat(ui): motion and keyboard details
+- feat(ui): Cache Lens and provider split rebuilt; the last of the old styles removed
+- feat(ui): model distribution — stacked columns with a shared bucket model and a readable tooltip
+- fix: size the model chart axis by the tallest stack, not the tallest single segment
+- feat(ui): Token activity — three modes with three different shapes on one shared canvas
+- feat(ui): new page shell — theme-derived palette, header, status strip and KPI tiles
+- feat(preview): a local preview page that renders the real client.js against built-in data
+- fix: inject the stylesheet before first paint, keep it current after hot reload, never pull it from under another instance
+- fix: refresh re-fetches at once, retry no longer reloads the whole app, and updates cannot be double-started
+- fix: heatmap weeks start on Monday like the model chart, and "cumulative" includes earlier usage
+- fix: localise the model chart's monthly labels ("月" was hard-coded, English showed "11月")
+- fix: pick the 万/亿 unit after rounding, and keep axis steps at whole tokens
+- fix: Cache Lens segments always sum exactly to the total, and all three rows stay
+- fix: the 5th model/provider colour was an undefined theme token, and "other models" reused the 3rd colour
+- fix: DST-safe calendar arithmetic for the model chart buckets and the heatmap start
+- fix: only DeepSeek model ids fold into the Flash/Pro families
+- docs(host): the header comment listed two GET routes; there are three routes, two of them POST
+- fix(host): refuse a second /update while an in-panel update is running
+- fix(host): compute streak day arithmetic in UTC so streaks work west of Greenwich
+- fix(host): count an orphaned inherited prefix with its own per-day and provider detail
+- docs: give Claude Code full execution authority; owner does the visual acceptance, revert is the safety net
+- docs: hand-off brief for the UI rewrite (with self-discovery pass and acceptance criteria)
+- feat: remove the page-level range selector; the cumulative card and cache lens are always all-time
+- feat: the provider card follows only its own today/all-time toggle, not the page range
+- revert: drop the line chart, keep the day/week/month switch on the model chart
+- feat: model chart gets its own day/week/month and bar/line switches with a usage and an average line, independent of the page range
+- Revert "fix: make the heatmap mode switch change the shape (weekly cells in week/total), and let both tooltips follow the cursor"
+- fix: make the heatmap mode switch change the shape (weekly cells in week/total), and let both tooltips follow the cursor
+- fix: anchor the model chart tooltip to the cursor and let it follow the pointer
+- fix: compute the cache lens headline with the official hit-rate formula (cache / input), display-only rounding stays
+
+
 ## 2.4.11 — 2026-11-03
 
 - ci: sync the marketplace entry description nightly, PR only when it drifts
