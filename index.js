@@ -34,8 +34,11 @@ const SELF_DIR = path.dirname(fileURLToPath(import.meta.url))
 /** 版本检查的缓存时长：打开面板最多每 6 小时问一次 registry。 */
 const UPDATE_CHECK_TTL_MS = 6 * 60 * 60 * 1000
 
-/** 缓存结构版本：折叠口径变了就 +1，旧缓存整份丢弃重折。 */
-const CACHE_VERSION = 11
+/**
+ * 缓存结构版本：折叠口径变了就 +1，旧缓存整份丢弃重折。
+ * 12：继承前缀补记 provider / 每日 input·output·cache 明细（孤儿前缀补回时用它自己的数）。
+ */
+const CACHE_VERSION = 12
 const DAY_MS = 86400000
 /** 打开页面时如果快照比这个更旧，就顺手在后台重扫。 */
 const STALE_AFTER_MS = 5 * 60 * 1000
@@ -143,6 +146,12 @@ function emptyFold(sessionId, createdAt, parentSession) {
     inheritedOutputTokens: 0,
     inheritedCacheReadTokens: 0,
     inheritedCacheWriteTokens: 0,
+    /** 继承前缀的 provider 与每日明细：孤儿前缀补回总量时，明细也必须用前缀自己的数。 */
+    inheritedPerProvider: {},
+    inheritedPerDayProvider: {},
+    inheritedPerDayInput: {},
+    inheritedPerDayOutput: {},
+    inheritedPerDayCache: {},
     complete: false,
   }
 }
@@ -300,6 +309,16 @@ function foldSnapshot(snapshot) {
           if (key) {
             fold.inheritedPerDay[key] = toNumber(fold.inheritedPerDay[key]) + tokens
             fold.inheritedPerDayCalls[key] = toNumber(fold.inheritedPerDayCalls[key]) + 1
+            fold.inheritedPerDayInput[key] = toNumber(fold.inheritedPerDayInput[key]) + toNumber(usage.inputTokens)
+            fold.inheritedPerDayOutput[key] = toNumber(fold.inheritedPerDayOutput[key]) + toNumber(usage.outputTokens)
+            fold.inheritedPerDayCache[key] =
+              toNumber(fold.inheritedPerDayCache[key]) + toNumber(usage.cacheReadTokens) + toNumber(usage.cacheWriteTokens)
+            // provider 与主口径一致：只记有日期的步（主口径 perProvider 也在 time > 0 分支里）。
+            const inheritedProvider = providerOf(event)
+            fold.inheritedPerProvider[inheritedProvider] = toNumber(fold.inheritedPerProvider[inheritedProvider]) + tokens
+            const inheritedDayProviders = fold.inheritedPerDayProvider[key] || {}
+            inheritedDayProviders[inheritedProvider] = toNumber(inheritedDayProviders[inheritedProvider]) + tokens
+            fold.inheritedPerDayProvider[key] = inheritedDayProviders
             const inheritedDayModels = fold.inheritedPerDayModel[key] || {}
             inheritedDayModels[inheritedModelFamily] = toNumber(inheritedDayModels[inheritedModelFamily]) + tokens
             fold.inheritedPerDayModel[key] = inheritedDayModels
@@ -371,24 +390,26 @@ function aggregate(sessions, now, knownIds) {
   let firstDay = ''
   let lastDay = ''
 
-  /** 每天一份 { tokens, calls, inputTokens, outputTokens, cacheTokens }，供热力图悬浮提示与对账。 */
-  const mergeDay = (fold, source, callsByDay, modelsByDay) => {
-    for (const [key, value] of Object.entries(source || {})) {
+  /**
+   * 每天一份 { tokens, calls, inputTokens, outputTokens, cacheTokens, byProvider, byModel }。
+   * `maps` 里的每张表必须来自同一份来源（会话自身 或 它的继承前缀）：
+   * 旧实现补回孤儿前缀时拿的是会话自身的每日明细，同一天会把自身用量算两次、前缀明细一笔不进。
+   */
+  const mergeDay = (maps) => {
+    for (const [key, value] of Object.entries(maps.tokens || {})) {
       const tokens = toNumber(value)
       if (tokens <= 0) continue
       const entry = daily.get(key) || { tokens: 0, calls: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0, byProvider: {}, byModel: {} }
       entry.tokens += tokens
-      entry.calls += toNumber(callsByDay && callsByDay[key])
-      entry.inputTokens += toNumber(fold && fold.perDayInput && fold.perDayInput[key])
-      entry.outputTokens += toNumber(fold && fold.perDayOutput && fold.perDayOutput[key])
-      entry.cacheTokens += toNumber(fold && fold.perDayCache && fold.perDayCache[key])
-      const dayProviders = (fold && fold.perDayProvider && fold.perDayProvider[key]) || {}
-      for (const [provider, value] of Object.entries(dayProviders)) {
-        entry.byProvider[provider] = toNumber(entry.byProvider[provider]) + toNumber(value)
+      entry.calls += toNumber(maps.calls && maps.calls[key])
+      entry.inputTokens += toNumber(maps.input && maps.input[key])
+      entry.outputTokens += toNumber(maps.output && maps.output[key])
+      entry.cacheTokens += toNumber(maps.cache && maps.cache[key])
+      for (const [provider, amount] of Object.entries((maps.providers && maps.providers[key]) || {})) {
+        entry.byProvider[provider] = toNumber(entry.byProvider[provider]) + toNumber(amount)
       }
-      const dayModels = modelsByDay && modelsByDay[key]
-      for (const [modelFamily, value] of Object.entries(dayModels || {})) {
-        entry.byModel[modelFamily] = toNumber(entry.byModel[modelFamily]) + toNumber(value)
+      for (const [modelFamily, amount] of Object.entries((maps.models && maps.models[key]) || {})) {
+        entry.byModel[modelFamily] = toNumber(entry.byModel[modelFamily]) + toNumber(amount)
       }
       daily.set(key, entry)
     }
@@ -429,7 +450,18 @@ function aggregate(sessions, now, knownIds) {
         for (const [modelFamily, value] of Object.entries(fold.inheritedPerModel || {})) {
           totals.byModel[modelFamily] = toNumber(totals.byModel[modelFamily]) + toNumber(value)
         }
-        mergeDay(fold, fold.inheritedPerDay, fold.inheritedPerDayCalls, fold.inheritedPerDayModel)
+        for (const [provider, value] of Object.entries(fold.inheritedPerProvider || {})) {
+          totals.byProvider[provider] = toNumber(totals.byProvider[provider]) + toNumber(value)
+        }
+        mergeDay({
+          tokens: fold.inheritedPerDay,
+          calls: fold.inheritedPerDayCalls,
+          input: fold.inheritedPerDayInput,
+          output: fold.inheritedPerDayOutput,
+          cache: fold.inheritedPerDayCache,
+          providers: fold.inheritedPerDayProvider,
+          models: fold.inheritedPerDayModel,
+        })
       }
     }
 
@@ -446,7 +478,15 @@ function aggregate(sessions, now, knownIds) {
       longestTurnSession = fold.sessionId
     }
 
-    mergeDay(fold, fold.perDay, fold.perDayCalls, fold.perDayModel)
+    mergeDay({
+      tokens: fold.perDay,
+      calls: fold.perDayCalls,
+      input: fold.perDayInput,
+      output: fold.perDayOutput,
+      cache: fold.perDayCache,
+      providers: fold.perDayProvider,
+      models: fold.perDayModel,
+    })
   }
 
   const dailyList = Array.from(daily.entries())
