@@ -57,14 +57,9 @@ window.__ModuleLoader__.load({
       'lens.back': 'Back to overall',
       'lens.basis': 'Shares are computed over the uncached total',
       'lens.uncachedTitle': 'Uncached token mix',
-      'range.today': 'Today',
-      'range.7': '7 days',
-      'range.30': '30 days',
-      'range.allRange': 'All',
       'grain.day': 'Daily',
       'grain.week': 'Weekly',
       'grain.month': 'Monthly',
-      'stat.rangeTokens': 'Tokens in range',
       'tip.none': 'No activity',
       'tip.tokens': '{value} tokens',
       'tip.week': 'Week of {date}',
@@ -135,14 +130,9 @@ window.__ModuleLoader__.load({
       'lens.back': '返回整体构成',
       'lens.basis': '当前比例基于非缓存 Token 合计计算',
       'lens.uncachedTitle': '非缓存 Token 构成',
-      'range.today': '今日',
-      'range.7': '7 天',
-      'range.30': '30 天',
-      'range.allRange': '全部',
       'grain.day': '按日',
       'grain.week': '按周',
       'grain.month': '按月',
-      'stat.rangeTokens': '区间 Token 数',
       'tip.none': '无活动',
       'tip.tokens': '{value} tokens',
       'tip.week': '{date} 起的一周',
@@ -1474,8 +1464,6 @@ window.__ModuleLoader__.load({
       }, [refresh])
 
       const [activityMode, setActivityMode] = useState('day')
-      // 页面级时间范围：0 = 全部，其余为最近 N 天。驱动 KPI 总量 / Cache Lens / 模型分布 / 供应商拆分。
-      const [rangeDays, setRangeDays] = useState(0)
 
       const totals = snapshot && snapshot.totals ? snapshot.totals : null
       const heat = useMemo(() => buildHeatmap(snapshot && snapshot.daily ? snapshot.daily : []), [snapshot && snapshot.daily])
@@ -1493,42 +1481,14 @@ window.__ModuleLoader__.load({
 
       const hasAnySession = Boolean(totals && totals.calls > 0)
       const daily = snapshot && Array.isArray(snapshot.daily) ? snapshot.daily : []
-      const scoped = (() => {
-        const days = rangeDays > 0 ? daily.filter((entry) => entry && entry.date >= localDateKey(new Date(Date.now() - (rangeDays - 1) * DAY_MS))) : daily
-        const sum = {
-          tokens: 0,
-          calls: 0,
-          inputTokens: 0,
-          outputTokens: 0,
-          cacheReadTokens: 0,
-          cacheWriteTokens: 0,
-          byProvider: {},
-          byModel: {},
-        }
-        for (const entry of days) {
-          sum.tokens += toNumber(entry.tokens)
-          sum.calls += toNumber(entry.calls)
-          sum.inputTokens += toNumber(entry.inputTokens)
-          sum.outputTokens += toNumber(entry.outputTokens)
-          sum.cacheReadTokens += toNumber(entry.cacheTokens)
-          for (const [id, value] of Object.entries(entry.byProvider || {})) {
-            sum.byProvider[id] = toNumber(sum.byProvider[id]) + toNumber(value)
-          }
-          for (const [id, value] of Object.entries(entry.byModel || {})) {
-            sum.byModel[id] = toNumber(sum.byModel[id]) + toNumber(value)
-          }
-        }
-        return { days, totals: sum }
-      })()
-
       const todayKey = localDateKey(startOfDay(new Date()))
       const todayEntry = daily.find((entry) => entry && entry.date === todayKey) || null
       const stats = h(
         'div',
         { className: 'dps-stats' },
         h(StatCard, {
-          label: rangeDays > 0 ? t('stat.rangeTokens') : t('stat.tokens'),
-          value: hasAnySession ? formatTokens(scoped.totals.tokens) : '—',
+          label: t('stat.tokens'),
+          value: hasAnySession ? formatTokens(totals.tokens) : '—',
           icon: 'tokens',
           emphasis: true,
         }),
@@ -1635,7 +1595,7 @@ window.__ModuleLoader__.load({
         ),
         h(Heatmap, { heat, mode: activityMode, key: `heat-${activityMode}` }),
       )
-      const mixSection = totals && hasAnySession ? h('div', { className: 'dps-section' }, h(Breakdown, { totals: scoped.totals })) : null
+      const mixSection = totals && hasAnySession ? h('div', { className: 'dps-section' }, h(Breakdown, { totals })) : null
       const modelSection =
         totals && hasAnySession ? h('div', { className: 'dps-section' }, h(ModelChart, { daily })) : null
       const providerSection =
@@ -1693,41 +1653,21 @@ window.__ModuleLoader__.load({
                 : updating
                   ? h('span', { className: 'dps-section-note' }, t('action.updating'))
                   : null,
-              h(
-                'div',
-                { className: 'dps-switch' },
-                [
-                  { id: 0, label: t('range.allRange') },
-                  { id: 1, label: t('range.today') },
-                  { id: 7, label: t('range.7') },
-                  { id: 30, label: t('range.30') },
-                ].map((option) =>
-                  h(
-                    'button',
-                    {
-                      key: option.id,
-                      type: 'button',
-                      'data-active': rangeDays === option.id ? 'true' : 'false',
-                      onClick: () => setRangeDays(option.id),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dps-icon-button',
+                    'aria-label': t('action.refresh'),
+                    title: t('action.refresh'),
+                    onClick: () => {
+                      refresh()
                     },
-                    option.label,
-                  ),
-                ),
-              ),              h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'dps-icon-button',
-                  'aria-label': t('action.refresh'),
-                  title: t('action.refresh'),
-                  onClick: () => {
-                    refresh()
                   },
-                },
-                h(Icon, { name: 'refresh' }),
+                  h(Icon, { name: 'refresh' }),
+                ),
               ),
             ),
-          ),
           stats,
           scanningHint,
           errorBlock,
