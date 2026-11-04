@@ -19,6 +19,7 @@ window.__ModuleLoader__.load({
     const useMemo = React.useMemo
     const useCallback = React.useCallback
     const useRef = React.useRef
+    const useLayoutEffect = React.useLayoutEffect || React.useEffect
 
     const NS = 'dsh-profile-stats'
     const SNAPSHOT_URL = '/api/dsh-profile-stats/snapshot'
@@ -732,17 +733,21 @@ window.__ModuleLoader__.load({
 
     /* ------------------------------------------------------------------ 组件 */
 
+    /**
+     * 样式注入：在首帧绘制前（layout effect）写入，并且总是写当前这份 CSS。
+     * 旧实现在 useEffect 里注入（首帧无样式闪一下）、元素已存在就跳过（热重载后仍是旧 CSS）、
+     * 卸载时删除（会删掉另一个仍挂载实例在用的样式）。样式只有一个带 dps- 前缀的 <style>，常驻无副作用。
+     */
     function StyleTag() {
-      useEffect(() => {
-        if (document.getElementById(STYLE_ID)) return undefined
-        const element = document.createElement('style')
-        element.id = STYLE_ID
-        element.textContent = CSS
-        document.head.appendChild(element)
-        return () => {
-          const current = document.getElementById(STYLE_ID)
-          if (current && current.parentNode) current.parentNode.removeChild(current)
+      useLayoutEffect(() => {
+        if (typeof document === 'undefined' || !document.head) return
+        let element = document.getElementById(STYLE_ID)
+        if (!element) {
+          element = document.createElement('style')
+          element.id = STYLE_ID
+          document.head.appendChild(element)
         }
+        if (element.textContent !== CSS) element.textContent = CSS
       }, [])
       return null
     }
