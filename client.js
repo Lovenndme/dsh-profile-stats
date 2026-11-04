@@ -24,7 +24,6 @@ window.__ModuleLoader__.load({
     const REFRESH_URL = '/api/dsh-profile-stats/refresh'
     const UPDATE_URL = '/api/dsh-profile-stats/update'
     const PANEL_ID = 'profile'
-    const DAY_MS = 86400000
     const HEAT_WEEKS = 53
     const CELL_PITCH = 14
 
@@ -374,6 +373,14 @@ window.__ModuleLoader__.load({
       return copy
     }
 
+    /**
+     * 本地日历 ± n 天。必须按年/月/日推，不能用「毫秒 − n × 86400000」：
+     * 夏令时切换日只有 23/25 小时，毫秒差会落到前一天 23:00，周桶键变成周日、日桶跳过一天。
+     */
+    function addDays(date, days) {
+      return new Date(date.getFullYear(), date.getMonth(), date.getDate() + days)
+    }
+
     function localDateKey(date) {
       const year = date.getFullYear()
       const month = String(date.getMonth() + 1).padStart(2, '0')
@@ -399,7 +406,7 @@ window.__ModuleLoader__.load({
         }
       }
       const today = startOfDay(new Date())
-      const start = startOfDay(new Date(today.getTime() - (HEAT_WEEKS * 7 - 1) * DAY_MS))
+      const start = addDays(today, -(HEAT_WEEKS * 7 - 1))
       start.setDate(start.getDate() - start.getDay())
 
       const cells = []
@@ -1225,7 +1232,7 @@ window.__ModuleLoader__.load({
       const keys = []
       if (granularity === 'day') {
         for (let offset = MODEL_WINDOW - 1; offset >= 0; offset -= 1) {
-          keys.push(localDateKey(new Date(today.getTime() - offset * DAY_MS)))
+          keys.push(localDateKey(addDays(today, -offset)))
         }
       } else if (granularity === 'month') {
         for (let offset = MODEL_WINDOW - 1; offset >= 0; offset -= 1) {
@@ -1235,7 +1242,7 @@ window.__ModuleLoader__.load({
       } else {
         const thisWeek = startOfWeek(today)
         for (let offset = MODEL_WINDOW - 1; offset >= 0; offset -= 1) {
-          keys.push(localDateKey(new Date(thisWeek.getTime() - offset * 7 * DAY_MS)))
+          keys.push(localDateKey(addDays(thisWeek, -offset * 7)))
         }
       }
 
