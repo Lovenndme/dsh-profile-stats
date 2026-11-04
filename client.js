@@ -29,7 +29,8 @@ window.__ModuleLoader__.load({
     const STYLE_ID = 'dsh-profile-stats-style'
     /** 指标卡里的迷你柱：最近多少天。 */
     const SPARK_DAYS = 14
-    const HEAT_WEEKS = 53
+    /** 活动图窗口：本周 + 之前 52 周。 */
+    const ACTIVITY_WEEKS = 53
 
     /* -------------------------------------------------------------- 文案字典 */
 
@@ -45,7 +46,6 @@ window.__ModuleLoader__.load({
       'section.breakdown': 'Token mix',
       'section.provider': 'Provider split',
       'note.range': 'Last 12 months',
-      'note.total': '{value} in total',
       'mode.day': 'Daily',
       'mode.week': 'Weekly',
       'mode.total': 'Cumulative',
@@ -58,9 +58,7 @@ window.__ModuleLoader__.load({
       'legend.more': 'More',
       'tip.tokens': '{value} tokens',
       'tip.none': 'No activity',
-      'tip.week': 'Week of {date}',
       'tip.weekRange': '{start} – {end}',
-      'tip.cumulative': 'Cumulative through the week of {date}',
       'tip.through': 'Through {date}',
       'tip.total': 'Total',
       'chart.total': 'total {value}',
@@ -76,7 +74,6 @@ window.__ModuleLoader__.load({
       'lens.output': 'Output',
       'lens.zoom': 'Zoom into uncached',
       'lens.back': 'Back to overall',
-      'lens.basis': 'Shares are computed over the uncached total',
       'lens.uncachedTitle': 'Uncached token mix',
       'lens.colType': 'Type',
       'lens.colAmount': 'Tokens',
@@ -98,9 +95,6 @@ window.__ModuleLoader__.load({
       'error.title': 'Failed to load usage stats',
       'error.stale': 'The last refresh failed',
       'empty.title': 'No sessions yet',
-      'unit.days': '{count} d',
-      'unit.hour': '{count} h',
-      'unit.minute': '{count} m',
       'unit.day': 'd',
       'unit.hourShort': 'h',
       'unit.minuteShort': 'm',
@@ -123,7 +117,6 @@ window.__ModuleLoader__.load({
       'section.breakdown': 'Token 构成',
       'section.provider': '供应商分类',
       'note.range': '近 12 个月',
-      'note.total': '共 {value}',
       'mode.day': '每天',
       'mode.week': '每周',
       'mode.total': '累计总量',
@@ -136,9 +129,7 @@ window.__ModuleLoader__.load({
       'legend.more': '多',
       'tip.tokens': '{value} tokens',
       'tip.none': '无活动',
-      'tip.week': '{date} 起的一周',
       'tip.weekRange': '{start} – {end}',
-      'tip.cumulative': '累计至 {date} 起的一周',
       'tip.through': '截至 {date}',
       'tip.total': '合计',
       'chart.total': '总计 {value}',
@@ -154,7 +145,6 @@ window.__ModuleLoader__.load({
       'lens.output': '输出',
       'lens.zoom': '放大非缓存细分',
       'lens.back': '返回整体构成',
-      'lens.basis': '当前比例基于非缓存 Token 合计计算',
       'lens.uncachedTitle': '非缓存 Token 构成',
       'lens.colType': '类型',
       'lens.colAmount': '用量',
@@ -176,9 +166,6 @@ window.__ModuleLoader__.load({
       'error.title': '读取用量统计失败',
       'error.stale': '最近一次刷新失败',
       'empty.title': '还没有可统计的会话',
-      'unit.days': '{count} 天',
-      'unit.hour': '{count} 小时',
-      'unit.minute': '{count} 分',
       'unit.day': '天',
       'unit.hourShort': '小时',
       'unit.minuteShort': '分',
@@ -364,11 +351,6 @@ window.__ModuleLoader__.load({
         { value: String(hours), unit: t('unit.hourShort') },
         { value: String(minutes), unit: t('unit.minuteShort') },
       ]
-    }
-
-    function partsText(parts) {
-      if (!parts) return t('unit.none')
-      return parts.map((part) => (part.unit ? `${part.value} ${part.unit}` : part.value)).join(' ')
     }
 
     /* ---------------------------------------------------------------- 日期 */
@@ -731,7 +713,7 @@ window.__ModuleLoader__.load({
       const todayStart = startOfDay(today)
       const todayKey = localDateKey(todayStart)
       // 恰好 53 列：本周 + 之前 52 周（「今天 − 370 天再对齐到周一」会多出一列）
-      const start = addDays(startOfWeek(todayStart), -(HEAT_WEEKS - 1) * 7)
+      const start = addDays(startOfWeek(todayStart), -(ACTIVITY_WEEKS - 1) * 7)
       const startKey = localDateKey(start)
 
       // 窗口之前的用量是「累计」的起点。键已校验为 YYYY-MM-DD（定长、补零），字典序即日期序。
