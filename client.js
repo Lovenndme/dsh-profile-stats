@@ -878,21 +878,24 @@ window.__ModuleLoader__.load({
       const [hover, setHover] = useState(null)
       const [tip, setTip] = useState(null)
 
+      // 三段必须互斥、且合计恰好等于 total。上游不自洽（缓存 + 输出 > 总量）时按 输出 → 缓存 依次夹紧；
+      // 旧实现只把未缓存输入夹到 0，另两段原样保留，三段合计会超过 100%。
       const total = toNumber(totals.tokens)
-      const cache = toNumber(totals.cacheReadTokens) + toNumber(totals.cacheWriteTokens)
-      const output = toNumber(totals.outputTokens)
-      const uncached = Math.max(0, total - cache - output)
+      const output = Math.min(toNumber(totals.outputTokens), total)
+      const cache = Math.min(toNumber(totals.cacheReadTokens) + toNumber(totals.cacheWriteTokens), total - output)
+      const uncached = total - cache - output
 
+      // 三行明细始终齐全（某一类为 0 时显示 0，而不是整行消失）。
       const overall = [
         { key: 'cache', label: t('lens.cache'), value: cache, color: 'var(--dsw-alias-brand-primary)' },
         { key: 'input', label: t('lens.input'), value: uncached, color: 'var(--dsw-alias-label-primary)' },
         { key: 'output', label: t('lens.output'), value: output, color: 'var(--dsw-alias-state-success-primary)' },
-      ].filter((row) => row.value > 0 || row.key !== 'output')
+      ]
       const uncachedTotal = uncached + output
       const inner = [
         { key: 'input', label: t('lens.input'), value: uncached, color: 'var(--dsw-alias-label-primary)' },
         { key: 'output', label: t('lens.output'), value: output, color: 'var(--dsw-alias-state-success-primary)' },
-      ].filter((row) => row.value > 0 || row.key !== 'output')
+      ]
 
       const rows = zoomed ? inner : overall
       const denominator = zoomed ? uncachedTotal : total
