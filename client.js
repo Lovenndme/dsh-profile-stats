@@ -595,263 +595,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /**
-     * Token 构成 = Cache Lens：横向分段占比条 + 三行明细，可放大到「非缓存」内部构成。
-     *
-     * 口径：不同供应商的 usage.inputTokens 语义不一致（有的已含缓存命中），所以
-     * 不能直接用 input + cache + output 当初值。这里以 total（每步 max(totalTokens, input+output)）
-     * 为准，未缓存输入由 total 反推：未缓存输入 = total − 缓存 − 输出，保证三段互斥且合计等于 total。
-     */
-    function Breakdown(props) {
-      const totals = props.totals || {}
-      const [zoomed, setZoomed] = useState(false)
-      const [hover, setHover] = useState(null)
-      const [tip, setTip] = useState(null)
-
-      // 三段必须互斥、且合计恰好等于 total。上游不自洽（缓存 + 输出 > 总量）时按 输出 → 缓存 依次夹紧；
-      // 旧实现只把未缓存输入夹到 0，另两段原样保留，三段合计会超过 100%。
-      const total = toNumber(totals.tokens)
-      const output = Math.min(toNumber(totals.outputTokens), total)
-      const cache = Math.min(toNumber(totals.cacheReadTokens) + toNumber(totals.cacheWriteTokens), total - output)
-      const uncached = total - cache - output
-
-      // 三行明细始终齐全（某一类为 0 时显示 0，而不是整行消失）。
-      const overall = [
-        { key: 'cache', label: t('lens.cache'), value: cache, color: 'var(--dsw-alias-brand-primary)' },
-        { key: 'input', label: t('lens.input'), value: uncached, color: 'var(--dsw-alias-label-primary)' },
-        { key: 'output', label: t('lens.output'), value: output, color: 'var(--dsw-alias-state-success-primary)' },
-      ]
-      const uncachedTotal = uncached + output
-      const inner = [
-        { key: 'input', label: t('lens.input'), value: uncached, color: 'var(--dsw-alias-label-primary)' },
-        { key: 'output', label: t('lens.output'), value: output, color: 'var(--dsw-alias-state-success-primary)' },
-      ]
-
-      const rows = zoomed ? inner : overall
-      const denominator = zoomed ? uncachedTotal : total
-      const share = (value) => (denominator > 0 ? (value / denominator) * 100 : 0)
-
-      const primary = zoomed ? uncachedTotal : total
-      const primaryLabel = zoomed ? t('lens.uncachedTotal') : t('lens.total')
-      // 顶部第二个指标用官方口径：缓存命中率 = 缓存 ÷（缓存 + 未缓存输入），与官方用量弹窗一致。
-      // 明细行的百分比仍是「占总量」，两者分母不同但各自自洽。
-      // 全程用精确值参与运算，只有到渲染那一步才 toFixed。
-      const cacheHitRate = cache + uncached > 0 ? (cache / (cache + uncached)) * 100 : 0
-      const secondary = zoomed ? share(uncached) : cacheHitRate
-      const secondaryLabel = zoomed ? t('lens.uncachedShare') : t('lens.cacheHit')
-
-      const showTip = (row) => (event) => {
-        const target = event && event.currentTarget
-        if (!target || typeof target.getBoundingClientRect !== 'function') return
-        const rect = target.getBoundingClientRect()
-        const width = rect.width || 40
-        const halfWidth = 110
-        const centerX = rect.left + width / 2
-        const viewportWidth = typeof window !== 'undefined' && window.innerWidth ? window.innerWidth : 1200
-        setHover(row.key)
-        setTip({
-          row,
-          x: Math.min(Math.max(centerX, halfWidth), Math.max(halfWidth, viewportWidth - halfWidth)),
-          y: rect.top - 8,
-        })
-      }
-      const hideTip = () => {
-        setHover(null)
-        setTip(null)
-      }
-
-      const bar = h(
-        'div',
-        { className: 'dps-lens-bar', role: 'group' },
-        rows.map((row) =>
-          h('span', {
-            key: row.key,
-            className: 'dps-lens-seg',
-            tabIndex: 0,
-            'data-dim': hover && hover !== row.key ? 'true' : 'false',
-            style: { width: `${share(row.value)}%`, background: row.color },
-            onMouseEnter: showTip(row),
-            onMouseLeave: hideTip,
-            onFocus: showTip(row),
-            onBlur: hideTip,
-          }),
-        ),
-      )
-
-      const detail = h(
-        'div',
-        { className: 'dps-lens-rows' },
-        rows.map((row) =>
-          h(
-            'div',
-            {
-              key: row.key,
-              className: 'dps-lens-row',
-              'data-active': hover === row.key ? 'true' : 'false',
-              onMouseEnter: () => setHover(row.key),
-              onMouseLeave: () => setHover(null),
-            },
-            h('span', { className: 'dps-lens-dot', style: { background: row.color } }),
-            h('span', { className: 'dps-lens-name' }, row.label),
-            h('span', { className: 'dps-lens-value' }, formatTokens(row.value)),
-            h('span', { className: 'dps-lens-share' }, `${share(row.value).toFixed(1)}%`),
-          ),
-        ),
-      )
-
-      const tooltip = tip
-        ? h(
-            'div',
-            { className: 'dps-tip', style: { left: `${tip.x}px`, top: `${tip.y}px`, transform: 'translate(-50%, -100%)' } },
-            h('div', { className: 'dps-tip-date' }, tip.row.label),
-            h('div', { className: 'dps-tip-value' }, formatTokens(tip.row.value)),
-            h('div', { className: 'dps-tip-date' }, `${share(tip.row.value).toFixed(1)}%`),
-          )
-        : null
-
-      return h(
-        'div',
-        { className: 'dps-card dps-lens' },
-        h(
-          'div',
-          { className: 'dps-chart-head' },
-          h('div', { className: 'dps-chart-title' }, zoomed ? t('lens.uncachedTitle') : t('section.breakdown')),
-        ),
-        h(
-          'div',
-          { className: 'dps-lens-metrics' },
-          h(
-            'div',
-            { className: 'dps-lens-metric' },
-            h('div', { className: 'dps-lens-big' }, formatTokens(primary)),
-            h('div', { className: 'dps-lens-cap' }, primaryLabel),
-          ),
-          h(
-            'div',
-            { className: 'dps-lens-metric' },
-            h('div', { className: 'dps-lens-big dps-lens-accent' }, `${secondary.toFixed(1)}%`),
-            h('div', { className: 'dps-lens-cap' }, secondaryLabel),
-          ),
-        ),
-        bar,
-        detail,
-        zoomed
-          ? h('div', { className: 'dps-lens-note' }, t('lens.basis'))
-          : null,
-        h(
-          'button',
-          {
-            type: 'button',
-            className: 'dps-lens-action',
-            onClick: () => {
-              setZoomed(!zoomed)
-              hideTip()
-            },
-          },
-          h(Icon, { name: zoomed ? 'back' : 'zoom' }),
-          zoomed ? t('lens.back') : t('lens.zoom'),
-        ),
-        tooltip,
-      )
-    }
-    /**
-     * 宿主主题（dsh-client-ui-theme）里没有 --dsw-alias-state-idle-primary 这个 token，
-     * 用它的那一段会是透明的；第五色改由两个已定义的状态色混出来。
-     */
-    const PROVIDER_COLORS = [
-      'var(--dsw-alias-brand-primary)',
-      'var(--dsw-alias-state-success-primary)',
-      'var(--dsw-alias-state-warn-primary)',
-      'var(--dsw-alias-state-error-primary)',
-      'color-mix(in srgb, var(--dsw-alias-state-success-primary) 50%, var(--dsw-alias-state-error-primary))',
-      'var(--dsw-alias-label-secondary)',
-    ]
-
-    function providerLabel(id) {
-      if (id === '__other') return t('provider.other')
-      const key = `provider.${id}`
-      const text = t(key)
-      return text === key ? String(id) : text
-    }
-
-    /**
-     * 按「计费通道」拆分：每一步的 provider 决定它进了哪家账单。
-     * 之所以要这块，是因为中转网关的「总 Token」把缓存命中重复加了一列，
-     * 只有按 provider 拆开，才能和网关令牌对得上账。
-     */
-    function ProviderBreakdown(props) {
-      const [scope, setScope] = useState('today')
-      const today = props.today
-      const totals = props.totals
-      const source = scope === 'today' ? ((today && today.byProvider) || {}) : ((totals && totals.byProvider) || {})
-      const rows = Object.entries(source)
-        .map(([id, tokens]) => ({ id, tokens: toNumber(tokens) }))
-        .filter((row) => row.tokens > 0)
-        .sort((left, right) => right.tokens - left.tokens)
-
-      const sum = rows.reduce((total, row) => total + row.tokens, 0)
-      const visible = rows.slice(0, 6)
-      const rest = rows.slice(6)
-      if (rest.length > 0) {
-        visible.push({ id: '__other', tokens: rest.reduce((total, row) => total + row.tokens, 0) })
-      }
-
-      const toggle = h(
-        'div',
-        { className: 'dps-switch' },
-        [
-          { id: 'today', label: t('toggle.today') },
-          { id: 'all', label: t('toggle.all') },
-        ].map((option) =>
-          h(
-            'button',
-            {
-              key: option.id,
-              type: 'button',
-              'data-active': scope === option.id ? 'true' : 'false',
-              onClick: () => setScope(option.id),
-            },
-            option.label,
-          ),
-        ),
-      )
-
-      const list = h(
-        'div',
-        { className: 'dps-prov' },
-        visible.map((row, index) =>
-          h(
-            'div',
-            { className: 'dps-prov-row-v2', key: row.id },
-            h(
-              'div',
-              { className: 'dps-prov-top' },
-              h('span', { className: 'dps-prov-name', title: providerLabel(row.id) }, providerLabel(row.id)),
-              h('span', { className: 'dps-prov-value' }, formatTokens(row.tokens)),
-              h('span', { className: 'dps-prov-share' }, `${sum > 0 ? ((row.tokens / sum) * 100).toFixed(1) : '0.0'}%`),
-            ),
-            h(
-              'span',
-              { className: 'dps-prov-track' },
-              h('span', {
-                style: {
-                  width: `${sum > 0 ? Math.max((row.tokens / sum) * 100, 1.5) : 0}%`,
-                  background: PROVIDER_COLORS[index % PROVIDER_COLORS.length],
-                },
-              }),
-            ),
-          ),
-        ),
-      )
-
-      return h(
-        'div',
-        { className: 'dps-card dps-prov-card' },
-        h('div', { className: 'dps-prov-head' }, h('span', { className: 'dps-section-title' }, t('section.provider')), toggle),
-        list,
-      )
-    }
-
     /* ------------------------------------------------------------ 模型名称 */
 
     const MODEL_VENDORS = {
@@ -1717,6 +1460,264 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /* ------------------------------------------------------------ Token 构成 */
+
+    /**
+     * Token 构成（Cache Lens）的派生值。口径：
+     *   总 Token        = totals.tokens（宿主按每步 max(totalTokens, input + output) 折叠）
+     *   未缓存输入      = 总 Token − 缓存 − 输出（反推；不同供应商的 inputTokens 语义不一致，不能直接用）
+     *   缓存命中率      = 缓存 ÷（缓存 + 未缓存输入）
+     *   未缓存输入占比  = 未缓存输入 ÷（未缓存输入 + 输出）——放大视图的分母是「非缓存合计」
+     * 上游不自洽（缓存 + 输出 > 总量）时按 输出 → 缓存 依次夹紧，保证三段互斥、合计恰好等于总量。
+     */
+    function deriveLens(totals) {
+      const source = totals || {}
+      const total = toNumber(source.tokens)
+      const output = Math.min(toNumber(source.outputTokens), total)
+      const cache = Math.min(toNumber(source.cacheReadTokens) + toNumber(source.cacheWriteTokens), total - output)
+      const uncached = total - cache - output
+      const uncachedTotal = uncached + output
+      return {
+        total,
+        cache,
+        uncached,
+        output,
+        uncachedTotal,
+        hitRate: cache + uncached > 0 ? (cache / (cache + uncached)) * 100 : 0,
+        uncachedShare: uncachedTotal > 0 ? (uncached / uncachedTotal) * 100 : 0,
+      }
+    }
+
+    const LENS_COLORS = {
+      cache: 'var(--dps-accent)',
+      input: 'var(--dsw-alias-state-warn-primary)',
+      output: 'var(--dsw-alias-state-success-primary)',
+    }
+
+    function LensCard(props) {
+      const lens = useMemo(() => deriveLens(props.totals), [props.totals])
+      const [zoomed, setZoomed] = useState(false)
+      const [hover, setHover] = useState(null)
+      const segmentRefs = useRef({})
+
+      const denominator = zoomed ? lens.uncachedTotal : lens.total
+      const share = (value) => (denominator > 0 ? (value / denominator) * 100 : 0)
+      const rows = [
+        { key: 'cache', label: t('lens.cache'), value: lens.cache, visible: !zoomed },
+        { key: 'input', label: t('lens.input'), value: lens.uncached, visible: true },
+        { key: 'output', label: t('lens.output'), value: lens.output, visible: true },
+      ]
+
+      const metrics = zoomed
+        ? [
+            { id: 'primary', label: t('lens.uncachedTotal'), value: lens.uncachedTotal, parts: [tokenParts(lens.uncachedTotal)] },
+            { id: 'secondary', label: t('lens.uncachedShare'), value: lens.uncachedShare, text: formatPercent(lens.uncachedShare), swatch: 'input' },
+          ]
+        : [
+            { id: 'primary', label: t('lens.total'), value: lens.total, parts: [tokenParts(lens.total)] },
+            { id: 'secondary', label: t('lens.cacheHit'), value: lens.hitRate, text: formatPercent(lens.hitRate), swatch: 'cache', accent: true },
+          ]
+
+      let visibleBefore = false
+      const segments = rows.map((row) => {
+        const shown = row.visible && row.value > 0
+        const separator = shown && visibleBefore
+        if (shown) visibleBefore = true
+        const ratio = row.visible ? share(row.value) : 0
+        return h('span', {
+          key: row.key,
+          ref: (node) => {
+            segmentRefs.current[row.key] = node
+          },
+          className: 'dps-lens-seg',
+          'data-segment': row.key,
+          'data-value': row.visible ? row.value : 0,
+          'data-share': ratio,
+          'data-sep': separator ? 'true' : 'false',
+          'data-dim': hover && hover !== row.key ? 'true' : 'false',
+          // 宽度严格按占比（flex-grow = 百分比）；非零段最少 3px 才看得见，但不把 0.2% 画成 20%
+          style: { flexGrow: ratio, minWidth: shown ? '3px' : '0px', background: LENS_COLORS[row.key] },
+          onMouseEnter: () => setHover(row.key),
+          onMouseLeave: () => setHover(null),
+        })
+      })
+
+      let tip = null
+      const hovered = hover ? rows.find((row) => row.key === hover && row.visible) : null
+      const hoveredNode = hovered ? segmentRefs.current[hovered.key] : null
+      if (hovered && hoveredNode && typeof hoveredNode.getBoundingClientRect === 'function') {
+        const rect = hoveredNode.getBoundingClientRect()
+        tip = h(
+          Popover,
+          { anchor: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } },
+          h('div', { className: 'dps-pop-title' }, hovered.label),
+          h('div', { className: 'dps-pop-value' }, t('tip.tokens', { value: formatTokens(hovered.value) })),
+          h(
+            'div',
+            { className: 'dps-pop-title' },
+            `${formatPercent(share(hovered.value))} · ${zoomed ? t('lens.colShareUncached') : t('lens.colShareTotal')}`,
+          ),
+        )
+      }
+
+      return h(
+        'section',
+        { className: 'dps-panel dps-lens', 'data-dps-card': 'lens', 'data-zoomed': zoomed ? 'true' : 'false', 'data-denominator': denominator },
+        h(
+          'header',
+          { className: 'dps-panel-head' },
+          h('div', { className: 'dps-panel-title' }, h('h2', null, zoomed ? t('lens.uncachedTitle') : t('section.breakdown'))),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dps-ghost',
+              'data-dps-control': 'lens-zoom',
+              'aria-pressed': zoomed ? 'true' : 'false',
+              onClick: () => {
+                setZoomed(!zoomed)
+                setHover(null)
+              },
+            },
+            h(Icon, { name: zoomed ? 'back' : 'zoom' }),
+            zoomed ? t('lens.back') : t('lens.zoom'),
+          ),
+        ),
+        h(
+          'div',
+          { className: 'dps-lens-metrics' },
+          metrics.map((metric) =>
+            h(
+              'div',
+              { key: metric.id, className: 'dps-metric', 'data-dps-metric': metric.id, 'data-value': metric.value, 'data-accent': metric.accent ? 'true' : 'false' },
+              h(
+                'div',
+                { className: 'dps-metric-value' },
+                metric.parts ? h(ValueParts, { parts: metric.parts }) : h('span', { className: 'dps-num' }, metric.text),
+              ),
+              h(
+                'div',
+                { className: 'dps-metric-label' },
+                // 比率说的是哪一类，就用那一类的色块标出来（放大视图里是琥珀色的「未缓存输入」）
+                metric.swatch ? h('i', { className: 'dps-lens-dot', style: { background: LENS_COLORS[metric.swatch] }, 'aria-hidden': true }) : null,
+                metric.label,
+              ),
+            ),
+          ),
+        ),
+        h('div', { className: 'dps-lens-bar', role: 'img', 'aria-label': t('aria.lens') }, segments),
+        h(
+          'div',
+          { className: 'dps-lens-table', role: 'table' },
+          h(
+            'div',
+            { className: 'dps-lens-row dps-lens-th', role: 'row' },
+            h('span', { role: 'columnheader', 'aria-hidden': true }),
+            h('span', { role: 'columnheader' }, t('lens.colType')),
+            h('span', { role: 'columnheader' }, t('lens.colAmount')),
+            h('span', { role: 'columnheader', 'data-dps-field': 'share-basis' }, zoomed ? t('lens.colShareUncached') : t('lens.colShareTotal')),
+          ),
+          // 放大视图只列未缓存输入 / 输出；第三行留一个等高的空位，切换时卡片高度不变、整页不跳
+          zoomed ? h('div', { key: 'spacer', className: 'dps-lens-row', 'data-placeholder': 'true', 'aria-hidden': true }, h('i', { className: 'dps-lens-dot' }), h('span', null, '\u00a0')) : null,
+          rows
+            .filter((row) => row.visible)
+            .map((row) =>
+              h(
+                'div',
+                {
+                  key: row.key,
+                  className: 'dps-lens-row',
+                  role: 'row',
+                  'data-row': row.key,
+                  'data-value': row.value,
+                  'data-share': share(row.value),
+                  'data-active': hover === row.key ? 'true' : 'false',
+                  onMouseEnter: () => setHover(row.key),
+                  onMouseLeave: () => setHover(null),
+                },
+                h('i', { className: 'dps-lens-dot', style: { background: LENS_COLORS[row.key] }, 'aria-hidden': true }),
+                h('span', { className: 'dps-lens-name', role: 'cell' }, row.label),
+                h('span', { className: 'dps-lens-value', role: 'cell' }, formatTokens(row.value)),
+                h('span', { className: 'dps-lens-share', role: 'cell' }, formatPercent(share(row.value))),
+              ),
+            ),
+        ),
+        tip,
+      )
+    }
+
+    /* ------------------------------------------------------------ 供应商分类 */
+
+    function providerLabel(id) {
+      if (id === '__other') return t('provider.other')
+      const key = `provider.${id}`
+      const text = t(key)
+      return text === key ? String(id) : text
+    }
+
+    /** byProvider → 降序行；前 6 个各一行，其余合成「其他」。占比的分母是这一档的全部合计。 */
+    function deriveProviders(source) {
+      const entries = Object.entries(source || {})
+        .map(([id, tokens]) => ({ id, tokens: toNumber(tokens) }))
+        .filter((row) => row.tokens > 0)
+        .sort((left, right) => right.tokens - left.tokens || (left.id < right.id ? -1 : 1))
+      const total = entries.reduce((sum, row) => sum + row.tokens, 0)
+      const rows = entries.slice(0, 6)
+      const rest = entries.slice(6)
+      if (rest.length > 0) rows.push({ id: '__other', tokens: rest.reduce((sum, row) => sum + row.tokens, 0) })
+      return { total, rows: rows.map((row) => ({ ...row, share: total > 0 ? (row.tokens / total) * 100 : 0 })) }
+    }
+
+    function ProviderCard(props) {
+      const [scope, setScope] = useState('today')
+      const source = scope === 'today' ? (props.todayEntry && props.todayEntry.byProvider) || {} : (props.totals && props.totals.byProvider) || {}
+      const data = useMemo(() => deriveProviders(source), [source])
+      return h(
+        'section',
+        { className: 'dps-panel dps-prov', 'data-dps-card': 'provider', 'data-scope': scope },
+        h(
+          'header',
+          { className: 'dps-panel-head' },
+          h(
+            'div',
+            { className: 'dps-panel-title' },
+            h('h2', null, t('section.provider')),
+            h('span', { className: 'dps-panel-meta', 'data-dps-field': 'provider-total', 'data-value': data.total }, t('chart.total', { value: formatTokens(data.total) })),
+          ),
+          h(Segmented, {
+            control: 'provider-scope',
+            label: t('section.provider'),
+            value: scope,
+            onChange: setScope,
+            options: [
+              { id: 'today', label: t('toggle.today') },
+              { id: 'all', label: t('toggle.all') },
+            ],
+          }),
+        ),
+        data.rows.length === 0
+          ? h('div', { className: 'dps-prov-empty' }, t('chart.empty'))
+          : h(
+              'ul',
+              { className: 'dps-prov-list' },
+              data.rows.map((row) =>
+                h(
+                  'li',
+                  { key: row.id, className: 'dps-prov-row', 'data-provider': row.id, 'data-value': row.tokens, 'data-share': row.share },
+                  h('span', { className: 'dps-prov-name', title: providerLabel(row.id) }, providerLabel(row.id)),
+                  h('span', { className: 'dps-prov-value' }, formatTokens(row.tokens)),
+                  h('span', { className: 'dps-prov-share' }, formatPercent(row.share)),
+                  h(
+                    'span',
+                    { className: 'dps-prov-track', 'aria-hidden': true },
+                    h('span', { className: 'dps-prov-fill', style: { width: `${row.share}%`, minWidth: row.tokens > 0 ? '3px' : '0px' } }),
+                  ),
+                ),
+              ),
+            ),
+      )
+    }
+
     /* ------------------------------------------------------------------- 样式 */
 
     const CSS = `
@@ -1880,55 +1881,39 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-pop-num{font-weight:600;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
 .dps-pop-sum{margin-top:3px;padding-top:6px;border-top:1px solid var(--dps-line)}
 .dps-pop-sum .dps-pop-name{color:var(--dps-ink)}
-/* —— 过渡期：以下是尚未重做的卡片沿用的旧样式，随各卡片重做逐步删除 —— */
-.dps-section-title{font-size:14px;font-weight:600}
-.dps-card{padding:14px;border:1px solid var(--dsw-alias-border-l1);border-radius:14px;background:var(--dsw-alias-bg-layer-1)}
-.dps-tip{position:fixed;z-index:9999;pointer-events:none;transform:translate(-50%,-100%);background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:6px 10px;box-shadow:0 10px 28px var(--dps-shadow);white-space:nowrap;text-align:left}
-.dps-tip-date{font-size:10px;line-height:1.5;color:var(--dsw-alias-label-secondary)}
-.dps-tip-value{font-size:12px;line-height:1.5;font-weight:600;font-variant-numeric:tabular-nums}
-.dps-prov-card{display:flex;flex-direction:column;gap:12px}
-.dps-prov-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
-.dps-prov{display:flex;flex-direction:column;gap:9px}
-.dps-prov-row{display:grid;grid-template-columns:132px minmax(60px,1fr) auto 48px;gap:10px;align-items:center;font-size:12px}
-.dps-prov-name{color:var(--dsw-alias-label-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dps-prov-bar{height:6px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);overflow:hidden;display:block}
-.dps-prov-bar > span{display:block;height:100%;border-radius:999px}
-.dps-prov-value{font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap}
-.dps-prov-share{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary);text-align:right}
-.dps-chart-head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
-.dps-chart-title{display:flex;align-items:baseline;gap:8px;font-size:14px;font-weight:600;color:var(--dsw-alias-label-primary)}
-.dps-switch{display:inline-flex;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;overflow:hidden}
-.dps-switch button{appearance:none;border:none;background:transparent;color:var(--dsw-alias-label-secondary);font-size:11px;padding:4px 10px;cursor:pointer;font-family:inherit}
-.dps-switch button[data-active="true"]{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
-.dps-lens{display:flex;flex-direction:column;gap:12px}
-.dps-lens-metrics{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding-top:2px}
-.dps-lens-big{font-size:26px;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1}
-.dps-lens-accent{color:var(--dsw-alias-brand-primary)}
-.dps-lens-cap{font-size:12px;color:var(--dsw-alias-label-secondary);margin-top:2px}
-.dps-lens-bar{display:flex;width:100%;height:14px;border-radius:999px;overflow:hidden;background:var(--dsw-alias-bg-layer-2)}
-.dps-lens-seg{display:block;height:100%;transition:width .26s ease,opacity .18s ease,filter .18s ease;min-width:2px;cursor:default}
-.dps-lens-seg:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
-.dps-lens-seg[data-dim="true"]{opacity:.45}
-.dps-lens-rows{display:flex;flex-direction:column;gap:2px}
-.dps-lens-row{display:grid;grid-template-columns:10px 1fr auto 52px;align-items:baseline;gap:10px;font-size:13px;padding:6px 4px;border-radius:8px;transition:background .18s ease}
-.dps-lens-row[data-active="true"]{background:var(--dsw-alias-bg-layer-2)}
-.dps-lens-dot{width:10px;height:10px;border-radius:50%}
-.dps-lens-name{color:var(--dsw-alias-label-secondary)}
-.dps-lens-value{font-weight:600;font-variant-numeric:tabular-nums;text-align:right}
-.dps-lens-share{color:var(--dsw-alias-label-secondary);text-align:right;font-variant-numeric:tabular-nums}
-.dps-lens-note{font-size:11px;color:var(--dsw-alias-label-secondary)}
-.dps-lens-action{display:inline-flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:9px 12px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:transparent;color:var(--dsw-alias-label-secondary);font-size:12px;font-family:inherit;cursor:pointer;transition:border-color .18s ease,color .18s ease}
-.dps-lens-action:hover,.dps-lens-action:focus-visible{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);outline:none}
-.dps-lens-action svg{width:15px;height:15px}
-@media (prefers-reduced-motion:reduce){.dps-lens-seg,.dps-lens-row,.dps-lens-action{transition:none}}
-.dps-prov-track{height:8px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);overflow:hidden}
-.dps-prov-track > span{display:block;height:100%;border-radius:999px}
-.dps-prov-row-v2{display:flex;flex-direction:column;gap:8px}
-.dps-prov-row-v2 + .dps-prov-row-v2{margin-top:14px}
-.dps-prov-top{display:flex;align-items:baseline;gap:10px;font-size:13px}
-.dps-prov-top .dps-prov-value{margin-left:auto;font-weight:600}
-.dps-card{padding:18px 20px;border:1px solid var(--dps-line);border-radius:var(--dps-radius);background:var(--dps-card)}
-.dps-section-title{font-size:14px;font-weight:600}
+.dps-ghost{appearance:none;display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px 0 9px;border-radius:8px;border:1px solid var(--dps-line);background:transparent;color:var(--dps-muted);font-size:12.5px;cursor:pointer;white-space:nowrap;transition:color .15s ease,background-color .15s ease}
+.dps-ghost:hover{color:var(--dps-ink);background:var(--dps-hover)}
+.dps-ghost svg{width:15px;height:15px}
+.dps-lens-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.dps-metric{min-width:0}
+.dps-metric-value{display:flex;align-items:baseline;white-space:nowrap;font-variant-numeric:tabular-nums}
+.dps-metric-value .dps-num{font-size:28px}
+.dps-metric[data-accent="true"] .dps-num{color:var(--dps-accent)}
+.dps-metric-label{display:flex;align-items:center;gap:6px;margin-top:7px;font-size:12.5px;color:var(--dps-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dps-metric-label .dps-lens-dot{width:8px;height:8px;border-radius:2px;flex:0 0 auto}
+.dps-lens-bar{display:flex;height:12px;border-radius:999px;overflow:hidden;background:var(--dps-track)}
+.dps-lens-seg{display:block;height:100%;flex-shrink:1;flex-basis:0;transition:flex-grow .5s cubic-bezier(.3,.7,.2,1),min-width .5s ease,opacity .15s ease}
+.dps-lens-seg[data-sep="true"]{border-left:2px solid var(--dps-card)}
+.dps-lens-seg[data-dim="true"]{opacity:.35}
+.dps-lens-table{display:flex;flex-direction:column;gap:1px;margin:0 -8px}
+.dps-lens-row{display:grid;grid-template-columns:10px minmax(0,1fr) 84px 76px;align-items:center;column-gap:10px;padding:7px 8px;border-radius:8px;font-size:13px;transition:background-color .15s ease}
+.dps-lens-row[data-active="true"]{background:var(--dps-hover)}
+.dps-lens-row[data-placeholder="true"]{visibility:hidden;order:9}
+.dps-lens-th{padding-top:0;padding-bottom:3px;font-size:11.5px;color:var(--dps-faint)}
+.dps-lens-th span:nth-child(n+3),.dps-lens-value,.dps-lens-share{text-align:right}
+.dps-lens-dot{display:block;width:10px;height:10px;border-radius:3px}
+.dps-lens-name{color:var(--dps-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dps-lens-value{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dps-lens-share{color:var(--dps-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.dps-prov{flex:1 1 auto}
+.dps-prov-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:14px}
+.dps-prov-row{display:grid;grid-template-columns:minmax(0,1fr) auto 56px;align-items:baseline;column-gap:10px;row-gap:7px;font-size:13px}
+.dps-prov-name{min-width:0;color:var(--dps-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dps-prov-value{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dps-prov-share{color:var(--dps-muted);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.dps-prov-track{grid-column:1 / -1;display:block;height:6px;border-radius:999px;background:var(--dps-track);overflow:hidden}
+.dps-prov-fill{display:block;height:100%;border-radius:inherit;background:var(--dps-accent);transition:width .45s cubic-bezier(.3,.7,.2,1)}
+.dps-prov-empty{flex:1 1 auto;display:grid;place-items:center;min-height:72px;font-size:12.5px;color:var(--dps-faint)}
 `
 
     /* ------------------------------------------------------------ 通用组件 */
@@ -2305,7 +2290,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
             'div',
             { className: 'dps-grid' },
             h(ModelCard, { daily, today }),
-            h('div', { className: 'dps-side' }, h(Breakdown, { totals }), h(ProviderBreakdown, { today: todayEntry, totals })),
+            h('div', { className: 'dps-side' }, h(LensCard, { totals }), h(ProviderCard, { todayEntry, totals })),
           ),
         ),
       )
