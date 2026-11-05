@@ -1,5 +1,12 @@
 # Changelog
 
+## 2.4.14 — 2026-11-05
+
+- docs: drop the Cache Lens screenshot from the README (the overview already shows the page)
+- docs: bust the image cache so GitHub renders the new screenshots (camo caches by URL)
+- docs: refresh the README, the market description and all four screenshots for the new UI
+
+
 ## 2.4.13 — 2026-11-04
 
 - perf(host): measure the scan phases and raise readSession concurrency to 8
