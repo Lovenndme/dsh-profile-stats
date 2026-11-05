@@ -4,7 +4,7 @@
 
 [English](README.md) · **简体中文**
 
-![个人主页](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/overview.png)
+![个人主页](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/overview.png?v=2)
 
 ## 能看到什么
 
@@ -14,7 +14,7 @@
 - **Token 构成（Cache Lens）**：总 Token 与缓存命中率，以及「缓存命中 / 未缓存输入 / 输出」分段占比条，可放大查看非缓存部分的构成
 - **供应商分类**：按计费通道拆分，可切今日或累计
 
-![Cache Lens](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/mix.png)
+![Cache Lens](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/mix.png?v=2)
 
 所有数字都来自你自己机器上的会话日志（经 `ctx.sessionQuery` 读取），不猜、不估算。唯一的外发请求是每 6 小时读一次本包在 npm 上的版本号，供面板内的更新按钮使用；不上报数据、不碰凭据。
 
