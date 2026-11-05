@@ -18,7 +18,6 @@ model, and through which billing route — all folded from this machine's own se
   split as a segmented bar, with a zoom into the uncached part
 - **Provider split**: tokens per billing route, for today or all time
 
-![Cache Lens](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/mix.png?v=2)
 
 Everything is read from your own session logs through `ctx.sessionQuery`; nothing is re-derived from
 guesses. The only outbound request is a six-hourly read of this package's own version from the npm
