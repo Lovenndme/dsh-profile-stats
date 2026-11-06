@@ -2289,7 +2289,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-spark-line{fill:none;stroke:var(--dps-accent);stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
 .dps-spark-dot{fill:var(--dps-card);stroke:var(--dps-accent);stroke-width:1.4;vector-effect:non-scaling-stroke}
 .dps-delta{display:inline-flex;align-items:center;gap:3px;font-size:11.5px;font-weight:600;line-height:1;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--dps-muted)}
-.dps-delta[data-dir="up"]{color:var(--dsw-alias-state-warn-primary)}
+.dps-delta[data-dir="up"]{color:var(--dsw-alias-state-error-primary)}
 .dps-delta[data-dir="down"]{color:var(--dsw-alias-state-success-primary)}
 .dps-menu{position:relative;display:flex}
 .dps-menu-pop{position:absolute;right:0;top:calc(100% + 6px);z-index:80;min-width:156px;padding:5px;border-radius:10px;border:1px solid var(--dps-line);background:var(--dsw-alias-bg-layer-2);box-shadow:0 10px 30px var(--dps-shadow);display:flex;flex-direction:column;gap:2px}

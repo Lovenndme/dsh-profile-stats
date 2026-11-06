@@ -588,6 +588,12 @@ test('指标卡：数字与环比不被压缩（溢出会压在环比上），�
   assert.match(source, /\.dps-delta\{[^}]*white-space:nowrap/)
 })
 
+test('环比颜色：增长红色、下降绿色（取宿主主题的状态色）', () => {
+  const source = readClientSource()
+  assert.match(source, /\.dps-delta\[data-dir="up"\]\{color:var\(--dsw-alias-state-error-primary\)\}/)
+  assert.match(source, /\.dps-delta\[data-dir="down"\]\{color:var\(--dsw-alias-state-success-primary\)\}/)
+})
+
 test('client.js 里不能声明名为 window 的局部变量（会遮住全局对象：升级后 window.location.reload() 曾因此报错）', () => {
   const source = readClientSource()
   assert.equal(/\b(const|let|var)\s+window\b/.test(source), false)
