@@ -61,7 +61,7 @@ window.__ModuleLoader__.load({
       'action.export': 'Export',
       'action.exportCsv': 'CSV (daily)',
       'action.exportJson': 'JSON (snapshot)',
-      'delta.hint': 'Compared with the previous period',
+      'delta.hint': 'Versus the same days of the previous period, today excluded',
       'legend.less': 'Less',
       'legend.more': 'More',
       'tip.tokens': '{value} tokens',
@@ -137,7 +137,7 @@ window.__ModuleLoader__.load({
       'action.export': '导出',
       'action.exportCsv': 'CSV（按天）',
       'action.exportJson': 'JSON（快照）',
-      'delta.hint': '与上一周期相比',
+      'delta.hint': '与上一周期的同样天数相比（不含今天）',
       'legend.less': '少',
       'legend.more': '多',
       'tip.tokens': '{value} tokens',
@@ -414,13 +414,21 @@ window.__ModuleLoader__.load({
       return { range, days, startKey: localDateKey(addDays(end, -(days - 1))), endKey: todayKey }
     }
 
-    /** 上一个等长窗口：累计范围没有「上一期」，返回 null（页面据此不显示环比）。 */
-    function previousWindow(window) {
-      if (!window || !window.days) return null
-      const start = parseDateKey(window.startKey)
-      const end = parseDateKey(window.endKey)
+    /**
+     * 环比要比的两段：本期里已经过完的天（不含今天）对上一期的前同样天数。
+     * 直接拿「含今天的 N 天」去比「完整的上一个 N 天」会偏低——今天还没过完，越早看越低。
+     * 累计范围没有「上一期」，返回 null（页面据此不显示环比）。
+     */
+    function deltaWindows(rangeWin) {
+      if (!rangeWin || !(rangeWin.days >= 2)) return null
+      const start = parseDateKey(rangeWin.startKey)
+      const end = parseDateKey(rangeWin.endKey)
       if (!start || !end) return null
-      return { startKey: localDateKey(addDays(start, -window.days)), endKey: localDateKey(addDays(end, -window.days)) }
+      const lastFull = addDays(end, -1)
+      return {
+        current: { startKey: rangeWin.startKey, endKey: localDateKey(lastFull) },
+        previous: { startKey: localDateKey(addDays(start, -rangeWin.days)), endKey: localDateKey(addDays(lastFull, -rangeWin.days)) },
+      }
     }
 
     function emptySummary() {
@@ -2721,12 +2729,20 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
         () => summarizeDaily(daily, rangeWin.startKey, rangeWin.endKey),
         [daily, rangeWin.startKey, rangeWin.endKey],
       )
-      const previous = useMemo(() => previousWindow(rangeWin), [rangeWin.startKey, rangeWin.endKey])
-      const previousSummary = useMemo(
-        () => (previous ? summarizeDaily(daily, previous.startKey, previous.endKey) : null),
-        [daily, previous ? previous.startKey : '', previous ? previous.endKey : ''],
-      )
-      const delta = previousSummary ? deltaPercent(rangeSummary.tokens, previousSummary.tokens) : null
+      // 有数据的第一天（键已校验为定长 YYYY-MM-DD，字典序即日期序）
+      const firstKey = useMemo(() => {
+        let first = ''
+        for (const key of indexDaily(daily).keys()) if (!first || key < first) first = key
+        return first
+      }, [daily])
+      // 上一期必须完全落在有数据的日子里才比：只覆盖一部分时，环比会被放大成几百个百分点
+      const delta = useMemo(() => {
+        const windows = deltaWindows(rangeWin)
+        if (!windows || !firstKey || windows.previous.startKey < firstKey) return null
+        const current = summarizeDaily(daily, windows.current.startKey, windows.current.endKey).tokens
+        const previous = summarizeDaily(daily, windows.previous.startKey, windows.previous.endKey).tokens
+        return deltaPercent(current, previous)
+      }, [daily, rangeWin.startKey, rangeWin.endKey, firstKey])
       const lensTotals = useMemo(() => lensTotalsOf(rangeSummary), [rangeSummary])
       const spark = useMemo(() => {
         // 累计范围下迷你趋势只画最近 90 天，避免几百根柱子挤成一团
@@ -2739,12 +2755,11 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
       const average = useMemo(() => movingAverage(daily, spark), [daily, spark])
       // 累计范围的模型图没固定天数：用「首日 → 今天」的跨度决定桶数
       const spanDays = useMemo(() => {
-        const first = daily.find((entry) => entry && typeof entry.date === 'string')
-        const start = first ? parseDateKey(first.date) : null
+        const start = parseDateKey(firstKey)
         const end = parseDateKey(todayKey)
         if (!start || !end) return 0
         return Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1)
-      }, [daily, todayKey])
+      }, [firstKey, todayKey])
 
       const handleExport = (format) => {
         if (format === 'csv') {
