@@ -1,5 +1,46 @@
 # Changelog
 
+## 2.4.15 — 2026-11-06
+
+- ci: find the open market PR through the API, since gh pr list --head returned nothing
+- ci: build the market sync branch on the catalog's main, and check the token first
+- docs(market): describe the range switch, the trend line and the export
+- docs(readme): drop the mainland mirror install note
+- docs(readme): swap the hero for a light-theme preview capture and drop the screenshots section
+- docs: recapture every screenshot from the current preview page
+- feat(ui): first KPI trend shows daily bars for 7 / 30 days, the 7-day average for longer ranges
+- fix(ui): the trend line's end dot stays round instead of looking like a fork
+- style(ui): period delta in red when usage grows, green when it falls
+- fix(ui): a long period delta no longer overlaps the first KPI number
+- fix(ui): put the trend line beside the first KPI number so the five cards share one height and baseline
+- docs: cache hit rate definition, how to compare with a console, and the design research behind it
+- fix(client): Cache Lens takes the four parts as logged; per-provider hit rate; provider card Today button
+- fix(host): count a step as its four disjoint parts, so old logs without totalTokens keep their cache
+- docs: describe the time range, and make the Cache Lens docs match the code
+- test: cover the time range fixes in the in-repo suite
+- fix: switching the time range resets the model chart to that range's default granularity
+- chore: ignore the screenshot and playwright-cli scratch folders that preview checks leave in the repo
+- fix: small issues from the range review — range switch label, CSV quoting, JSON field names, stale comment
+- fix: period delta compares finished days only, and only when the previous period is fully covered
+- fix: model chart granularity, clipped first bucket and axis labels under the time range
+- fix: the range window variable shadowed the global window, so a finished update never reloaded the page
+- feat: page-level time range (7 / 30 / 90 days / all time) with export, trend and period delta
+- fix(ui): tooltips follow the mouse again
+- docs: regenerate the README images from the sanitized preview
+- fix: keep private relay and personal provider names out of public files; use current model names in the preview data
+- docs(readme): serve the panel capture from a fresh path so the CDN picks it up
+- docs(readme): use a real capture of the preview page as the hero image
+- docs(readme): replace the hero shot with a rendered panel mock, drop the anchor bar, center the screenshots
+- docs(readme): put the wide heatmap on its own row, pair the two square screenshots
+- docs(readme): restructure into centered hero, unified badges, screenshots grid and feature table
+- docs: note the CI log artifacts and the auto-filed failure issue
+- ci: give each artifact a slash-free name (upload-artifact rejects / in names)
+- ci: keep the test log as an artifact and open an issue when the suite fails
+- test: cover the identity override file, provider grouping and the registry TTL
+- test: add an in-repo node:test suite and fix the bugs it found
+- docs(readme): add release / npm / downloads / license / awesome-dsh-plugin badges
+
+
 ## 2.4.14 — 2026-11-05
 
 - docs: drop the Cache Lens screenshot from the README (the overview already shows the page)
