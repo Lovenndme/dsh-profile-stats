@@ -17,7 +17,7 @@ all folded from this machine's own session logs.</p>
 
 <p><b>English</b> · <a href="README.zh.md">简体中文</a></p>
 
-<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/panel-v2.png?v=3" alt="The profile page in the DSH sidebar" width="900">
+<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/preview.png" alt="The profile page in the DSH sidebar" width="900">
 
 </div>
 
