@@ -17,11 +17,9 @@
 
 <p><a href="README.md">English</a> · <b>简体中文</b></p>
 
-<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/overview.png?v=2" alt="DSH 侧栏里的个人用量主页" width="900">
+<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/hero.png?v=1" alt="DSH 侧栏里的个人用量主页" width="900">
 
 </div>
-
-[安装](#安装) · [截图](#截图) · [能看到什么](#能看到什么) · [隐私](#隐私) · [环境要求](#环境要求) · [内部实现](docs/INTERNALS.md)
 
 ## 安装
 
@@ -35,15 +33,20 @@ dsh-profile-stats
 
 ## 截图
 
-<table>
-  <tr>
-    <td align="center"><img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/heatmap.png?v=2" alt="Token 活动热力图" width="100%"><br><sub><b>Token 活动</b> — 近 12 个月，每天 / 每周 / 累计总量</sub></td>
-  </tr>
-  <tr>
-    <td align="center" width="50%"><img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/model-chart.png?v=2" alt="模型分布" width="100%"><br><sub><b>模型分布</b> — 按模型家族与档位堆叠</sub></td>
-    <td align="center" width="50%"><img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/mix.png?v=2" alt="Token 构成（Cache Lens）" width="100%"><br><sub><b>Cache Lens</b> — 缓存命中 / 未缓存输入 / 输出</sub></td>
-  </tr>
-</table>
+<p align="center">
+  <img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/heatmap.png?v=2" alt="Token 活动热力图" width="760"><br>
+  <sub><b>Token 活动</b> — 近 12 个月，每天 / 每周 / 累计总量</sub>
+</p>
+
+<p align="center">
+  <img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/model-chart.png?v=2" alt="模型分布" width="600"><br>
+  <sub><b>模型分布</b> — 按模型家族与档位堆叠</sub>
+</p>
+
+<p align="center">
+  <img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/mix.png?v=2" alt="Token 构成（Cache Lens）" width="440"><br>
+  <sub><b>Cache Lens</b> — 缓存命中 / 未缓存输入 / 输出</sub>
+</p>
 
 ## 能看到什么
 

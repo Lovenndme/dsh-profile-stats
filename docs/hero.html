@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>dsh-profile-stats · hero</title>
+<style>
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:#0e1117}
+  body{
+    width:1600px;
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif;
+    color:#e6e8ee; -webkit-font-smoothing:antialiased;
+  }
+  .page{padding:30px 34px 34px}
+  .top{display:flex;align-items:center;gap:12px;margin-bottom:20px}
+  .avatar{width:40px;height:40px;border-radius:11px;background:#222a38;display:flex;align-items:center;
+          justify-content:center;font-weight:700;font-size:16px;color:#dfe6f5}
+  .who{display:flex;flex-direction:column;gap:3px}
+  .name{font-size:15px;font-weight:650;letter-spacing:.2px}
+  .handle{font-size:12px;color:#7d879b}
+  .spacer{flex:1}
+  .refresh{width:34px;height:34px;border-radius:9px;border:1px solid #232a36;background:#151a22;
+           display:flex;align-items:center;justify-content:center;color:#8b93a7;font-size:15px}
+
+  .cards{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:16px}
+  .card{background:#151a22;border:1px solid #232a36;border-radius:13px;padding:15px 17px 14px}
+  .label{font-size:12px;color:#8b93a7;margin-bottom:11px;display:flex;align-items:center;gap:5px}
+  .label span{width:5px;height:5px;border-radius:50%;background:#3d4657}
+  .value{font-size:27px;font-weight:600;letter-spacing:.3px;line-height:1}
+  .unit{font-size:13px;color:#8b93a7;margin-left:3px;font-weight:450}
+  .spark{display:flex;align-items:flex-end;gap:4px;height:26px;margin-top:10px}
+  .spark i{width:10px;background:#2c3a52;border-radius:2px}
+  .spark i.hi{background:#5b8def}
+
+  .panel{background:#151a22;border:1px solid #232a36;border-radius:14px;padding:16px 18px 18px}
+  .panel h3{margin:0 0 15px;font-size:13px;font-weight:600;color:#cfd6e4;
+            display:flex;align-items:center;gap:8px}
+  .panel h3 em{font-style:normal;color:#7d879b;font-weight:450;font-size:12px}
+  .tabs{margin-left:auto;display:flex;gap:4px;font-size:11px;color:#7d879b}
+  .tab{padding:4px 10px;border-radius:7px}
+  .tab.on{background:#222a38;color:#dfe6f5}
+
+  .heat-wrap{margin-bottom:16px}
+  .heat{display:grid;grid-template-columns:repeat(53,1fr);gap:3px}
+  .heat i{aspect-ratio:1;border-radius:3px;background:#1b222d}
+  .legend{display:flex;justify-content:flex-end;align-items:center;gap:6px;margin-top:10px;
+          font-size:11px;color:#7d879b}
+  .legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
+
+  .grid2{display:grid;grid-template-columns:1.3fr 1fr;gap:16px}
+  .bars{display:flex;align-items:flex-end;gap:16px;height:168px;padding:0 4px}
+  .bar{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%}
+  .bar b{display:block;width:26px;border-radius:4px 4px 2px 2px;background:#5b8def}
+  .bar b.c2{background:#3fb950}
+  .bar b.c3{background:#d29922}
+  .axis{display:flex;gap:16px;padding:8px 4px 0;font-size:11px;color:#7d879b}
+  .axis span{flex:1;text-align:center}
+  .key{display:flex;gap:14px;margin-top:12px;font-size:11px;color:#8b93a7}
+  .key i{width:8px;height:8px;border-radius:2px;display:inline-block;margin-right:5px}
+
+  .big{display:flex;align-items:baseline;gap:26px;margin:2px 0 14px}
+  .big .n{font-size:30px;font-weight:600}
+  .big .n small{font-size:13px;color:#8b93a7;font-weight:450;margin-left:3px}
+  .big .rate{font-size:26px;font-weight:600;color:#6ba4ff}
+  .big .rate small{font-size:12px;color:#8b93a7;font-weight:450;display:block;margin-top:3px}
+  .track{height:9px;border-radius:5px;background:#1f2733;display:flex;overflow:hidden;margin-bottom:16px}
+  .track b{display:block;height:100%}
+  .rows{display:flex;flex-direction:column;gap:9px;font-size:12px}
+  .row{display:flex;align-items:center;gap:8px;color:#aab3c4}
+  .row i{width:8px;height:8px;border-radius:2px}
+  .row s{flex:1;text-decoration:none}
+  .row u{text-decoration:none;color:#dfe6f5;font-variant-numeric:tabular-nums}
+  .row u.pct{color:#7d879b;width:56px;text-align:right}
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="top">
+    <div class="avatar">M</div>
+    <div class="who">
+      <div class="name">Mike</div>
+      <div class="handle">@lovenndme</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="refresh">⟳</div>
+  </div>
+
+  <div class="cards">
+    <div class="card">
+      <div class="label"><span></span>累计 Token 数</div>
+      <div class="value">35.4<small class="unit">亿</small></div>
+      <div class="spark">
+        <i style="height:38%"></i><i style="height:52%"></i><i style="height:44%"></i><i style="height:66%"></i>
+        <i style="height:58%"></i><i class="hi" style="height:88%"></i><i style="height:72%"></i>
+      </div>
+    </div>
+    <div class="card"><div class="label"><span></span>今日 Token 用量</div><div class="value">1011.8<small class="unit">万</small></div></div>
+    <div class="card"><div class="label"><span></span>最长任务用时</div><div class="value">1<small class="unit">小时</small></div></div>
+    <div class="card"><div class="label"><span></span>最长连续天数</div><div class="value">11<small class="unit">天</small></div></div>
+    <div class="card"><div class="label"><span></span>当前连续天数</div><div class="value">11<small class="unit">天</small></div></div>
+  </div>
+
+  <div class="panel heat-wrap">
+    <h3>Token 活动
+      <span class="tabs"><span class="tab on">每天</span><span class="tab">每周</span><span class="tab">累计总量</span></span>
+    </h3>
+    <div class="heat" id="heat"></div>
+    <div class="legend">少
+      <i style="background:#1b222d"></i><i style="background:#1f3350"></i><i style="background:#28496f"></i>
+      <i style="background:#35618f"></i><i style="background:#4f86c6"></i>
+    多</div>
+  </div>
+
+  <div class="grid2">
+    <div class="panel">
+      <h3>模型分布 <em>总计 35.4 亿</em>
+        <span class="tabs"><span class="tab">按日</span><span class="tab on">按周</span><span class="tab">按月</span></span>
+      </h3>
+      <div class="bars">
+        <div class="bar"><b style="height:6%"></b></div>
+        <div class="bar"><b style="height:11%"></b></div>
+        <div class="bar"><b style="height:16%"></b></div>
+        <div class="bar"><b style="height:22%"></b></div>
+        <div class="bar"><b style="height:34%"></b></div>
+        <div class="bar"><b style="height:74%"></b></div>
+        <div class="bar"><b style="height:52%"></b></div>
+      </div>
+      <div class="axis"><span>8/17</span><span>8/31</span><span>9/14</span><span>9/28</span><span>10/12</span><span>10/26</span><span>11/2</span></div>
+      <div class="key">
+        <span><i style="background:#5b8def"></i>DeepSeek V4.1 Flash</span>
+        <span><i style="background:#3fb950"></i>DeepSeek V4 Flash</span>
+        <span><i style="background:#d29922"></i>DeepSeek V4 Pro</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Token 构成
+        <span class="tabs"><span class="tab on">放大非缓存细分</span></span>
+      </h3>
+      <div class="big">
+        <div class="n">35.4<small>亿</small><div class="label" style="margin:8px 0 0">总 Token</div></div>
+        <div class="rate">96.1%<small>缓存命中率</small></div>
+      </div>
+      <div class="track">
+        <b style="width:96.1%;background:#5b8def"></b>
+        <b style="width:3.9%;background:#d29922"></b>
+      </div>
+      <div class="rows">
+        <div class="row"><i style="background:#5b8def"></i><s>缓存命中</s><u>34.4 亿</u><u class="pct">96.1%</u></div>
+        <div class="row"><i style="background:#d29922"></i><s>未缓存输入</s><u>1.4 亿</u><u class="pct">3.9%</u></div>
+        <div class="row"><i style="background:#3fb950"></i><s>输出</s><u>840.9 万</u><u class="pct">—</u></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const palette = ['#1b222d','#1f3350','#28496f','#35618f','#4f86c6'];
+  const rnd = i => {
+    const x = Math.sin(i * 127.1 + 311.7) * 43758.5453;
+    return x - Math.floor(x);
+  };
+  const heat = document.getElementById('heat');
+  for (let w = 0; w < 53; w++) {
+    for (let d = 0; d < 7; d++) {
+      const r = rnd(w * 7 + d);
+      let lvl;
+      if (w < 44) lvl = r < 0.55 ? 0 : r < 0.86 ? 1 : (r < 0.97 ? 2 : 0);
+      else lvl = r < 0.10 ? 0 : r < 0.26 ? 2 : r < 0.52 ? 3 : r < 0.86 ? 4 : 3;
+      const cell = document.createElement('i');
+      cell.style.background = palette[lvl];
+      heat.appendChild(cell);
+    }
+  }
+</script>
+</body>
+</html>

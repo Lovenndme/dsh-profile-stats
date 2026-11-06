@@ -17,11 +17,9 @@ all folded from this machine's own session logs.</p>
 
 <p><b>English</b> · <a href="README.zh.md">简体中文</a></p>
 
-<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/overview.png?v=2" alt="The profile page in the DSH sidebar" width="900">
+<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/hero.png?v=1" alt="The profile page in the DSH sidebar" width="900">
 
 </div>
-
-[Install](#install) · [Screenshots](#screenshots) · [What you get](#what-you-get) · [Privacy](#privacy) · [Requirements](#requirements) · [Internals](docs/INTERNALS.md)
 
 ## Install
 
@@ -37,15 +35,20 @@ Pages and may not open without a proxy. Afterwards the plugin works fully offlin
 
 ## Screenshots
 
-<table>
-  <tr>
-    <td align="center"><img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/heatmap.png?v=2" alt="Token activity heatmap" width="100%"><br><sub><b>Token activity</b> — 12 months, daily / weekly / cumulative total</sub></td>
-  </tr>
-  <tr>
-    <td align="center" width="50%"><img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/model-chart.png?v=2" alt="Model distribution" width="100%"><br><sub><b>Model distribution</b> — by model family and tier</sub></td>
-    <td align="center" width="50%"><img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/mix.png?v=2" alt="Token mix (Cache Lens)" width="100%"><br><sub><b>Cache Lens</b> — cache hit / uncached input / output</sub></td>
-  </tr>
-</table>
+<p align="center">
+  <img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/heatmap.png?v=2" alt="Token activity heatmap" width="760"><br>
+  <sub><b>Token activity</b> — 12 months, daily / weekly / cumulative total</sub>
+</p>
+
+<p align="center">
+  <img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/model-chart.png?v=2" alt="Model distribution" width="600"><br>
+  <sub><b>Model distribution</b> — stacked by model family and tier</sub>
+</p>
+
+<p align="center">
+  <img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/mix.png?v=2" alt="Token mix (Cache Lens)" width="440"><br>
+  <sub><b>Cache Lens</b> — cache hit / uncached input / output</sub>
+</p>
 
 ## What you get
 
