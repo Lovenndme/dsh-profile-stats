@@ -29,8 +29,8 @@ test('stepTokens：优先上游 totalTokens，但不小于输入 + 输出', () =
 
 test('providerOf：读 message.source.provider，缺失回落 unknown', () => {
   const event = (source) => ({ type: 'assistant/message', data: { message: { source } } })
-  assert.equal(providerOf(event({ provider: 'myapi' })), 'myapi')
-  assert.equal(providerOf(event({ provider: '  wincode  ' })), 'wincode')
+  assert.equal(providerOf(event({ provider: 'alpha' })), 'alpha')
+  assert.equal(providerOf(event({ provider: '  bravo  ' })), 'bravo')
   assert.equal(providerOf(event({ provider: '' })), 'unknown')
   assert.equal(providerOf(event({})), 'unknown')
   assert.equal(providerOf(event({ provider: 42 })), 'unknown')
@@ -85,7 +85,7 @@ test('applyEvent：一次模型调用的全部口径同步累加', () => {
     cacheRead: 600,
     cacheWrite: 0,
     model: 'deepseek-v4-1-flash-261017',
-    provider: 'myapi',
+    provider: 'alpha',
   })
   applyEvent(fold, event)
 
@@ -104,8 +104,8 @@ test('applyEvent：一次模型调用的全部口径同步累加', () => {
   assert.deepEqual(fold.perDayInput, { '2026-11-06': 1000 })
   assert.deepEqual(fold.perDayOutput, { '2026-11-06': 100 })
   assert.deepEqual(fold.perDayCache, { '2026-11-06': 600 })
-  assert.deepEqual(fold.perProvider, { myapi: 1100 })
-  assert.deepEqual(fold.perDayProvider, { '2026-11-06': { myapi: 1100 } })
+  assert.deepEqual(fold.perProvider, { alpha: 1100 })
+  assert.deepEqual(fold.perDayProvider, { '2026-11-06': { alpha: 1100 } })
   assert.deepEqual(fold.perModel, { 'deepseek-v4-1-flash': 1100 })
   assert.deepEqual(fold.perDayModel, { '2026-11-06': { 'deepseek-v4-1-flash': 1100 } })
 })
@@ -123,14 +123,14 @@ test('applyEvent：没有 usage 的 assistant/message 不算一次调用', () =>
 
 test('applyEvent：没有时间戳也要计数（只是进不了每日表）', () => {
   const fold = emptyFold('s1', 0)
-  applyEvent(fold, assistantEvent({ seq: 1, time: 0, input: 10, output: 5, provider: 'myapi', model: 'x' }))
+  applyEvent(fold, assistantEvent({ seq: 1, time: 0, input: 10, output: 5, provider: 'alpha', model: 'x' }))
   assert.equal(fold.tokens, 15)
   assert.equal(fold.calls, 1)
   assert.deepEqual(fold.perDay, {})
   assert.deepEqual(fold.perDayProvider, {})
   assert.deepEqual(fold.perDayModel, {})
   // 不需要日期的口径必须照记，否则按 provider / 模型拆出来的合计会小于总量。
-  assert.deepEqual(fold.perProvider, { myapi: 15 })
+  assert.deepEqual(fold.perProvider, { alpha: 15 })
   assert.deepEqual(fold.perModel, { x: 15 })
 })
 
@@ -207,9 +207,9 @@ test('foldSnapshot：继承前缀单独记账，主口径从 inheritedEventCount
     session: { id: 'copy', createdAt: day2, parentSession: 'origin' },
     inheritedEventCount: 2,
     events: [
-      assistantEvent({ seq: 0, time: day1, input: 400, output: 100, model: 'deepseek-v4-1-flash', provider: 'myapi' }),
-      assistantEvent({ seq: 1, time: day1, input: 400, output: 100, model: 'deepseek-v4-1-flash', provider: 'myapi' }),
-      assistantEvent({ seq: 2, time: day2, input: 700, output: 100, model: 'deepseek-v4-pro', provider: 'wincode' }),
+      assistantEvent({ seq: 0, time: day1, input: 400, output: 100, model: 'deepseek-v4-1-flash', provider: 'alpha' }),
+      assistantEvent({ seq: 1, time: day1, input: 400, output: 100, model: 'deepseek-v4-1-flash', provider: 'alpha' }),
+      assistantEvent({ seq: 2, time: day2, input: 700, output: 100, model: 'deepseek-v4-pro', provider: 'bravo' }),
       turnStartEvent({ seq: 3, time: day2, turn: 't1' }),
       turnEndEvent({ seq: 4, time: day2 + 30000, turn: 't1' }),
     ],
@@ -228,7 +228,7 @@ test('foldSnapshot：继承前缀单独记账，主口径从 inheritedEventCount
   assert.equal(fold.inputTokens, 700)
   assert.equal(fold.outputTokens, 100)
   assert.deepEqual(fold.perDay, { '2026-11-06': 800 })
-  assert.deepEqual(fold.perProvider, { wincode: 800 })
+  assert.deepEqual(fold.perProvider, { bravo: 800 })
   assert.deepEqual(fold.perModel, { 'deepseek-v4-pro': 800 })
   assert.equal(fold.longestTurnMs, 30000)
   assert.equal(fold.firstTime, day2, '首末时间只看主口径')
@@ -242,8 +242,8 @@ test('foldSnapshot：继承前缀单独记账，主口径从 inheritedEventCount
   assert.deepEqual(fold.inheritedPerDayCalls, { '2026-11-04': 2 })
   assert.deepEqual(fold.inheritedPerDayInput, { '2026-11-04': 800 })
   assert.deepEqual(fold.inheritedPerDayOutput, { '2026-11-04': 200 })
-  assert.deepEqual(fold.inheritedPerProvider, { myapi: 1000 })
-  assert.deepEqual(fold.inheritedPerDayProvider, { '2026-11-04': { myapi: 1000 } })
+  assert.deepEqual(fold.inheritedPerProvider, { alpha: 1000 })
+  assert.deepEqual(fold.inheritedPerDayProvider, { '2026-11-04': { alpha: 1000 } })
   assert.deepEqual(fold.inheritedPerModel, { 'deepseek-v4-1-flash': 1000 })
   assert.deepEqual(fold.inheritedPerDayModel, { '2026-11-04': { 'deepseek-v4-1-flash': 1000 } })
 })

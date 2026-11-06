@@ -17,8 +17,8 @@
 ### [A-H1] 孤儿会话的继承前缀补回总量时，每日明细算错（供应商分类「今日 / 累计」对不上总量）
 - 现象：fork / seed 出来的会话，若其来源会话已被删除（「孤儿」），前缀用量会补回总量；但那一天的
   `byProvider` / `inputTokens` / `outputTokens` / `cacheTokens` 用的是会话**自身**当天的明细——同一天自身用量被算两次，
-  前缀明细一笔不进；`totals.byProvider` 也完全没有前缀。测试夹具里：某天 tokens = 310，`byProvider` 却只有 `{wincode: 120}`
-  （应为 wincode 110 + relay-x 200）。
+  前缀明细一笔不进；`totals.byProvider` 也完全没有前缀。测试夹具里：某天 tokens = 310，`byProvider` 却只有 `{alpha: 120}`
+  （应为 alpha 110 + relay-x 200）。
 - 根因：`index.js` 的 `mergeDay(fold, source, …)` 合并前缀时读的是 `fold.perDayInput / perDayProvider …`（自身的表）。
 - 修法：折叠时为前缀单独记 `inheritedPerProvider / inheritedPerDay{Provider,Input,Output,Cache}`；`mergeDay` 改为接收同一来源的一整组表；
   孤儿前缀的 provider 也补进 `totals.byProvider`。`CACHE_VERSION` 11 → 12。
@@ -191,6 +191,15 @@
   快照新增 `firstScan`，只有首次全量扫描（缓存为空，或上次首扫被打断后续扫）为 true。页面打开不再强制重扫；
   进度条只在 `firstScan` 或还没有任何数据时出现；刷新图标只在用户亲手点刷新时转到重扫结束。不改口径、不改缓存结构，`CACHE_VERSION` 仍为 12。
 - 断言：`[B-12] …`（客户端 7 条）、`[H-5] …`（宿主 6 条）
+
+### [B-13] 个人 / 公司使用的中转渠道名称出现在公开文件里（主人反馈）
+- 现象：供应商文案字典为主人自己使用的几个渠道 id 写了显示名（含公司中转站的名称），预览假数据、测试夹具、几张 README 图片也用了同样的渠道与过时的模型名。
+  这些文件都在公开仓库与 npm 包里。
+- 修法：字典里只保留宿主内置的 `deepseek-*` 与「未知 / 其他」，其余渠道一律按 id 原样显示；预览假数据改用公开的 `deepseek-*` 渠道和一个虚构 id；
+  模型名换成最新型号；测试夹具与源码注释里的渠道 id 换成中性占位；README 用的三张图（首图、模型分布图、overview）用清理后的预览重新生成，换了新文件名以避开 CDN 缓存。
+- 改前 / 改后：真实页面里这些渠道会显示 id 而不是中文名（例如显示小写 id）。预览与文档图片不再出现这些渠道。数字不变。
+- 没有处理的残留（需要主人决定）：旧提交历史与已发布的 npm 版本里仍含这些名称；`docs/CLAUDE-CODE-BRIEF.md` 里的示例 id；jsDelivr 上旧图片的缓存。
+- 断言：仓库外的 `client-smoke.mjs` 里 `[B-13]` 两条（检查源码与预览数据里没有这些名称；这类检查不能写进仓库内的测试，否则测试本身就会带着这些名称）
 
 ### [B-H1] 宿主 `/update` 没有防重入
 - 现象：两个 `POST /update` 会并发跑两轮 `removeBundle → installBundle`，第二轮卸掉刚装好的包。

@@ -154,7 +154,7 @@ function emptyFold(sessionId, createdAt, parentSession) {
     perDayInput: {},
     perDayOutput: {},
     perDayCache: {},
-    /** 按 provider 拆的用量（wincode / arkcli-coding-plan / myapi …），用于和网关账单对账。 */
+    /** 按 provider 拆的用量（deepseek-official / deepseek-account …），用于和网关账单对账。 */
     perProvider: {},
     perDayProvider: {},
     /** 按模型大类拆的用量（flash / pro / other）。 */
@@ -195,7 +195,7 @@ function stepTokens(usage) {
   return Math.max(total, input + output)
 }
 
-/** 这一步是谁服务的（wincode / arkcli-coding-plan / myapi …），用于和网关账单对账。 */
+/** 这一步是谁服务的（deepseek-official / deepseek-account …），用于和网关账单对账。 */
 function providerOf(event) {
   const source = event && event.data && event.data.message && event.data.message.source
   const provider = source && typeof source.provider === 'string' ? source.provider.trim() : ''

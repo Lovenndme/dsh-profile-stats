@@ -26,7 +26,7 @@ function makeSessions() {
       header: { id: 's1', createdAt: at(11, 5) },
       live: false,
       events: [
-        assistantEvent({ seq: 0, time: at(11, 5), input: 100, output: 50, total: 150, provider: 'myapi', model: 'deepseek-v4-1-flash' }),
+        assistantEvent({ seq: 0, time: at(11, 5), input: 100, output: 50, total: 150, provider: 'alpha', model: 'deepseek-v4-1-flash' }),
         turnStartEvent({ seq: 1, time: at(11, 5), turn: 't1' }),
         turnEndEvent({ seq: 2, time: at(11, 5) + 45000, turn: 't1' }),
       ],
@@ -35,7 +35,7 @@ function makeSessions() {
       header: { id: 's2', createdAt: at(11, 6) },
       live: false,
       events: [
-        assistantEvent({ seq: 0, time: at(11, 6), input: 150, output: 50, total: 200, provider: 'wincode', model: 'deepseek-v4-pro' }),
+        assistantEvent({ seq: 0, time: at(11, 6), input: 150, output: 50, total: 200, provider: 'bravo', model: 'deepseek-v4-pro' }),
       ],
     },
   ]
@@ -124,7 +124,7 @@ test('createController：第二次扫描只重读活着的会话，已落盘的�
 
   host.sessions[0].live = true
   host.sessions[0].events.push(
-    assistantEvent({ seq: 3, time: at(11, 7), input: 60, output: 40, total: 100, provider: 'myapi', model: 'deepseek-v4-1-flash' }),
+    assistantEvent({ seq: 3, time: at(11, 7), input: 60, output: 40, total: 100, provider: 'alpha', model: 'deepseek-v4-1-flash' }),
   )
   await controller.scan('second')
 
@@ -289,7 +289,7 @@ test('createController：缓存写不进去也照常出数（缓存只是加速�
 
 test('createController：继承前缀的会话在扫描后按「原件是否还在」正确归类', async (t) => {
   const prefixEvents = [
-    assistantEvent({ seq: 0, time: at(11, 1), input: 200, output: 100, total: 300, provider: 'myapi', model: 'deepseek-v4-1-flash' }),
+    assistantEvent({ seq: 0, time: at(11, 1), input: 200, output: 100, total: 300, provider: 'alpha', model: 'deepseek-v4-1-flash' }),
   ]
   const sessions = [
     { header: { id: 'origin', createdAt: at(11, 1) }, live: false, events: prefixEvents },
@@ -299,7 +299,7 @@ test('createController：继承前缀的会话在扫描后按「原件是否还�
       inheritedEventCount: 1,
       events: [
         ...prefixEvents,
-        assistantEvent({ seq: 1, time: at(11, 2), input: 400, output: 100, total: 500, provider: 'wincode', model: 'deepseek-v4-pro' }),
+        assistantEvent({ seq: 1, time: at(11, 2), input: 400, output: 100, total: 500, provider: 'bravo', model: 'deepseek-v4-pro' }),
       ],
     },
   ]

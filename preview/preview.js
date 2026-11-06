@@ -139,17 +139,17 @@
       var models = late
         ? {
             'deepseek-v4-1-flash': 82,
-            'deepseek-v4-pro': 9,
-            'claude-3-5-sonnet': 3,
-            'gpt-4o': 2,
-            'gemini-2-5-pro': 1.5,
-            'glm-4-6': 1,
-            'qwen3-coder-plus': 0.8,
-            'kimi-k2': 0.7,
+            'deepseek-v4-1-pro': 9,
+            'claude-sonnet-5-5': 3,
+            'gpt-6-astra': 2,
+            'claude-opus-5-5': 1.5,
+            'claude-haiku-5-5': 1,
+            'claude-fable-5-1': 0.8,
           }
-        : { 'deepseek-v4-flash': 70, 'deepseek-v4-pro': 20, 'claude-3-5-sonnet': 10 }
-      var providers = { myapi: 48, wincode: 27, 'arkcli-coding-plan': 14, 'deepseek-official': 9, 'relay-lab': 2 }
-      if (entry.offset === 0) providers = { myapi: 70, wincode: 30 }
+        : { 'deepseek-v4-1-flash': 70, 'deepseek-v4-1-pro': 20, 'claude-sonnet-5-5': 10 }
+      // 预览数据只用公开的供应商 id（宿主内置的 deepseek-*）加一个虚构的未知 id，演示「未知 id 原样显示」
+      var providers = { 'deepseek-official': 52, 'deepseek-account': 30, 'deepseek-modlens': 14, 'relay-lab': 4 }
+      if (entry.offset === 0) providers = { 'deepseek-official': 70, 'deepseek-account': 30 }
       var cache = Math.floor(tokens * (0.955 + rand() * 0.012))
       var output = Math.floor(tokens * (0.0016 + rand() * 0.001))
       return {

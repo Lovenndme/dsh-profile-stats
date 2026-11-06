@@ -17,13 +17,13 @@ function foldOf(id, events, extra = {}) {
 /** 两个普通会话：s1 跨两天两种供应商/模型，s2 只有一天一次调用。 */
 function corpus() {
   const s1 = foldOf('s1', [
-    assistantEvent({ seq: 0, time: DAY_1, input: 400, output: 100, total: 500, provider: 'myapi', model: 'deepseek-v4-1-flash' }),
-    assistantEvent({ seq: 1, time: DAY_2, input: 800, output: 200, cacheRead: 600, total: 1000, provider: 'wincode', model: 'deepseek-v4-pro' }),
+    assistantEvent({ seq: 0, time: DAY_1, input: 400, output: 100, total: 500, provider: 'alpha', model: 'deepseek-v4-1-flash' }),
+    assistantEvent({ seq: 1, time: DAY_2, input: 800, output: 200, cacheRead: 600, total: 1000, provider: 'bravo', model: 'deepseek-v4-pro' }),
     turnStartEvent({ seq: 2, time: DAY_2, turn: 't1' }),
     turnEndEvent({ seq: 3, time: DAY_2 + 45000, turn: 't1' }),
   ])
   const s2 = foldOf('s2', [
-    assistantEvent({ seq: 0, time: DAY_2, input: 100, output: 50, total: 150, provider: 'myapi', model: 'deepseek-v4-1-flash' }),
+    assistantEvent({ seq: 0, time: DAY_2, input: 100, output: 50, total: 150, provider: 'alpha', model: 'deepseek-v4-1-flash' }),
   ])
   return [s1, s2]
 }
@@ -52,7 +52,7 @@ test('aggregate：总量、每日、峰值、连续天数口径一致', () => {
     { tokens: day2.tokens, calls: day2.calls, input: day2.inputTokens, output: day2.outputTokens, cache: day2.cacheTokens },
     { tokens: 1150, calls: 2, input: 900, output: 250, cache: 600 },
   )
-  assert.deepEqual(day2.byProvider, { wincode: 1000, myapi: 150 })
+  assert.deepEqual(day2.byProvider, { bravo: 1000, alpha: 150 })
   assert.deepEqual(day2.byModel, { 'deepseek-v4-pro': 1000, 'deepseek-v4-1-flash': 150 })
 
   assert.deepEqual(totals.peakDay, { date: '2026-11-06', tokens: 1150 })
@@ -95,12 +95,12 @@ test('aggregate：空语料返回全零结构（不出现 NaN / undefined）', (
 
 test('aggregate：孤儿继承前缀补回总量与每日明细（原件已不在语料里）', () => {
   const prefix = [
-    assistantEvent({ seq: 0, time: DAY_1, input: 200, output: 100, total: 300, provider: 'myapi', model: 'deepseek-v4-1-flash' }),
-    assistantEvent({ seq: 1, time: DAY_1, input: 200, output: 100, total: 300, provider: 'myapi', model: 'deepseek-v4-1-flash' }),
+    assistantEvent({ seq: 0, time: DAY_1, input: 200, output: 100, total: 300, provider: 'alpha', model: 'deepseek-v4-1-flash' }),
+    assistantEvent({ seq: 1, time: DAY_1, input: 200, output: 100, total: 300, provider: 'alpha', model: 'deepseek-v4-1-flash' }),
   ]
   const copy = foldOf(
     'copy',
-    [...prefix, assistantEvent({ seq: 2, time: DAY_2, input: 400, output: 100, total: 500, provider: 'wincode', model: 'deepseek-v4-pro' })],
+    [...prefix, assistantEvent({ seq: 2, time: DAY_2, input: 400, output: 100, total: 500, provider: 'bravo', model: 'deepseek-v4-pro' })],
     { inheritedEventCount: 2 },
   )
   const { totals, daily } = aggregate([copy], NOW, new Set(['copy']))
@@ -116,29 +116,29 @@ test('aggregate：孤儿继承前缀补回总量与每日明细（原件已不�
   assert.deepEqual(daily.map((entry) => entry.date), ['2026-11-05', '2026-11-06'])
   assert.equal(daily[0].tokens, 600)
   assert.equal(daily[1].tokens, 500)
-  assert.deepEqual(daily[0].byProvider, { myapi: 600 })
-  assert.deepEqual(daily[1].byProvider, { wincode: 500 })
+  assert.deepEqual(daily[0].byProvider, { alpha: 600 })
+  assert.deepEqual(daily[1].byProvider, { bravo: 500 })
   assert.equal(daily[0].inputTokens, 400)
   assert.equal(daily[0].outputTokens, 200)
   assert.equal(totals.inputTokens, 800)
   assert.equal(totals.outputTokens, 300)
-  assert.deepEqual(totals.byProvider, { myapi: 600, wincode: 500 })
+  assert.deepEqual(totals.byProvider, { alpha: 600, bravo: 500 })
   assert.deepEqual(totals.byModel, { 'deepseek-v4-1-flash': 600, 'deepseek-v4-pro': 500 })
   assert.equal(daily.reduce((sum, entry) => sum + entry.tokens, 0), totals.tokens)
 })
 
 test('aggregate：原件还在语料里时不重复计数（前缀只记账、不进总量与每日）', () => {
   const origin = foldOf('origin', [
-    assistantEvent({ seq: 0, time: DAY_1, input: 200, output: 100, total: 300, provider: 'myapi', model: 'deepseek-v4-1-flash' }),
-    assistantEvent({ seq: 1, time: DAY_1, input: 200, output: 100, total: 300, provider: 'myapi', model: 'deepseek-v4-1-flash' }),
+    assistantEvent({ seq: 0, time: DAY_1, input: 200, output: 100, total: 300, provider: 'alpha', model: 'deepseek-v4-1-flash' }),
+    assistantEvent({ seq: 1, time: DAY_1, input: 200, output: 100, total: 300, provider: 'alpha', model: 'deepseek-v4-1-flash' }),
   ])
   const copyFold = foldSnapshot({
     session: { id: 'copy', parentSession: 'origin' },
     inheritedEventCount: 2,
     events: [
-      assistantEvent({ seq: 0, time: DAY_1, input: 200, output: 100, total: 300, provider: 'myapi', model: 'deepseek-v4-1-flash' }),
-      assistantEvent({ seq: 1, time: DAY_1, input: 200, output: 100, total: 300, provider: 'myapi', model: 'deepseek-v4-1-flash' }),
-      assistantEvent({ seq: 2, time: DAY_2, input: 400, output: 100, total: 500, provider: 'wincode', model: 'deepseek-v4-pro' }),
+      assistantEvent({ seq: 0, time: DAY_1, input: 200, output: 100, total: 300, provider: 'alpha', model: 'deepseek-v4-1-flash' }),
+      assistantEvent({ seq: 1, time: DAY_1, input: 200, output: 100, total: 300, provider: 'alpha', model: 'deepseek-v4-1-flash' }),
+      assistantEvent({ seq: 2, time: DAY_2, input: 400, output: 100, total: 500, provider: 'bravo', model: 'deepseek-v4-pro' }),
     ],
   })
   assert.equal(copyFold.inheritedTokens, 600)
@@ -151,8 +151,8 @@ test('aggregate：原件还在语料里时不重复计数（前缀只记账、�
   assert.equal(totals.tokensWithInherited, 1700, '日志原始合计 = 去重总量 + 重复前缀')
   assert.deepEqual(daily.map((entry) => entry.date), ['2026-11-05', '2026-11-06'])
   assert.equal(daily[0].tokens, 600, '第一天只有原件本体，副本前缀不重复进每日')
-  assert.deepEqual(daily[0].byProvider, { myapi: 600 })
-  assert.equal(totals.byProvider.myapi, 600)
+  assert.deepEqual(daily[0].byProvider, { alpha: 600 })
+  assert.equal(totals.byProvider.alpha, 600)
 })
 
 test('aggregate：多个孤儿前缀各按自己的明细补回', () => {
@@ -161,8 +161,8 @@ test('aggregate：多个孤儿前缀各按自己的明细补回', () => {
       session: { id, parentSession: `gone-${id}` },
       inheritedEventCount: 1,
       events: [
-        assistantEvent({ seq: 0, time: DAY_1, input: 100, output: 0, total: 120, provider: 'arkcli-coding-plan', model: 'deepseek-v4-pro' }),
-        assistantEvent({ seq: 1, time: DAY_2, input: 10, output: 5, total: 15, provider: 'wincode', model: 'deepseek-v4-1-flash' }),
+        assistantEvent({ seq: 0, time: DAY_1, input: 100, output: 0, total: 120, provider: 'charlie', model: 'deepseek-v4-pro' }),
+        assistantEvent({ seq: 1, time: DAY_2, input: 10, output: 5, total: 15, provider: 'bravo', model: 'deepseek-v4-1-flash' }),
       ],
     })
   const { totals, daily } = aggregate([makeCopy('a'), makeCopy('b')], NOW, new Set(['a', 'b']))
@@ -170,7 +170,7 @@ test('aggregate：多个孤儿前缀各按自己的明细补回', () => {
   assert.equal(totals.orphanedSessions, 2)
   assert.equal(totals.tokens, 2 * 120 + 2 * 15)
   assert.equal(daily.find((entry) => entry.date === '2026-11-05').tokens, 240)
-  assert.deepEqual(daily.find((entry) => entry.date === '2026-11-05').byProvider, { 'arkcli-coding-plan': 240 })
+  assert.deepEqual(daily.find((entry) => entry.date === '2026-11-05').byProvider, { 'charlie': 240 })
 })
 
 test('aggregate：单日峰值取严格最大，最早出现的胜出', () => {

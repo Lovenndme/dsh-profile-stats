@@ -356,9 +356,9 @@ test('deriveKpis：五个指标 + 最近 14 天迷你柱（最后一根是今天
 test('deriveProviders：按用量降序，前 6 个各一行，其余并成「其他」', () => {
   const { deriveProviders } = loadClientHelpers({ functions: ['toNumber', 'deriveProviders'] })
 
-  const small = deriveProviders({ myapi: 600, wincode: 400 })
+  const small = deriveProviders({ alpha: 600, bravo: 400 })
   assert.equal(small.total, 1000)
-  assert.deepEqual(small.rows.map((row) => row.id), ['myapi', 'wincode'])
+  assert.deepEqual(small.rows.map((row) => row.id), ['alpha', 'bravo'])
   assert.equal(small.rows[0].share, 60)
   assert.equal(small.rows[1].share, 40)
 
@@ -383,13 +383,13 @@ test('deriveProviders：按用量降序，前 6 个各一行，其余并成「�
 test('providerLabel：已知供应商走文案字典，未知原样显示', () => {
   const { providerLabel } = loadClientHelpers({
     extraCode: [
-      'const t = (key) => ({ "provider.myapi": "My API", "provider.other": "其他" }[key] || key)',
+      'const t = (key) => ({ "provider.alpha": "Alpha", "provider.other": "其他" }[key] || key)',
     ],
     functions: ['providerLabel'],
   })
-  assert.equal(providerLabel('myapi'), 'My API')
+  assert.equal(providerLabel('alpha'), 'Alpha')
   assert.equal(providerLabel('__other'), '其他')
-  assert.equal(providerLabel('wincode'), 'wincode')
+  assert.equal(providerLabel('bravo'), 'bravo')
 })
 
 test('durationParts：毫秒 → 时/分，0 与负数返回 null', () => {
