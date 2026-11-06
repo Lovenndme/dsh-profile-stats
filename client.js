@@ -53,6 +53,15 @@ window.__ModuleLoader__.load({
       'grain.month': 'Monthly',
       'toggle.today': 'Today',
       'toggle.all': 'All time',
+      'range.7d': '7 days',
+      'range.30d': '30 days',
+      'range.90d': '90 days',
+      'range.all': 'All time',
+      'stat.rangeTokens': '{range} tokens',
+      'action.export': 'Export',
+      'action.exportCsv': 'CSV (daily)',
+      'action.exportJson': 'JSON (snapshot)',
+      'delta.hint': 'Compared with the previous period',
       'legend.less': 'Less',
       'legend.more': 'More',
       'tip.tokens': '{value} tokens',
@@ -98,7 +107,7 @@ window.__ModuleLoader__.load({
       'aria.activity': 'Token activity chart',
       'aria.model': 'Token by model chart',
       'aria.lens': 'Token mix bar',
-      'aria.spark': 'Daily tokens, last 14 days',
+      'aria.spark': 'Daily token trend (7-day average)',
     }
 
     const ZH = {
@@ -120,6 +129,15 @@ window.__ModuleLoader__.load({
       'grain.month': '按月',
       'toggle.today': '今日',
       'toggle.all': '累计',
+      'range.7d': '近 7 天',
+      'range.30d': '近 30 天',
+      'range.90d': '近 90 天',
+      'range.all': '累计',
+      'stat.rangeTokens': '{range} Token',
+      'action.export': '导出',
+      'action.exportCsv': 'CSV（按天）',
+      'action.exportJson': 'JSON（快照）',
+      'delta.hint': '与上一周期相比',
       'legend.less': '少',
       'legend.more': '多',
       'tip.tokens': '{value} tokens',
@@ -165,7 +183,7 @@ window.__ModuleLoader__.load({
       'aria.activity': 'Token 活动图',
       'aria.model': '模型分布图',
       'aria.lens': 'Token 构成条',
-      'aria.spark': '最近 14 天每日用量',
+      'aria.spark': '每日用量趋势（7 日均线）',
     }
 
     const localeBridge = {
@@ -382,6 +400,157 @@ window.__ModuleLoader__.load({
       return Number.isNaN(date.getTime()) ? null : date
     }
 
+    /* ------------------------------------------------------------ 时间范围 */
+
+    /** 顶部范围：数值是窗口天数，0 表示不限制（累计）。 */
+    const RANGE_DAYS = { '7d': 7, '30d': 30, '90d': 90, all: 0 }
+    const RANGE_IDS = ['7d', '30d', '90d', 'all']
+
+    /** 范围 → 起止日期键。累计范围没有起点（用今天作终点）。 */
+    function rangeWindow(range, todayKey) {
+      const days = RANGE_DAYS[range] || 0
+      const end = parseDateKey(todayKey)
+      if (!days || !end) return { range, days: 0, startKey: '', endKey: todayKey }
+      return { range, days, startKey: localDateKey(addDays(end, -(days - 1))), endKey: todayKey }
+    }
+
+    /** 上一个等长窗口：累计范围没有「上一期」，返回 null（页面据此不显示环比）。 */
+    function previousWindow(window) {
+      if (!window || !window.days) return null
+      const start = parseDateKey(window.startKey)
+      const end = parseDateKey(window.endKey)
+      if (!start || !end) return null
+      return { startKey: localDateKey(addDays(start, -window.days)), endKey: localDateKey(addDays(end, -window.days)) }
+    }
+
+    function emptySummary() {
+      return { tokens: 0, calls: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0, byProvider: {}, byModel: {}, days: 0, activeDays: 0 }
+    }
+
+    /** 用日明细汇总一段窗口（起止都包含，任一端为空表示不设限）。 */
+    function summarizeDaily(daily, startKey, endKey) {
+      const summary = emptySummary()
+      for (const entry of indexDaily(daily).values()) {
+        const date = entry.date
+        if (startKey && date < startKey) continue
+        if (endKey && date > endKey) continue
+        const tokens = toNumber(entry.tokens)
+        summary.days += 1
+        if (tokens > 0) summary.activeDays += 1
+        summary.tokens += tokens
+        summary.calls += toNumber(entry.calls)
+        summary.inputTokens += toNumber(entry.inputTokens)
+        summary.outputTokens += toNumber(entry.outputTokens)
+        summary.cacheTokens += toNumber(entry.cacheTokens)
+        for (const [id, amount] of Object.entries(entry.byProvider || {})) {
+          summary.byProvider[id] = toNumber(summary.byProvider[id]) + toNumber(amount)
+        }
+        for (const [id, amount] of Object.entries(entry.byModel || {})) {
+          summary.byModel[id] = toNumber(summary.byModel[id]) + toNumber(amount)
+        }
+      }
+      return summary
+    }
+
+    /** 汇总结果 → Cache Lens 需要的 totals 形状（日明细里缓存读写是合起来的）。 */
+    function lensTotalsOf(summary) {
+      return {
+        tokens: summary.tokens,
+        inputTokens: summary.inputTokens,
+        outputTokens: summary.outputTokens,
+        cacheReadTokens: summary.cacheTokens,
+        cacheWriteTokens: 0,
+      }
+    }
+
+    /** 日明细 → 连续日序列（缺的补 0），给指标卡的迷你趋势用。 */
+    function dailySeries(daily, startKey, endKey) {
+      const byDate = indexDaily(daily)
+      const start = parseDateKey(startKey)
+      const end = parseDateKey(endKey)
+      const points = []
+      if (!start || !end) return points
+      for (let date = start; date.getTime() <= end.getTime(); date = addDays(date, 1)) {
+        const key = localDateKey(date)
+        const entry = byDate.get(key)
+        points.push({ key, tokens: entry ? toNumber(entry.tokens) : 0 })
+      }
+      return points
+    }
+
+    /** 7 日移动平均：开头的 6 天用窗口之外的上下文补齐，避免趋势线起步被削平。 */
+    function movingAverage(daily, points, windowSize = 7) {
+      if (points.length === 0) return []
+      const byDate = indexDaily(daily)
+      const first = parseDateKey(points[0].key)
+      const context = []
+      for (let offset = windowSize - 1; offset >= 1; offset -= 1) {
+        const key = localDateKey(addDays(first, -offset))
+        const entry = byDate.get(key)
+        context.push(entry ? toNumber(entry.tokens) : 0)
+      }
+      const values = context.concat(points.map((point) => toNumber(point.tokens)))
+      return points.map((_, index) => {
+        let sum = 0
+        for (let cursor = index; cursor < index + windowSize; cursor += 1) sum += values[cursor] || 0
+        return sum / windowSize
+      })
+    }
+
+    /** 环比百分比；上一期为 0 时没有意义（不显示）。 */
+    function deltaPercent(current, previous) {
+      if (!(previous > 0)) return null
+      return ((toNumber(current) - toNumber(previous)) / previous) * 100
+    }
+
+    function formatDelta(value) {
+      const number = toNumber(value)
+      const sign = number > 0 ? '+' : ''
+      return `${sign}${number.toFixed(1)}%`
+    }
+
+    /* -------------------------------------------------------- 导出（CSV / JSON） */
+
+    function downloadFile(name, type, text) {
+      if (typeof document === 'undefined' || typeof Blob === 'undefined') return false
+      const blob = new Blob([text], { type })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = name
+      anchor.style.display = 'none'
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      return true
+    }
+
+    /** 每天一行；供应商按范围内总量降序各占一列。Excel 需要 BOM 才认 UTF-8。 */
+    function buildCsv(daily, summary, startKey, endKey) {
+      const providers = Object.keys(summary.byProvider || {}).sort(
+        (left, right) => toNumber(summary.byProvider[right]) - toNumber(summary.byProvider[left]) || (left < right ? -1 : 1),
+      )
+      const rows = []
+      rows.push(['date', 'tokens', 'calls', 'input', 'output', 'cache', ...providers].join(','))
+      for (const entry of indexDaily(daily).values()) {
+        if (startKey && entry.date < startKey) continue
+        if (endKey && entry.date > endKey) continue
+        rows.push(
+          [
+            entry.date,
+            toNumber(entry.tokens),
+            toNumber(entry.calls),
+            toNumber(entry.inputTokens),
+            toNumber(entry.outputTokens),
+            toNumber(entry.cacheTokens),
+            ...providers.map((id) => toNumber((entry.byProvider || {})[id])),
+          ].join(','),
+        )
+      }
+      return `\ufeff${rows.join('\r\n')}\r\n`
+    }
+
     function formatDate(date, options) {
       try {
         return new Intl.DateTimeFormat(currentLocaleId(), options).format(date)
@@ -591,6 +760,7 @@ window.__ModuleLoader__.load({
       zoom: 'M11 18a7 7 0 100-14 7 7 0 000 14zM16 16l4 4M8.5 11h5',
       back: 'M19 12H5m6-6l-6 6 6 6',
       update: 'M12 16V4m-5 5l5-5 5 5M5 20h14',
+      download: 'M12 4v10m-4.5-4l4.5 4.5 4.5-4.5M5 20h14',
       alert: 'M12 8v5m0 3.5v.01M10.3 3.9L2.6 17.5A2 2 0 004.3 20.5h15.4a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z',
     }
 
@@ -895,6 +1065,10 @@ window.__ModuleLoader__.load({
       const plotRef = useRef(null)
       const pointer = usePointer()
       const data = useMemo(() => buildActivity(props.daily, today), [props.daily, localDateKey(today)])
+      // 顶部选了时间范围时，把窗口内的格子描出来（热力图本身仍是全年视图）。
+      const rangeStart = props.rangeStartKey || ''
+      const rangeEnd = props.rangeEndKey || ''
+      const inRange = (key) => Boolean(rangeStart) && key >= rangeStart && key <= rangeEnd
       const columns = Math.max(1, data.columns)
       const width = columns * ACT_PITCH - (ACT_PITCH - ACT_CELL)
       const height = ACT_HEIGHT
@@ -977,6 +1151,7 @@ window.__ModuleLoader__.load({
                 'data-tokens': cell.tokens,
                 'data-level': cell.level,
                 'data-today': cell.today ? 'true' : 'false',
+                'data-in-range': inRange(cell.key) ? 'true' : 'false',
               }),
             ),
         )
@@ -1216,10 +1391,11 @@ window.__ModuleLoader__.load({
     const OTHER_COLOR = 'var(--dps-other)'
 
     /** 窗口内的桶（含没有活动的桶）：key + 起止日期。周一起算；本周/本月的终点截到今天。 */
-    function modelBucketFrames(granularity, today) {
+    function modelBucketFrames(granularity, today, count = MODEL_WINDOW) {
       const todayStart = startOfDay(today)
+      const total = Math.max(1, Math.round(toNumber(count) || MODEL_WINDOW))
       const frames = []
-      for (let offset = MODEL_WINDOW - 1; offset >= 0; offset -= 1) {
+      for (let offset = total - 1; offset >= 0; offset -= 1) {
         if (granularity === 'month') {
           const start = new Date(todayStart.getFullYear(), todayStart.getMonth() - offset, 1)
           const last = new Date(start.getFullYear(), start.getMonth() + 1, 0)
@@ -1244,13 +1420,52 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 窗口覆盖多少个日历桶（周一起算 / 按月从 1 号起）。
+     * 不能用「天数 ÷ 单位」：30 天跨两个月可能落在 2 个自然月里，90 天常常是 4 个自然月，
+     * 用除法会把第一个残月漏掉，图里的总计就比顶部合计小。
+     */
+    function calendarBucketCount(granularity, startDate, endDate) {
+      if (!startDate || !endDate) return 1
+      if (granularity === 'month') {
+        return (endDate.getFullYear() * 12 + endDate.getMonth()) - (startDate.getFullYear() * 12 + startDate.getMonth()) + 1
+      }
+      if (granularity === 'week') {
+        return Math.round((startOfWeek(endDate).getTime() - startOfWeek(startDate).getTime()) / (7 * 86400000)) + 1
+      }
+      return Math.round((endDate.getTime() - startDate.getTime()) / 86400000) + 1
+    }
+
+    /** 太粗（只有一根柱）或太细（>92 根像条形码）的粒度不给选。 */
+    const MODEL_MAX_BUCKETS = 92
+    function availableGranularities(startDate, endDate) {
+      return ['day', 'week', 'month'].filter((granularity) => {
+        const count = calendarBucketCount(granularity, startDate, endDate)
+        return count >= 2 && count <= MODEL_MAX_BUCKETS
+      })
+    }
+
+    /** 换范围时落到好读的默认粒度（用户手动点过就以手动为准）。 */
+    function defaultGranularity(range, startDate, endDate) {
+      const available = availableGranularities(startDate, endDate)
+      if (range === '7d' || range === '30d') return available.includes('day') ? 'day' : available[0] || 'day'
+      return available.includes('week') ? 'week' : available[0] || 'day'
+    }
+
+    /**
      * 12 个桶 × 模型家族。全程原始整数：桶合计、家族合计、头部总计都是同一批整数相加，
      * 纵轴按最高的那根堆叠柱取整齐刻度。
+     *
+     * 桶按日历对齐（周一起算、按月从 1 号起），但只统计落在窗口内的天：窗口的第一/最后一个
+     * 桶可能是不完整的，这样图里的总计恒等于顶部范围的合计，不会因为边界溢出对不上。
      */
-    function buildModelSeries(daily, granularity, today) {
-      const buckets = modelBucketFrames(granularity, today).map((frame) => ({ ...frame, values: {}, total: 0 }))
+    function buildModelSeries(daily, granularity, today, count = MODEL_WINDOW, window = null) {
+      const buckets = modelBucketFrames(granularity, today, count).map((frame) => ({ ...frame, values: {}, total: 0 }))
       const index = new Map(buckets.map((bucket) => [bucket.key, bucket]))
+      const startKey = (window && window.startKey) || ''
+      const endKey = (window && window.endKey) || ''
       for (const entry of indexDaily(daily).values()) {
+        if (startKey && entry.date < startKey) continue
+        if (endKey && entry.date > endKey) continue
         const bucket = index.get(modelBucketKeyOf(parseDateKey(entry.date), granularity))
         if (!bucket) continue
         for (const [raw, amount] of Object.entries(entry.byModel || {})) {
@@ -1323,11 +1538,40 @@ window.__ModuleLoader__.load({
 
     function ModelCard(props) {
       const today = props.today
-      const [granularity, setGranularity] = useState('week')
+      const range = props.range || 'all'
+      const spanDays = props.spanDays || 0
+      const window = props.window || null
+      // 图表的窗口起点：固定范围用范围内的第一天；累计范围用数据的第一天
+      const spanStartKey =
+        window && window.startKey ? window.startKey : spanDays > 0 ? localDateKey(addDays(today, -(spanDays - 1))) : ''
+      const startDate = parseDateKey(spanStartKey)
+      const endDate = startOfDay(today)
+      const endKey = localDateKey(endDate)
+      const available = useMemo(() => availableGranularities(startDate, endDate), [spanStartKey, endKey])
+      const [granularity, setGranularity] = useState(() => defaultGranularity(range, startDate, endDate))
+      const [chosen, setChosen] = useState(false)
       const [active, setActive] = useState(null)
       const barsRef = useRef(null)
       const pointer = usePointer()
-      const data = useMemo(() => buildModelSeries(props.daily, granularity, today), [props.daily, granularity, localDateKey(today)])
+      // 换范围：回到该范围的默认粒度（手动选的也重置）
+      useEffect(() => {
+        setGranularity(defaultGranularity(range, startDate, endDate))
+        setChosen(false)
+        setActive(null)
+      }, [range])
+      // 数据晚到（spanDays 从 0 变成真实跨度）时，没手动选过就跟着默认走
+      useEffect(() => {
+        if (chosen) return
+        setGranularity(defaultGranularity(range, startDate, endDate))
+      }, [spanStartKey, chosen])
+      const bucketCount = useMemo(
+        () => calendarBucketCount(granularity, startDate, endDate),
+        [granularity, spanStartKey, endKey],
+      )
+      const data = useMemo(
+        () => buildModelSeries(props.daily, granularity, today, bucketCount, window),
+        [props.daily, granularity, bucketCount, window ? window.startKey : '', window ? window.endKey : '', endKey],
+      )
       const count = data.buckets.length
       const empty = data.total <= 0
 
@@ -1477,24 +1721,23 @@ window.__ModuleLoader__.load({
               t('chart.total', { value: formatTokens(data.total) }),
             ),
           ),
-          h(Segmented, {
-            control: 'model-grain',
-            label: t('section.model'),
-            value: granularity,
-            onChange: (next) => {
-              setGranularity(next)
-              setActive(null)
-            },
-            options: [
-              { id: 'day', label: t('grain.day') },
-              { id: 'week', label: t('grain.week') },
-              { id: 'month', label: t('grain.month') },
-            ],
-          }),
+          available.length > 1
+            ? h(Segmented, {
+                control: 'model-grain',
+                label: t('section.model'),
+                value: granularity,
+                onChange: (next) => {
+                  setGranularity(next)
+                  setChosen(true)
+                  setActive(null)
+                },
+                options: available.map((id) => ({ id, label: t(`grain.${id}`) })),
+              })
+            : null,
         ),
         h(
           'div',
-          { className: 'dps-mc-chart' },
+          { className: 'dps-mc-chart', style: { '--mc-count': data.buckets.length } },
           h(
             'div',
             { className: 'dps-mc-axis', 'aria-hidden': true },
@@ -1532,7 +1775,11 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 'dps-mc-ticks', 'aria-hidden': true },
-            data.buckets.map((bucket) => h('span', { key: bucket.key }, bucketTick(bucket, granularity))),
+            data.buckets.map((bucket, position) => {
+              const every = Math.ceil(data.buckets.length / 12)
+              const hidden = every > 1 && position % every !== 0 && position !== data.buckets.length - 1
+              return h('span', { key: bucket.key, 'data-thin': hidden ? 'true' : 'false' }, hidden ? '' : bucketTick(bucket, granularity))
+            }),
           ),
         ),
         legend,
@@ -1783,8 +2030,9 @@ window.__ModuleLoader__.load({
     }
 
     function ProviderCard(props) {
-      const [scope, setScope] = useState('today')
-      const source = scope === 'today' ? (props.todayEntry && props.todayEntry.byProvider) || {} : (props.totals && props.totals.byProvider) || {}
+      // 供应商分类跟随页面顶部的时间范围（范围=今日 时就是原来的「今日」口径）。
+      const scope = props.scope || 'all'
+      const source = props.byProvider || {}
       const data = useMemo(() => deriveProviders(source), [source])
       return h(
         'section',
@@ -1798,16 +2046,6 @@ window.__ModuleLoader__.load({
             h('h2', null, t('section.provider')),
             h('span', { className: 'dps-panel-meta', 'data-dps-field': 'provider-total', 'data-value': data.total }, t('chart.total', { value: formatTokens(data.total) })),
           ),
-          h(Segmented, {
-            control: 'provider-scope',
-            label: t('section.provider'),
-            value: scope,
-            onChange: setScope,
-            options: [
-              { id: 'today', label: t('toggle.today') },
-              { id: 'all', label: t('toggle.all') },
-            ],
-          }),
         ),
         data.rows.length === 0
           ? h('div', { className: 'dps-prov-empty' }, t('chart.empty'))
@@ -1868,7 +2106,8 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-who{min-width:0;display:flex;flex-direction:column;gap:3px}
 .dps-name{font-size:20px;font-weight:650;line-height:1.15;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dps-handle{font-size:13px;color:var(--dps-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dps-actions{margin-left:auto;display:flex;align-items:center;gap:8px;flex:0 0 auto}
+.dps-actions{margin-left:auto;display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px;flex:0 1 auto}
+.dps-seg[data-dps-control="range"] button{padding:7px 10px}
 .dps-iconbtn{appearance:none;width:36px;height:36px;border-radius:10px;border:1px solid var(--dps-line);background:var(--dps-card);color:var(--dps-muted);display:grid;place-items:center;cursor:pointer;transition:color .15s ease,background-color .15s ease}
 .dps-iconbtn:hover{color:var(--dps-ink);background:var(--dps-hover)}
 .dps-iconbtn svg{width:16px;height:16px;display:block}
@@ -1909,10 +2148,18 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-unit{font-size:13px;font-weight:500;color:var(--dps-muted);margin:0 7px 0 3px}
 .dps-unit:last-child{margin-right:0}
 .dps-kpi[data-hero="true"] .dps-num{font-size:34px}
-.dps-spark{flex:0 1 150px;min-width:64px;height:32px;display:block}
-.dps-spark rect{fill:color-mix(in srgb,var(--dps-accent) 40%,transparent)}
-.dps-spark rect[data-zero="true"]{fill:var(--dps-track)}
-.dps-spark rect[data-today="true"]{fill:var(--dps-accent)}
+.dps-spark{width:100%;height:26px;display:block}
+.dps-spark-area{fill:color-mix(in srgb,var(--dps-accent) 14%,transparent)}
+.dps-spark-line{fill:none;stroke:var(--dps-accent);stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
+.dps-spark-dot{fill:var(--dps-card);stroke:var(--dps-accent);stroke-width:1.4;vector-effect:non-scaling-stroke}
+.dps-kpi-footer{margin-top:-2px}
+.dps-delta{display:inline-flex;align-items:center;gap:3px;font-size:11.5px;font-weight:600;line-height:1;font-variant-numeric:tabular-nums;color:var(--dps-muted)}
+.dps-delta[data-dir="up"]{color:var(--dsw-alias-state-warn-primary)}
+.dps-delta[data-dir="down"]{color:var(--dsw-alias-state-success-primary)}
+.dps-menu{position:relative;display:flex}
+.dps-menu-pop{position:absolute;right:0;top:calc(100% + 6px);z-index:80;min-width:156px;padding:5px;border-radius:10px;border:1px solid var(--dps-line);background:var(--dsw-alias-bg-layer-2);box-shadow:0 10px 30px var(--dps-shadow);display:flex;flex-direction:column;gap:2px}
+.dps-menu-pop button{appearance:none;border:0;background:transparent;color:var(--dps-ink);font-size:12.5px;line-height:1.4;text-align:left;padding:8px 10px;border-radius:7px;cursor:pointer;white-space:nowrap}
+.dps-menu-pop button:hover{background:var(--dps-hover)}
 .dps-grid{display:grid;grid-template-columns:minmax(0,1.62fr) minmax(0,1fr);gap:16px;align-items:stretch}
 .dps-side{min-width:0;display:flex;flex-direction:column;gap:16px}
 @container dps (max-width:1040px){
@@ -1960,6 +2207,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-act-cell[data-level="2"],.dps-act-legend i[data-level="2"]{fill:color-mix(in srgb,var(--dps-accent) 50%,transparent);background:color-mix(in srgb,var(--dps-accent) 50%,transparent)}
 .dps-act-cell[data-level="3"],.dps-act-legend i[data-level="3"]{fill:color-mix(in srgb,var(--dps-accent) 74%,transparent);background:color-mix(in srgb,var(--dps-accent) 74%,transparent)}
 .dps-act-cell[data-level="4"],.dps-act-legend i[data-level="4"]{fill:var(--dps-accent);background:var(--dps-accent)}
+.dps-act-cell[data-in-range="true"]{stroke:color-mix(in srgb,var(--dps-accent) 55%,transparent);stroke-width:.9;vector-effect:non-scaling-stroke}
 .dps-act-cell[data-today="true"]{stroke:var(--dps-ink);stroke-width:1.25;vector-effect:non-scaling-stroke}
 .dps-act-focus{fill:none;stroke:var(--dps-ink);stroke-width:1.6;vector-effect:non-scaling-stroke;pointer-events:none}
 .dps-act-band{fill:var(--dps-hover)}
@@ -1988,7 +2236,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-mc-grid{position:absolute;inset:0;pointer-events:none}
 .dps-mc-grid i{position:absolute;left:0;right:0;height:0;border-top:1px dashed var(--dps-line)}
 .dps-mc-grid i:first-child{border-top-style:solid}
-.dps-mc-bars{position:absolute;inset:0;display:grid;grid-template-columns:repeat(12,minmax(0,1fr))}
+.dps-mc-bars{position:absolute;inset:0;display:grid;grid-template-columns:repeat(var(--mc-count,12),minmax(0,1fr))}
 .dps-mc-col{position:relative;min-width:0;display:flex;align-items:flex-end;justify-content:center;border-radius:7px 7px 0 0;transition:opacity .15s ease,background-color .15s ease}
 .dps-mc-col[data-active="true"]{background:var(--dps-hover)}
 .dps-mc-col[data-dim="true"]{opacity:.45}
@@ -1996,8 +2244,8 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-mc-seg{display:block;flex:0 0 auto;width:100%}
 .dps-mc-seg + .dps-mc-seg{box-shadow:inset 0 -1.5px 0 var(--dps-card)}
 .dps-mc-empty{position:absolute;inset:0;display:grid;place-items:center;font-size:12.5px;color:var(--dps-faint);pointer-events:none}
-.dps-mc-ticks{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));font-size:11px;color:var(--dps-faint);text-align:center;font-variant-numeric:tabular-nums}
-.dps-mc-ticks span{white-space:nowrap;overflow:hidden}
+.dps-mc-ticks{display:grid;grid-template-columns:repeat(var(--mc-count,12),minmax(0,1fr));font-size:11px;color:var(--dps-faint);text-align:center;font-variant-numeric:tabular-nums}
+.dps-mc-ticks span{white-space:nowrap;overflow:visible}
 .dps-legend{list-style:none;margin:0;padding:2px 0 0 52px;display:flex;flex-wrap:wrap;justify-content:center;gap:8px 18px;font-size:12px}
 .dps-legend li{display:inline-flex;align-items:center;gap:7px;min-width:0}
 .dps-legend i{width:9px;height:9px;border-radius:2.5px;flex:0 0 auto}
@@ -2129,6 +2377,59 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 
     /* ------------------------------------------------------------------ 页头 */
 
+    /** 导出按钮 + 下拉两项（CSV / JSON）。点外面或按 Esc 关闭。 */
+    function ExportMenu(props) {
+      const [open, setOpen] = useState(false)
+      const wrapRef = useRef(null)
+      useEffect(() => {
+        if (!open) return undefined
+        const close = (event) => {
+          if (wrapRef.current && typeof wrapRef.current.contains === 'function' && !wrapRef.current.contains(event.target)) {
+            setOpen(false)
+          }
+        }
+        const onKey = (event) => {
+          if (event.key === 'Escape') setOpen(false)
+        }
+        document.addEventListener('mousedown', close)
+        document.addEventListener('keydown', onKey)
+        return () => {
+          document.removeEventListener('mousedown', close)
+          document.removeEventListener('keydown', onKey)
+        }
+      }, [open])
+      const pick = (format) => {
+        setOpen(false)
+        props.onExport(format)
+      }
+      return h(
+        'div',
+        { ref: wrapRef, className: 'dps-menu', 'data-dps-control': 'export' },
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dps-iconbtn',
+            'data-dps-action': 'export',
+            'aria-label': t('action.export'),
+            'aria-haspopup': 'menu',
+            'aria-expanded': open ? 'true' : 'false',
+            title: t('action.export'),
+            onClick: () => setOpen((value) => !value),
+          },
+          h(Icon, { name: 'download' }),
+        ),
+        open
+          ? h(
+              'div',
+              { className: 'dps-menu-pop', role: 'menu' },
+              h('button', { type: 'button', role: 'menuitem', 'data-dps-export': 'csv', onClick: () => pick('csv') }, t('action.exportCsv')),
+              h('button', { type: 'button', role: 'menuitem', 'data-dps-export': 'json', onClick: () => pick('json') }, t('action.exportJson')),
+            )
+          : null,
+      )
+    }
+
     function Header(props) {
       const identity = props.identity
       const update = props.update
@@ -2147,6 +2448,14 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
         h(
           'div',
           { className: 'dps-actions' },
+          h(Segmented, {
+            control: 'range',
+            label: t('section.activity'),
+            value: props.range,
+            onChange: props.onRange,
+            options: RANGE_IDS.map((id) => ({ id, label: t(`range.${id}`) })),
+          }),
+          h(ExportMenu, { onExport: props.onExport }),
           props.updating
             ? h(
                 'span',
@@ -2239,37 +2548,38 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 
     /* -------------------------------------------------------------- 指标卡 */
 
+    /**
+     * 指标卡里的趋势：7 日移动平均的面积线。
+     * 日用量毛刺很大（单日峰值可以是日常的 5–6 倍），画柱会把其余天压成一条线，
+     * 所以这里只画移动平均——它是趋势，不是每日明细（明细在活动热力图里）。
+     */
     function Sparkline(props) {
       const points = props.points || []
+      const average =
+        Array.isArray(props.average) && props.average.length === points.length && points.length > 0
+          ? props.average
+          : points.map((point) => toNumber(point.tokens))
       let max = 0
-      for (const point of points) max = Math.max(max, point.tokens)
-      const pitch = 7
-      const width = points.length * pitch - 2
-      const height = 32
+      for (const value of average) max = Math.max(max, value)
+      const width = Math.max(average.length * 4, 8)
+      const height = 36
+      const xOf = (index) => (average.length <= 1 ? width / 2 : (index / (average.length - 1)) * width)
+      const yOf = (value) => height - (max > 0 ? (value / max) * (height - 4) : 0) - 2
+      const line = average.map((value, index) => `${index === 0 ? 'M' : 'L'}${xOf(index).toFixed(2)} ${yOf(value).toFixed(2)}`).join(' ')
+      const area = average.length > 1 ? `${line} L${width.toFixed(2)} ${height} L0 ${height} Z` : ''
+      const last = average.length > 0 ? average[average.length - 1] : 0
       return h(
         'svg',
         {
           className: 'dps-spark',
-          viewBox: `0 0 ${Math.max(width, 1)} ${height}`,
+          viewBox: `0 0 ${width} ${height}`,
           preserveAspectRatio: 'none',
           role: 'img',
           'aria-label': t('aria.spark'),
         },
-        points.map((point, index) => {
-          // 非零的天至少 2px 高，零值画一条底线；比例本身不夸大。
-          const barHeight = point.tokens > 0 && max > 0 ? Math.max(2, (point.tokens / max) * height) : 2
-          return h('rect', {
-            key: point.key,
-            x: index * pitch,
-            y: height - barHeight,
-            width: pitch - 2,
-            height: barHeight,
-            rx: 1.2,
-            'data-today': point.today ? 'true' : 'false',
-            'data-zero': point.tokens > 0 ? 'false' : 'true',
-            style: { '--i': index },
-          })
-        }),
+        area ? h('path', { className: 'dps-spark-area', d: area }) : null,
+        average.length > 1 ? h('path', { className: 'dps-spark-line', d: line, 'data-dps-field': 'moving-average' }) : null,
+        average.length > 0 ? h('circle', { className: 'dps-spark-dot', cx: xOf(average.length - 1), cy: yOf(last), r: 1.9 }) : null,
       )
     }
 
@@ -2289,31 +2599,52 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
           h('div', { className: 'dps-kpi-value', 'data-dps-field': 'value' }, h(ValueParts, { parts: props.parts })),
           props.extra || null,
         ),
+        props.footer ? h('div', { className: 'dps-kpi-footer' }, props.footer) : null,
       )
     }
 
     function KpiStrip(props) {
       const k = props.kpis
       const ready = props.ready
+      const range = props.range || 'all'
+      const summary = props.summary || emptySummary()
+      const delta = props.delta === undefined ? null : props.delta
       // 首次拿到数据时从 0 计数到目标值，之后的变化做短过渡；未就绪时目标为 0（显示「—」）
-      const shownTokens = useTween(ready ? k.tokens : 0, 900)
+      const shownRange = useTween(ready ? summary.tokens : 0, 900)
       const shownToday = useTween(ready ? k.today : 0, 900)
       const shownTurn = useTween(ready ? k.longestTurnMs : 0, 900)
       const shownLongest = useTween(ready ? k.longestStreak : 0, 700)
       const shownCurrent = useTween(ready ? k.currentStreak : 0, 700)
       const tokenValue = (value) => [tokenParts(Math.round(value))]
       const dayValue = (value) => [{ value: String(Math.max(0, Math.round(toNumber(value)))), unit: t('unit.day') }]
+      const rangeLabel = range === 'all' ? t('stat.tokens') : t('stat.rangeTokens', { range: t(`range.${range}`) })
+      const deltaChip =
+        delta === null
+          ? null
+          : h(
+              'span',
+              {
+                className: 'dps-delta',
+                'data-dps-field': 'delta',
+                'data-value': delta,
+                'data-dir': delta >= 0 ? 'up' : 'down',
+                title: t('delta.hint'),
+              },
+              h('span', { 'aria-hidden': true }, delta >= 0 ? '▲' : '▼'),
+              formatDelta(delta),
+            )
       return h(
         'section',
-        { className: 'dps-kpis', 'data-dps-card': 'kpis' },
+        { className: 'dps-kpis', 'data-dps-card': 'kpis', 'data-range': range },
         h(Kpi, {
           id: 'tokens',
           icon: 'tokens',
           hero: true,
-          label: t('stat.tokens'),
-          raw: ready ? k.tokens : undefined,
-          parts: ready ? tokenValue(shownTokens) : null,
-          extra: h(Sparkline, { points: ready ? k.spark : [] }),
+          label: rangeLabel,
+          raw: ready ? summary.tokens : undefined,
+          parts: ready ? tokenValue(shownRange) : null,
+          extra: deltaChip,
+          footer: h(Sparkline, { points: ready ? props.spark || [] : [], average: ready ? props.average || [] : [] }),
         }),
         h(Kpi, { id: 'today', icon: 'today', label: t('stat.today'), raw: ready ? k.today : undefined, parts: ready ? tokenValue(shownToday) : null }),
         h(Kpi, {
@@ -2350,6 +2681,8 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
       // 用户亲手点的刷新：图标一直转到这次重扫结束；宿主后台的保鲜补扫不转
       const [manualScan, setManualScan] = useState(false)
       const [updating, setUpdating] = useState(false)
+      // 顶部时间范围：累计 / 近 90 / 近 30 / 近 7 天
+      const [range, setRange] = useState('all')
 
       // 打开页面不再强制重扫：宿主在后台定时保鲜，读快照时数据旧了也会自己静默补扫。
       const runRefresh = useCallback(async () => {
@@ -2375,10 +2708,65 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
       const todayKey = localDateKey(today)
       const kpis = useMemo(() => deriveKpis(snapshot, today), [snapshot, todayKey])
 
+      // —— 时间范围：汇总卡都从日明细重算，宿主算好的全局 totals 只留给连续天数等全局指标 ——
+      const window = useMemo(() => rangeWindow(range, todayKey), [range, todayKey])
+      const rangeSummary = useMemo(
+        () => summarizeDaily(daily, window.startKey, window.endKey),
+        [daily, window.startKey, window.endKey],
+      )
+      const previous = useMemo(() => previousWindow(window), [window.startKey, window.endKey])
+      const previousSummary = useMemo(
+        () => (previous ? summarizeDaily(daily, previous.startKey, previous.endKey) : null),
+        [daily, previous ? previous.startKey : '', previous ? previous.endKey : ''],
+      )
+      const delta = previousSummary ? deltaPercent(rangeSummary.tokens, previousSummary.tokens) : null
+      const lensTotals = useMemo(() => lensTotalsOf(rangeSummary), [rangeSummary])
+      const spark = useMemo(() => {
+        // 累计范围下迷你趋势只画最近 90 天，避免几百根柱子挤成一团
+        const days = range === 'all' ? 90 : RANGE_DAYS[range]
+        const end = parseDateKey(todayKey)
+        const startKey = end ? localDateKey(addDays(end, -(days - 1))) : todayKey
+        const points = dailySeries(daily, startKey, todayKey)
+        return points.map((point, index) => ({ ...point, today: index === points.length - 1 }))
+      }, [daily, range, todayKey])
+      const average = useMemo(() => movingAverage(daily, spark), [daily, spark])
+      // 累计范围的模型图没固定天数：用「首日 → 今天」的跨度决定桶数
+      const spanDays = useMemo(() => {
+        const first = daily.find((entry) => entry && typeof entry.date === 'string')
+        const start = first ? parseDateKey(first.date) : null
+        const end = parseDateKey(todayKey)
+        if (!start || !end) return 0
+        return Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1)
+      }, [daily, todayKey])
+
+      const handleExport = (format) => {
+        if (format === 'csv') {
+          downloadFile(`dsh-profile-stats-${range}-${todayKey}.csv`, 'text/csv;charset=utf-8', buildCsv(daily, rangeSummary, window.startKey, window.endKey))
+          return
+        }
+        const rows = indexDaily(daily)
+        const entries = []
+        for (const [date, entry] of rows) {
+          if (window.startKey && date < window.startKey) continue
+          if (date > window.endKey) continue
+          entries.push(entry)
+        }
+        entries.sort((left, right) => (left.date < right.date ? -1 : 1))
+        const payload = {
+          exportedAt: new Date().toISOString(),
+          range,
+          window: { start: window.startKey || null, end: window.endKey },
+          totals: lensTotals,
+          byProvider: rangeSummary.byProvider,
+          byModel: rangeSummary.byModel,
+          daily: entries,
+        }
+        downloadFile(`dsh-profile-stats-${range}-${todayKey}.json`, 'application/json', JSON.stringify(payload, null, 2))
+      }
+
       useEffect(() => {
         if (manualScan && !refreshing && snapshot && !snapshot.scanning) setManualScan(false)
       }, [manualScan, refreshing, snapshot])
-      const todayEntry = daily.find((entry) => entry && entry.date === todayKey) || null
 
       useEffect(() => {
         if (!updating || !updateInfo) return
@@ -2432,15 +2820,18 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
             onUpdate: startUpdate,
             busy: refreshing || (manualScan && scanning),
             onRefresh: runRefresh,
+            range,
+            onRange: setRange,
+            onExport: handleExport,
           }),
           h(StatusBar, { snapshot, error, hasData, onRetry: reload }),
-          h(KpiStrip, { kpis, ready }),
-          h(ActivityCard, { daily, today }),
+          h(KpiStrip, { kpis, ready, range, summary: rangeSummary, delta, spark, average }),
+          h(ActivityCard, { daily, today, rangeStartKey: window.startKey, rangeEndKey: window.endKey }),
           h(
             'div',
             { className: 'dps-grid' },
-            h(ModelCard, { daily, today }),
-            h('div', { className: 'dps-side' }, h(LensCard, { totals }), h(ProviderCard, { todayEntry, totals })),
+            h(ModelCard, { daily, today, range, window, spanDays }),
+            h('div', { className: 'dps-side' }, h(LensCard, { totals: lensTotals }), h(ProviderCard, { byProvider: rangeSummary.byProvider, scope: range })),
           ),
         ),
       )

@@ -282,7 +282,7 @@ test('buildActivity：空数据也能画出 53 列空白', () => {
 test('modelBucketFrames：日 / 周 / 月三档各 12 个桶，连续且本周（月）终点截到今天', () => {
   const { modelBucketFrames, modelBucketKeyOf, localDateKey, startOfWeek, startOfDay, addDays } = loadClientHelpers({
     extraCode: ['const MODEL_WINDOW = 12'],
-    functions: ['modelBucketFrames', 'modelBucketKeyOf', 'localDateKey', 'startOfWeek', 'startOfDay', 'addDays'],
+    functions: ['modelBucketFrames', 'modelBucketKeyOf', 'localDateKey', 'startOfWeek', 'startOfDay', 'addDays', 'toNumber'],
   })
 
   // 选一个跨过夏令时切换的日期，周桶仍然逐周连续。
