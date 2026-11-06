@@ -105,7 +105,8 @@ jobs:
           body="Syncs \`description.en\` / \`description.zh\` in \`${ENTRY}\` with the text this plugin keeps in \`market/description.*.txt\`.
 
           Only the description changes — the version shown on the site is filled by the catalog's nightly npm probe, so it is not part of this diff."
-          number="$(gh pr list --repo "$UPSTREAM" --head "Lovenndme:${BRANCH}" --state open --json number --jq '.[0].number // ""')"
+          # `gh pr list --head "owner:branch"` 在这个仓库上返回空，直接用 API 的 head 过滤更可靠。
+          number="$(gh api "repos/${UPSTREAM}/pulls?head=Lovenndme:${BRANCH}&state=open" --jq '.[0].number // ""')"
           if [ -n "$number" ]; then
             gh pr comment "$number" --repo "$UPSTREAM" --body "Pushed another refresh: $(date -u +%Y-%m-%dT%H:%MZ)"
             echo "updated PR #$number"
