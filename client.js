@@ -565,9 +565,11 @@ window.__ModuleLoader__.load({
       return ((toNumber(current) - toNumber(previous)) / previous) * 100
     }
 
+    /** 环比文案。上一期用量很少时可以到几万个百分点：四位数起不留小数、加千分位（+57,893%），免得撑宽卡片。 */
     function formatDelta(value) {
       const number = toNumber(value)
       const sign = number > 0 ? '+' : ''
+      if (Math.abs(number) >= 1000) return `${sign}${Math.round(number).toLocaleString('en-US')}%`
       return `${sign}${number.toFixed(1)}%`
     }
 
@@ -2273,8 +2275,9 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-kpi-label span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dps-kpi[data-hero="true"] .dps-kpi-label svg{color:var(--dps-accent)}
 .dps-kpi-body{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;min-width:0}
-.dps-kpi-main{display:flex;align-items:baseline;gap:10px;min-width:0;flex:0 1 auto}
-.dps-kpi-aside{flex:0 1 150px;min-width:56px;margin-left:auto;margin-bottom:3px}
+.dps-kpi-main{display:flex;align-items:baseline;gap:10px;flex:0 0 auto}
+.dps-kpi-main > *{flex:0 0 auto}
+.dps-kpi-aside{flex:0 1 150px;min-width:0;margin-left:auto;margin-bottom:3px}
 .dps-kpi-value{display:flex;align-items:baseline;flex-wrap:nowrap;white-space:nowrap;min-width:0;font-variant-numeric:tabular-nums}
 .dps-num{font-size:28px;font-weight:650;line-height:1;letter-spacing:-.02em}
 .dps-num-empty{color:var(--dps-faint);font-weight:500}
@@ -2285,7 +2288,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-spark-area{fill:color-mix(in srgb,var(--dps-accent) 14%,transparent)}
 .dps-spark-line{fill:none;stroke:var(--dps-accent);stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
 .dps-spark-dot{fill:var(--dps-card);stroke:var(--dps-accent);stroke-width:1.4;vector-effect:non-scaling-stroke}
-.dps-delta{display:inline-flex;align-items:center;gap:3px;font-size:11.5px;font-weight:600;line-height:1;font-variant-numeric:tabular-nums;color:var(--dps-muted)}
+.dps-delta{display:inline-flex;align-items:center;gap:3px;font-size:11.5px;font-weight:600;line-height:1;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--dps-muted)}
 .dps-delta[data-dir="up"]{color:var(--dsw-alias-state-warn-primary)}
 .dps-delta[data-dir="down"]{color:var(--dsw-alias-state-success-primary)}
 .dps-menu{position:relative;display:flex}

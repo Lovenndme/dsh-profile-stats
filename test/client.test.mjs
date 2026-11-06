@@ -570,6 +570,24 @@ test('buildCsv：缓存读 / 写各一列；供应商 id 含逗号 / 引号时�
   assert.equal(lines[2], '2026-11-04,6,1,1,1,3,1,2,4')
 })
 
+test('formatDelta：一位小数；四位数起不留小数、加千分位（上一期几乎没用量时可以到几万个百分点）', () => {
+  const { formatDelta } = loadClientHelpers({ functions: ['formatDelta', 'toNumber'] })
+  assert.equal(formatDelta(12.345), '+12.3%')
+  assert.equal(formatDelta(-70.21), '-70.2%')
+  assert.equal(formatDelta(0), '0.0%')
+  assert.equal(formatDelta(999.94), '+999.9%')
+  assert.equal(formatDelta(57892.8), '+57,893%')
+  assert.equal(formatDelta(-1234.5), '-1,234%')
+})
+
+test('指标卡：数字与环比不被压缩（溢出会压在环比上），让出空间的是趋势线', () => {
+  const source = readClientSource()
+  assert.match(source, /\.dps-kpi-main\{[^}]*flex:0 0 auto/)
+  assert.match(source, /\.dps-kpi-main > \*\{flex:0 0 auto\}/)
+  assert.match(source, /\.dps-kpi-aside\{[^}]*min-width:0/)
+  assert.match(source, /\.dps-delta\{[^}]*white-space:nowrap/)
+})
+
 test('client.js 里不能声明名为 window 的局部变量（会遮住全局对象：升级后 window.location.reload() 曾因此报错）', () => {
   const source = readClientSource()
   assert.equal(/\b(const|let|var)\s+window\b/.test(source), false)
