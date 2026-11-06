@@ -2284,10 +2284,11 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-unit{font-size:13px;font-weight:500;color:var(--dps-muted);margin:0 7px 0 3px}
 .dps-unit:last-child{margin-right:0}
 .dps-kpi[data-hero="true"] .dps-num{font-size:34px}
+.dps-spark-wrap{position:relative;display:block}
 .dps-spark{width:100%;height:32px;display:block}
 .dps-spark-area{fill:color-mix(in srgb,var(--dps-accent) 14%,transparent)}
 .dps-spark-line{fill:none;stroke:var(--dps-accent);stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
-.dps-spark-dot{fill:var(--dps-card);stroke:var(--dps-accent);stroke-width:1.4;vector-effect:non-scaling-stroke}
+.dps-spark-end{position:absolute;width:6px;height:6px;border-radius:50%;box-sizing:border-box;background:var(--dps-card);border:1.5px solid var(--dps-accent);transform:translate(-50%,-50%);pointer-events:none}
 .dps-delta{display:inline-flex;align-items:center;gap:3px;font-size:11.5px;font-weight:600;line-height:1;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--dps-muted)}
 .dps-delta[data-dir="up"]{color:var(--dsw-alias-state-error-primary)}
 .dps-delta[data-dir="down"]{color:var(--dsw-alias-state-success-primary)}
@@ -2320,7 +2321,6 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-page > :nth-child(4){animation-delay:130ms}
 .dps-page > :nth-child(5){animation-delay:180ms}
 .dps-page > :nth-child(6){animation-delay:230ms}
-.dps-spark rect{transform-box:fill-box;transform-origin:50% 100%;animation:dps-rise .5s cubic-bezier(.2,.7,.2,1) backwards;animation-delay:calc(260ms + var(--i,0) * 22ms)}
 .dps-act-layer{animation:dps-fade .32s ease backwards}
 .dps-act-layer[data-layer="week"] .dps-act-bar{transform-box:fill-box;transform-origin:50% 100%;animation:dps-rise .5s cubic-bezier(.2,.7,.2,1) backwards;animation-delay:calc(var(--i,0) * 6ms)}
 .dps-act-layer[data-layer="total"]{animation:dps-wipe .7s cubic-bezier(.3,.6,.2,1) backwards}
@@ -2709,18 +2709,31 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
       const line = average.map((value, index) => `${index === 0 ? 'M' : 'L'}${xOf(index).toFixed(2)} ${yOf(value).toFixed(2)}`).join(' ')
       const area = average.length > 1 ? `${line} L${width.toFixed(2)} ${height} L0 ${height} Z` : ''
       const last = average.length > 0 ? average[average.length - 1] : 0
+      // SVG 用 preserveAspectRatio="none" 横向拉满卡片：线条没问题，但画在里面的圆点会被拉成扁椭圆、
+      // 又被右边缘切掉一半，看起来像线条在末尾分叉（近 7 天只有 7 个点，横向拉伸约 5 倍）。
+      // 所以末端圆点用 HTML 按百分比定位叠在上面，永远是正圆。
       return h(
-        'svg',
-        {
-          className: 'dps-spark',
-          viewBox: `0 0 ${width} ${height}`,
-          preserveAspectRatio: 'none',
-          role: 'img',
-          'aria-label': t('aria.spark'),
-        },
-        area ? h('path', { className: 'dps-spark-area', d: area }) : null,
-        average.length > 1 ? h('path', { className: 'dps-spark-line', d: line, 'data-dps-field': 'moving-average' }) : null,
-        average.length > 0 ? h('circle', { className: 'dps-spark-dot', cx: xOf(average.length - 1), cy: yOf(last), r: 1.9 }) : null,
+        'span',
+        { className: 'dps-spark-wrap' },
+        h(
+          'svg',
+          {
+            className: 'dps-spark',
+            viewBox: `0 0 ${width} ${height}`,
+            preserveAspectRatio: 'none',
+            role: 'img',
+            'aria-label': t('aria.spark'),
+          },
+          area ? h('path', { className: 'dps-spark-area', d: area }) : null,
+          average.length > 1 ? h('path', { className: 'dps-spark-line', d: line, 'data-dps-field': 'moving-average' }) : null,
+        ),
+        average.length > 0
+          ? h('span', {
+              className: 'dps-spark-end',
+              'aria-hidden': true,
+              style: { left: `${(xOf(average.length - 1) / width) * 100}%`, top: `${(yOf(last) / height) * 100}%` },
+            })
+          : null,
       )
     }
 
