@@ -2,3 +2,5 @@ node_modules/
 *.tgz
 .dsh-project-memory/
 .DS_Store
+.tmp-shots/
+.playwright-cli/
