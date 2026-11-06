@@ -1816,11 +1816,12 @@ window.__ModuleLoader__.load({
 
     /**
      * Token 构成（Cache Lens）的派生值。口径：
-     *   总 Token        = totals.tokens（宿主按每步 max(totalTokens, input + output) 折叠）
-     *   未缓存输入      = 总 Token − 缓存 − 输出（反推；不同供应商的 inputTokens 语义不一致，不能直接用）
+     *   总 Token        = 范围内日明细的 tokens 之和（宿主按每步 max(totalTokens, input + output) 折叠）
+     *   未缓存输入      = 取自 inputTokens：inputTokens ≥ 缓存时视为已含缓存命中、减掉缓存；否则原样使用；
+     *                     没有 inputTokens 时退回 总 Token − 缓存 − 输出
      *   缓存命中率      = 缓存 ÷（缓存 + 未缓存输入）
      *   未缓存输入占比  = 未缓存输入 ÷（未缓存输入 + 输出）——放大视图的分母是「非缓存合计」
-     * 上游不自洽（缓存 + 输出 > 总量）时按 输出 → 缓存 依次夹紧，保证三段互斥、合计恰好等于总量。
+     * 三段之和可能和总 Token 略有出入（上游不自洽），占比条按三段自身的合计铺满。
      */
     function deriveLens(totals) {
       const source = totals || {}
