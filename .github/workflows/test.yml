@@ -3,7 +3,7 @@ name: Tests
 # 三件事：
 #   1. 在 UTC / America-Los_Angeles / Asia-Shanghai 各跑一遍 node:test —— 本地日历类 bug
 #      只在 UTC− 时区暴露（2026-10 连续天数恒为 1 就是这么漏过去的）；
-#   2. 全量输出留成 artifact：红了不必翻 runner 控制台，直接下 test-output-<tz>.log；
+#   2. 全量输出留成 artifact：红了不必翻 runner 控制台，落下 test-output-*.log；
 #   3. 失败时自动开一个 issue 并指派给仓库所有者 —— 「快速通知 + 有日志可查」的通道
 #      （红色 run 本身也会触发 GitHub 默认的失败邮件）。
 on:
@@ -20,11 +20,15 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # artifact 名不能带 /，所以时区名和 artifact 名分开写死。
       matrix:
-        timezone:
-          - UTC
-          - America/Los_Angeles
-          - Asia/Shanghai
+        include:
+          - timezone: UTC
+            artifact: test-output-UTC
+          - timezone: America/Los_Angeles
+            artifact: test-output-America_Los-Angeles
+          - timezone: Asia/Shanghai
+            artifact: test-output-Asia-Shanghai
     steps:
       - uses: actions/checkout@v4
 
@@ -43,7 +47,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-output-${{ matrix.timezone }}
+          name: ${{ matrix.artifact }}
           path: test-output.log
           retention-days: 14
           if-no-files-found: warn
@@ -68,7 +72,7 @@ jobs:
             echo
             echo "- run: ${RUN_URL}"
             echo "- commit: \`${SHA}\`"
-            echo "- 完整日志：该 run 的 artifact \`test-output-UTC\`（另两个时区各有同名 artifact）"
+            echo "- 完整日志：该 run 的三个 artifact（\`test-output-UTC\` / \`test-output-America_Los-Angeles\` / \`test-output-Asia-Shanghai\`）"
             echo "- 命令行直达：\`gh run view ${RUN_ID} --log-failed\`"
             echo
             echo '```'
