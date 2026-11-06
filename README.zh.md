@@ -17,7 +17,7 @@
 
 <p><a href="README.md">English</a> · <b>简体中文</b></p>
 
-<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/hero.png?v=2" alt="DSH 侧栏里的个人用量主页" width="900">
+<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/panel.png" alt="DSH 侧栏里的个人用量主页" width="900">
 
 </div>
 
