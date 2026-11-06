@@ -5,6 +5,12 @@ model, and through which billing route — all folded from this machine's own se
 
 **English** · [简体中文](README.zh.md)
 
+[![release](https://img.shields.io/github/actions/workflow/status/Lovenndme/dsh-profile-stats/publish-pending.yml?branch=main&label=release)](https://github.com/Lovenndme/dsh-profile-stats/actions/workflows/publish-pending.yml)
+[![license](https://img.shields.io/npm/l/dsh-profile-stats)](./LICENSE)
+[![npm](https://img.shields.io/npm/v/dsh-profile-stats)](https://www.npmjs.com/package/dsh-profile-stats)
+[![downloads](https://img.shields.io/npm/dm/dsh-profile-stats)](https://www.npmjs.com/package/dsh-profile-stats)
+[![awesome-DSH plugin](https://img.shields.io/badge/awesome--DSH%20plugin-listed-EA4AAA)](https://github.com/Lovenndme/awesome-dsh-plugin)
+
 ![The profile page](https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/overview.png?v=2)
 
 ## What you get
