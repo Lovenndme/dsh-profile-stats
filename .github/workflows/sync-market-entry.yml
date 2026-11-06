@@ -5,7 +5,9 @@ name: Sync marketplace entry description
 # YAML has no version key), so the only thing that can go stale here is the description.
 #
 # Needs a PAT in secrets.MARKET_TOKEN (classic `repo` scope, or fine-grained with Contents + Pull requests
-# write on Lovenndme/awesome-dsh-plugin and on the fork): GITHUB_TOKEN cannot open PRs in another repository.
+# write on Lovenndme/awesome-dsh-plugin): GITHUB_TOKEN cannot push to another repository. The job checks the
+# token before touching anything, because an expired PAT used to fall back to GITHUB_TOKEN and fail with a
+# confusing "denied to github-actions[bot]".
 on:
   schedule:
     - cron: '20 19 * * *' # 03:20 Asia/Shanghai
@@ -18,63 +20,97 @@ concurrency:
   group: sync-market-entry
   cancel-in-progress: false
 
+env:
+  ENTRY: data/plugins/Lovenndme__dsh-profile-stats.yml
+  BRANCH: market/desc-range
+  UPSTREAM: awesome-dsh-plugin/awesome-dsh-plugin
+
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
+      # This repository only supplies the canonical description text; the branch has to be built on the
+      # catalog's own main, otherwise the pull request would carry this whole repository as its diff.
       - uses: actions/checkout@v4
+        with:
+          path: plugin
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Lovenndme/awesome-dsh-plugin
+          path: catalog
+          fetch-depth: 0
+          token: ${{ secrets.MARKET_TOKEN }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
 
+      - name: Is the token usable?
+        id: token
+        env:
+          GH_TOKEN: ${{ secrets.MARKET_TOKEN }}
+        run: |
+          login="$(gh api user --jq .login 2>/dev/null || true)"
+          if [ "$login" != "Lovenndme" ]; then
+            echo "::warning::MARKET_TOKEN is missing, expired or lacks access (gh api user returned '${login:-nothing}'). Regenerate a classic PAT with repo scope and update the secret; skipping the sync."
+            echo "usable=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "usable=true" >> "$GITHUB_OUTPUT"
+
       - name: Compare the entry with the canonical description
         id: check
-        env:
-          MARKET_TOKEN: ${{ secrets.MARKET_TOKEN }}
-        run: node tools/sync-market-entry.mjs --check
+        if: steps.token.outputs.usable == 'true'
+        run: |
+          set -euo pipefail
+          cd plugin
+          MARKET_TOKEN="${{ secrets.MARKET_TOKEN }}" node tools/sync-market-entry.mjs --check
 
       - name: Nothing changed
-        if: steps.check.outputs.changed != 'true'
+        if: steps.token.outputs.usable == 'true' && steps.check.outputs.changed != 'true'
         run: echo "market entry already matches market/description.*.txt — no PR"
 
-      - name: Build the updated entry
-        if: steps.check.outputs.changed == 'true'
-        env:
-          MARKET_TOKEN: ${{ secrets.MARKET_TOKEN }}
-        run: node tools/sync-market-entry.mjs --write "$RUNNER_TEMP/entry.yml"
-
-      - name: Push the branch to the fork and open or refresh the PR
-        if: steps.check.outputs.changed == 'true'
+      - name: Rebuild the branch on the catalog's main and open or refresh the pull request
+        if: steps.token.outputs.usable == 'true' && steps.check.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.MARKET_TOKEN }}
           MARKET_TOKEN: ${{ secrets.MARKET_TOKEN }}
         run: |
           set -euo pipefail
-          repo="${GITHUB_REPOSITORY##*/}"
-          entry="data/plugins/Lovenndme__${repo}.yml"
-          branch="market/${repo}-desc"
-
+          cd plugin
+          MARKET_TOKEN="$MARKET_TOKEN" node tools/sync-market-entry.mjs --write "$RUNNER_TEMP/entry.yml"
+          cd ..
+          cd catalog
+          git remote add upstream "https://github.com/${UPSTREAM}.git"
+          git fetch --quiet upstream main
           git config user.name 'market-sync[bot]'
           git config user.email 'market-sync@users.noreply.github.com'
-          git checkout -B "$branch"
-          mkdir -p "$(dirname "$entry")"
-          cp "$RUNNER_TEMP/entry.yml" "$entry"
-          git add "$entry"
-          git commit -m "docs(${repo}): refresh the market description"
-          git remote add market "https://x-access-token:${MARKET_TOKEN}@github.com/Lovenndme/awesome-dsh-plugin.git"
-          git push --force market "$branch"
+          # 从 upstream/main 重新建分支：旧分支如果基于过期的 fork main，PR 会显示上百个无关文件。
+          git checkout -B "$BRANCH" upstream/main
+          mkdir -p "$(dirname "$ENTRY")"
+          cp "$RUNNER_TEMP/entry.yml" "$ENTRY"
+          if git diff --quiet -- "$ENTRY"; then
+            echo "entry already matches on upstream/main — nothing to push"
+            exit 0
+          fi
+          git add "$ENTRY"
+          git commit -m "docs(dsh-profile-stats): refresh the market description"
+          # 显式关掉凭据助手：否则 token 失效时 git 会退回 checkout 的 GITHUB_TOKEN，
+          # 报出「denied to github-actions[bot]」这种看不懂的错误。
+          git -c credential.helper= push --force \
+            "https://x-access-token:${MARKET_TOKEN}@github.com/Lovenndme/awesome-dsh-plugin.git" \
+            "HEAD:${BRANCH}"
 
-          body="Syncs \`description.en\` / \`description.zh\` in \`${entry}\` with the text this plugin keeps in \`market/description.*.txt\`.
+          body="Syncs \`description.en\` / \`description.zh\` in \`${ENTRY}\` with the text this plugin keeps in \`market/description.*.txt\`.
 
-          Only the description changes — the version shown on the site is filled in by the catalog's nightly npm probe, so it is not part of this diff."
-          if gh pr list --repo awesome-dsh-plugin/awesome-dsh-plugin --head "Lovenndme:${branch}" --state open --json number --jq '.[0].number' | grep -q .; then
-            number="$(gh pr list --repo awesome-dsh-plugin/awesome-dsh-plugin --head "Lovenndme:${branch}" --state open --json number --jq '.[0].number')"
-            gh pr comment "$number" --repo awesome-dsh-plugin/awesome-dsh-plugin --body "Pushed another refresh: $(date -u +%Y-%m-%dT%H:%MZ)"
+          Only the description changes — the version shown on the site is filled by the catalog's nightly npm probe, so it is not part of this diff."
+          number="$(gh pr list --repo "$UPSTREAM" --head "Lovenndme:${BRANCH}" --state open --json number --jq '.[0].number // ""')"
+          if [ -n "$number" ]; then
+            gh pr comment "$number" --repo "$UPSTREAM" --body "Pushed another refresh: $(date -u +%Y-%m-%dT%H:%MZ)"
             echo "updated PR #$number"
           else
-            gh pr create --repo awesome-dsh-plugin/awesome-dsh-plugin \
-              --head "Lovenndme:${branch}" --base main \
-              --title "docs(${repo}): refresh the market description" \
+            gh pr create --repo "$UPSTREAM" --head "Lovenndme:${BRANCH}" --base main \
+              --title "docs(dsh-profile-stats): refresh the market description" \
               --body "$body"
           fi
