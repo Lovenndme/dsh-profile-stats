@@ -29,10 +29,6 @@ In DSH open **Plugins → Add plugin** and paste the package name:
 dsh-profile-stats
 ```
 
-If you are in mainland China without a proxy, set the install source to **中国大陆镜像源** (the
-mirror at `registry.npmmirror.com`) before installing — the Discover tab itself loads from GitHub
-Pages and may not open without a proxy. Afterwards the plugin works fully offline.
-
 ## What you get
 
 | | Section | What it shows |

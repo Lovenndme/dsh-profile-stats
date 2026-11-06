@@ -29,8 +29,6 @@
 dsh-profile-stats
 ```
 
-国内没有代理时，先把安装源切到 **中国大陆镜像源**（即 `registry.npmmirror.com`）再装——「发现」页本身挂在 GitHub Pages 上，无代理可能打不开。装好之后完全离线可用。
-
 ## 能看到什么
 
 | | 区块 | 说明 |
