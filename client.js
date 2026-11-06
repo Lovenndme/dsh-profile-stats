@@ -76,6 +76,7 @@ window.__ModuleLoader__.load({
       'lens.uncachedTotal': 'Uncached total',
       'lens.uncachedShare': 'Uncached input share',
       'lens.cache': 'Cache hit',
+      'lens.cacheWrite': 'Cache write',
       'lens.input': 'Uncached input',
       'lens.output': 'Output',
       'lens.zoom': 'Zoom into uncached',
@@ -90,6 +91,11 @@ window.__ModuleLoader__.load({
       'provider.deepseek-modlens': 'DeepSeek ModLens',
       'provider.unknown': 'Unknown',
       'provider.other': 'Other',
+      'provider.today': 'Today',
+      'provider.colName': 'Provider',
+      'provider.colAmount': 'Tokens',
+      'provider.colShare': 'Share',
+      'provider.colHit': 'Cache hit',
       'status.loading': 'Scanning local session logs…',
       'action.refresh': 'Refresh',
       'action.retry': 'Retry',
@@ -151,6 +157,7 @@ window.__ModuleLoader__.load({
       'lens.uncachedTotal': '非缓存 Token 合计',
       'lens.uncachedShare': '未缓存输入占比',
       'lens.cache': '缓存命中',
+      'lens.cacheWrite': '缓存写入',
       'lens.input': '未缓存输入',
       'lens.output': '输出',
       'lens.zoom': '放大非缓存细分',
@@ -165,6 +172,11 @@ window.__ModuleLoader__.load({
       'provider.deepseek-modlens': 'DeepSeek ModLens',
       'provider.unknown': '未知来源',
       'provider.other': '其他',
+      'provider.today': '今日',
+      'provider.colName': '供应商',
+      'provider.colAmount': '用量',
+      'provider.colShare': '占比',
+      'provider.colHit': '命中率',
       'status.loading': '正在统计本地会话日志…',
       'action.refresh': '刷新',
       'action.retry': '重试',
@@ -429,8 +441,47 @@ window.__ModuleLoader__.load({
       }
     }
 
+    function emptyUsage() {
+      return { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 }
+    }
+
+    /** 把一份四项用量加进 target（没有就新建），返回 target。 */
+    function addUsage(target, usage) {
+      const sum = target || emptyUsage()
+      const source = usage || {}
+      sum.inputTokens += toNumber(source.inputTokens)
+      sum.cacheReadTokens += toNumber(source.cacheReadTokens)
+      sum.cacheWriteTokens += toNumber(source.cacheWriteTokens)
+      sum.outputTokens += toNumber(source.outputTokens)
+      return sum
+    }
+
+    /**
+     * 缓存命中率（0–100）= 缓存命中 ÷ 全部输入（未缓存输入 + 缓存命中 + 缓存写入）。
+     * 缓存写入要付费、不是命中，只进分母；没有写入时就是 DeepSeek 的 命中 ÷（命中 + 未命中）。
+     * 没有任何输入时返回 null（页面显示「—」，不显示 0%）。
+     */
+    function cacheHitRate(usage) {
+      const source = usage || {}
+      const read = Math.max(0, toNumber(source.cacheReadTokens))
+      const all = read + Math.max(0, toNumber(source.inputTokens)) + Math.max(0, toNumber(source.cacheWriteTokens))
+      return all > 0 ? (read / all) * 100 : null
+    }
+
     function emptySummary() {
-      return { tokens: 0, calls: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0, byProvider: {}, byModel: {}, days: 0, activeDays: 0 }
+      return {
+        tokens: 0,
+        calls: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        byProvider: {},
+        providerUsage: {},
+        byModel: {},
+        days: 0,
+        activeDays: 0,
+      }
     }
 
     /** 用日明细汇总一段窗口（起止都包含，任一端为空表示不设限）。 */
@@ -447,9 +498,14 @@ window.__ModuleLoader__.load({
         summary.calls += toNumber(entry.calls)
         summary.inputTokens += toNumber(entry.inputTokens)
         summary.outputTokens += toNumber(entry.outputTokens)
-        summary.cacheTokens += toNumber(entry.cacheTokens)
+        // 旧版宿主的日明细只有读写合并的 cacheTokens（升级后宿主重载前会短暂遇到）
+        summary.cacheReadTokens += toNumber(entry.cacheReadTokens === undefined ? entry.cacheTokens : entry.cacheReadTokens)
+        summary.cacheWriteTokens += toNumber(entry.cacheWriteTokens)
         for (const [id, amount] of Object.entries(entry.byProvider || {})) {
           summary.byProvider[id] = toNumber(summary.byProvider[id]) + toNumber(amount)
+        }
+        for (const [id, usage] of Object.entries(entry.providerUsage || {})) {
+          summary.providerUsage[id] = addUsage(summary.providerUsage[id], usage)
         }
         for (const [id, amount] of Object.entries(entry.byModel || {})) {
           summary.byModel[id] = toNumber(summary.byModel[id]) + toNumber(amount)
@@ -458,14 +514,14 @@ window.__ModuleLoader__.load({
       return summary
     }
 
-    /** 汇总结果 → Cache Lens 需要的 totals 形状（日明细里缓存读写是合起来的）。 */
+    /** 汇总结果 → Cache Lens 需要的 totals 形状。 */
     function lensTotalsOf(summary) {
       return {
         tokens: summary.tokens,
         inputTokens: summary.inputTokens,
         outputTokens: summary.outputTokens,
-        cacheReadTokens: summary.cacheTokens,
-        cacheWriteTokens: 0,
+        cacheReadTokens: summary.cacheReadTokens,
+        cacheWriteTokens: summary.cacheWriteTokens,
       }
     }
 
@@ -546,7 +602,7 @@ window.__ModuleLoader__.load({
         (left, right) => toNumber(summary.byProvider[right]) - toNumber(summary.byProvider[left]) || (left < right ? -1 : 1),
       )
       const rows = []
-      rows.push(['date', 'tokens', 'calls', 'input', 'output', 'cache', ...providers].map(csvCell).join(','))
+      rows.push(['date', 'tokens', 'calls', 'input', 'output', 'cache_read', 'cache_write', ...providers].map(csvCell).join(','))
       for (const entry of indexDaily(daily).values()) {
         if (startKey && entry.date < startKey) continue
         if (endKey && entry.date > endKey) continue
@@ -557,7 +613,8 @@ window.__ModuleLoader__.load({
             toNumber(entry.calls),
             toNumber(entry.inputTokens),
             toNumber(entry.outputTokens),
-            toNumber(entry.cacheTokens),
+            toNumber(entry.cacheReadTokens === undefined ? entry.cacheTokens : entry.cacheReadTokens),
+            toNumber(entry.cacheWriteTokens),
             ...providers.map((id) => toNumber((entry.byProvider || {})[id])),
           ]
             .map(csvCell)
@@ -1815,42 +1872,42 @@ window.__ModuleLoader__.load({
     /* ------------------------------------------------------------ Token 构成 */
 
     /**
-     * Token 构成（Cache Lens）的派生值。口径：
-     *   总 Token        = 范围内日明细的 tokens 之和（宿主按每步 max(totalTokens, input + output) 折叠）
-     *   未缓存输入      = 取自 inputTokens：inputTokens ≥ 缓存时视为已含缓存命中、减掉缓存；否则原样使用；
-     *                     没有 inputTokens 时退回 总 Token − 缓存 − 输出
-     *   缓存命中率      = 缓存 ÷（缓存 + 未缓存输入）
-     *   未缓存输入占比  = 未缓存输入 ÷（未缓存输入 + 输出）——放大视图的分母是「非缓存合计」
-     * 三段之和可能和总 Token 略有出入（上游不自洽），占比条按三段自身的合计铺满。
+     * Token 构成（Cache Lens）的派生值。DSH 的用量四项互不重叠，直接取用、不做推断：
+     *   缓存命中 = cacheReadTokens    缓存写入 = cacheWriteTokens
+     *   未缓存输入 = inputTokens      输出 = outputTokens
+     *   总 Token = 范围内日明细的 tokens 之和（宿主按每步四项之和折叠，所以等于四项之和）
+     *   缓存命中率 = cacheHitRate：命中 ÷（未缓存输入 + 命中 + 写入）
+     *   未缓存输入占比 = 未缓存输入 ÷ 非命中合计（未缓存输入 + 写入 + 输出）——放大视图的分母
+     * 旧实现按「inputTokens ≥ 缓存就减掉缓存」猜字段含义，真实命中率 ≤ 50% 时会算高（50% 直接跳成 100%）。
      */
     function deriveLens(totals) {
       const source = totals || {}
-      const total = toNumber(source.tokens)
-      const output = Math.min(toNumber(source.outputTokens), total)
-      const cache = toNumber(source.cacheReadTokens) + toNumber(source.cacheWriteTokens)
-      const input = toNumber(source.inputTokens)
-      // 不同供应商的 inputTokens 语义不一致：input ≥ cache 说明它已经包含了缓存命中，
-      // 这时未缓存输入要减掉缓存；否则 inputTokens 本身就是未缓存输入。
-      // 用减法（总量 − 缓存 − 输出）会把这部分减成 0，凭空造出 100% 命中率。
-      const uncached = input > 0 ? (input >= cache ? input - cache : input) : Math.max(0, total - cache - output)
-      // 三段之和可能略小于宿主的总量（上游数字不自洽），柱状条按自身合计铺满。
-      const partsTotal = cache + uncached + output
-      const uncachedTotal = uncached + output
+      const count = (value) => Math.max(0, toNumber(value))
+      const total = count(source.tokens)
+      const cache = count(source.cacheReadTokens)
+      const write = count(source.cacheWriteTokens)
+      const uncached = count(source.inputTokens)
+      const output = count(source.outputTokens)
+      const inputTotal = uncached + cache + write
+      const uncachedTotal = uncached + write + output
+      const hitRate = cacheHitRate(source)
       return {
         total,
         cache,
+        write,
         uncached,
         output,
+        inputTotal,
         uncachedTotal,
-        partsTotal,
-        inputTotal: cache + uncached,
-        hitRate: cache + uncached > 0 ? (cache / (cache + uncached)) * 100 : 0,
+        partsTotal: inputTotal + output,
+        hitRate: hitRate === null ? 0 : hitRate,
         uncachedShare: uncachedTotal > 0 ? (uncached / uncachedTotal) * 100 : 0,
       }
     }
 
     const LENS_COLORS = {
       cache: 'var(--dps-accent)',
+      write: 'color-mix(in srgb,var(--dps-accent) 42%,transparent)',
       input: 'var(--dsw-alias-state-warn-primary)',
       output: 'var(--dsw-alias-state-success-primary)',
     }
@@ -1865,13 +1922,15 @@ window.__ModuleLoader__.load({
       // 柱宽描述的是「构成本身」，分母是总量（放大视图是非缓存合计）。
       const denominator = zoomed ? lens.uncachedTotal : lens.partsTotal
       const barShare = (value) => (denominator > 0 ? (value / denominator) * 100 : 0)
-      // 百分比列统一除以「输入」：缓存与未缓存输入同源，命中率就是缓存在这两段里的占比，
-      // 于是 100% 与 0% 不再互相矛盾。输出不属于输入，这一列不给百分比。
+      // 百分比列统一除以「全部输入」（命中 + 写入 + 未缓存输入），命中那一行的百分比就是命中率，
+      // 几行加起来恰好 100%。输出不属于输入，这一列不给百分比。
       const percentBasis = zoomed ? lens.uncachedTotal : lens.inputTotal
       const share = (value) => (percentBasis > 0 ? (value / percentBasis) * 100 : 0)
       const percentCell = (row) => (zoomed || row.key !== 'output' ? formatPercent(share(row.value)) : '')
+      // 缓存写入只在有数时出一行（DeepSeek 没有这个字段，大多数时候是 0）
       const rows = [
         { key: 'cache', label: t('lens.cache'), value: lens.cache, visible: !zoomed },
+        { key: 'write', label: t('lens.cacheWrite'), value: lens.write, visible: lens.write > 0 },
         { key: 'input', label: t('lens.input'), value: lens.uncached, visible: true },
         { key: 'output', label: t('lens.output'), value: lens.output, visible: true },
       ]
@@ -1927,11 +1986,10 @@ window.__ModuleLoader__.load({
           { pointer, anchor: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } },
           h('div', { className: 'dps-pop-title' }, hovered.label),
           h('div', { className: 'dps-pop-value' }, t('tip.tokens', { value: formatTokens(hovered.value) })),
-          h(
-            'div',
-            { className: 'dps-pop-title' },
-            `${formatPercent(share(hovered.value))} · ${zoomed ? t('lens.colShareUncached') : t('lens.colShareTotal')}`,
-          ),
+          // 和表格的百分比列一致：整体视图里输出不属于输入，不给「占输入」
+          percentCell(hovered)
+            ? h('div', { className: 'dps-pop-title' }, `${percentCell(hovered)} · ${zoomed ? t('lens.colShareUncached') : t('lens.colShareTotal')}`)
+            : null,
         )
       }
 
@@ -2041,27 +2099,47 @@ window.__ModuleLoader__.load({
       return text === key ? String(id) : text
     }
 
-    /** byProvider → 降序行；前 6 个各一行，其余合成「其他」。占比的分母是这一档的全部合计。 */
-    function deriveProviders(source) {
-      const entries = Object.entries(source || {})
-        .map(([id, tokens]) => ({ id, tokens: toNumber(tokens) }))
+    /**
+     * byProvider（各家 token）+ providerUsage（各家四项用量）→ 降序行；前 6 个各一行，其余合成「其他」。
+     * 占比的分母是这一档的全部合计；命中率按各家自己的四项算（「其他」用合并后的四项），
+     * 这样每一行都能单独和那一家的后台对账。缺四项用量（旧版宿主）时命中率为 null。
+     */
+    function deriveProviders(byProvider, providerUsage) {
+      const usageOf = providerUsage || {}
+      const entries = Object.entries(byProvider || {})
+        .map(([id, tokens]) => ({ id, tokens: toNumber(tokens), usage: usageOf[id] || null }))
         .filter((row) => row.tokens > 0)
         .sort((left, right) => right.tokens - left.tokens || (left.id < right.id ? -1 : 1))
       const total = entries.reduce((sum, row) => sum + row.tokens, 0)
       const rows = entries.slice(0, 6)
       const rest = entries.slice(6)
-      if (rest.length > 0) rows.push({ id: '__other', tokens: rest.reduce((sum, row) => sum + row.tokens, 0) })
-      return { total, rows: rows.map((row) => ({ ...row, share: total > 0 ? (row.tokens / total) * 100 : 0 })) }
+      if (rest.length > 0) {
+        const known = rest.filter((row) => row.usage)
+        rows.push({
+          id: '__other',
+          tokens: rest.reduce((sum, row) => sum + row.tokens, 0),
+          usage: known.length > 0 ? known.reduce((sum, row) => addUsage(sum, row.usage), emptyUsage()) : null,
+        })
+      }
+      return {
+        total,
+        rows: rows.map((row) => ({
+          id: row.id,
+          tokens: row.tokens,
+          share: total > 0 ? (row.tokens / total) * 100 : 0,
+          hitRate: row.usage ? cacheHitRate(row.usage) : null,
+        })),
+      }
     }
 
     function ProviderCard(props) {
-      // 供应商分类跟随页面顶部的时间范围（原来卡片自带的「今日 / 累计」开关已取消）。
-      const scope = props.scope || 'all'
-      const source = props.byProvider || {}
-      const data = useMemo(() => deriveProviders(source), [source])
+      // 默认跟随页面顶部的时间范围；「今日」按钮按下时只看今天（切换顶部范围会自动弹起）。
+      const todayOnly = Boolean(props.todayOnly)
+      const summary = (todayOnly ? props.today : props.summary) || emptySummary()
+      const data = useMemo(() => deriveProviders(summary.byProvider, summary.providerUsage), [summary])
       return h(
         'section',
-        { className: 'dps-panel dps-prov', 'data-dps-card': 'provider', 'data-scope': scope },
+        { className: 'dps-panel dps-prov', 'data-dps-card': 'provider', 'data-scope': todayOnly ? 'today' : props.scope || 'all' },
         h(
           'header',
           { className: 'dps-panel-head' },
@@ -2071,19 +2149,47 @@ window.__ModuleLoader__.load({
             h('h2', null, t('section.provider')),
             h('span', { className: 'dps-panel-meta', 'data-dps-field': 'provider-total', 'data-value': data.total }, t('chart.total', { value: formatTokens(data.total) })),
           ),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dps-ghost dps-toggle',
+              'data-dps-control': 'provider-today',
+              'aria-pressed': todayOnly ? 'true' : 'false',
+              onClick: () => props.onTodayOnly(!todayOnly),
+            },
+            t('provider.today'),
+          ),
         ),
         data.rows.length === 0
           ? h('div', { className: 'dps-prov-empty' }, t('chart.empty'))
           : h(
-              'ul',
-              { className: 'dps-prov-list' },
+              'div',
+              { className: 'dps-prov-table', role: 'table' },
+              h(
+                'div',
+                { className: 'dps-prov-row dps-prov-th', role: 'row' },
+                h('span', { role: 'columnheader' }, t('provider.colName')),
+                h('span', { role: 'columnheader' }, t('provider.colAmount')),
+                h('span', { role: 'columnheader' }, t('provider.colShare')),
+                h('span', { role: 'columnheader' }, t('provider.colHit')),
+              ),
               data.rows.map((row) =>
                 h(
-                  'li',
-                  { key: row.id, className: 'dps-prov-row', 'data-provider': row.id, 'data-value': row.tokens, 'data-share': row.share },
-                  h('span', { className: 'dps-prov-name', title: providerLabel(row.id) }, providerLabel(row.id)),
-                  h('span', { className: 'dps-prov-value' }, formatTokens(row.tokens)),
-                  h('span', { className: 'dps-prov-share' }, formatPercent(row.share)),
+                  'div',
+                  {
+                    key: row.id,
+                    className: 'dps-prov-row',
+                    role: 'row',
+                    'data-provider': row.id,
+                    'data-value': row.tokens,
+                    'data-share': row.share,
+                    'data-hit': row.hitRate === null ? '' : row.hitRate,
+                  },
+                  h('span', { className: 'dps-prov-name', role: 'cell', title: providerLabel(row.id) }, providerLabel(row.id)),
+                  h('span', { className: 'dps-prov-value', role: 'cell' }, formatTokens(row.tokens)),
+                  h('span', { className: 'dps-prov-share', role: 'cell' }, formatPercent(row.share)),
+                  h('span', { className: 'dps-prov-hit', role: 'cell' }, row.hitRate === null ? t('unit.none') : formatPercent(row.hitRate)),
                   h(
                     'span',
                     { className: 'dps-prov-track', 'aria-hidden': true },
@@ -2308,11 +2414,16 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-lens-value{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
 .dps-lens-share{color:var(--dps-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .dps-prov{flex:1 1 auto}
-.dps-prov-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:14px}
-.dps-prov-row{display:grid;grid-template-columns:minmax(0,1fr) auto 56px;align-items:baseline;column-gap:10px;row-gap:7px;font-size:13px}
+.dps-prov-table{display:flex;flex-direction:column;gap:14px}
+.dps-prov-row{display:grid;grid-template-columns:minmax(0,1fr) 72px 50px 58px;align-items:baseline;column-gap:10px;row-gap:7px;font-size:13px}
+.dps-prov-th{margin-bottom:-6px;font-size:11.5px;color:var(--dps-faint)}
+.dps-prov-th span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dps-prov-th span:nth-child(n+2),.dps-prov-value,.dps-prov-share,.dps-prov-hit{text-align:right}
 .dps-prov-name{min-width:0;color:var(--dps-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dps-prov-value{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
-.dps-prov-share{color:var(--dps-muted);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.dps-prov-share{color:var(--dps-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.dps-prov-hit{color:var(--dps-ink);font-variant-numeric:tabular-nums;white-space:nowrap}
+.dps-toggle[aria-pressed="true"]{color:var(--dps-ink);border-color:color-mix(in srgb,var(--dps-accent) 55%,var(--dps-line));background:color-mix(in srgb,var(--dps-accent) 9%,transparent);font-weight:600}
 .dps-prov-track{grid-column:1 / -1;display:block;height:6px;border-radius:999px;background:var(--dps-track);overflow:hidden}
 .dps-prov-fill{display:block;height:100%;border-radius:inherit;background:var(--dps-accent);transition:width .45s cubic-bezier(.3,.7,.2,1)}
 .dps-prov-empty{flex:1 1 auto;display:grid;place-items:center;min-height:72px;font-size:12.5px;color:var(--dps-faint)}
@@ -2708,6 +2819,12 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
       const [updating, setUpdating] = useState(false)
       // 顶部时间范围：累计 / 近 90 / 近 30 / 近 7 天
       const [range, setRange] = useState('all')
+      // 供应商卡片的「今日」按钮；换顶部范围时弹起，卡片回到跟随范围
+      const [providerToday, setProviderToday] = useState(false)
+      const changeRange = useCallback((next) => {
+        setRange(next)
+        setProviderToday(false)
+      }, [])
 
       // 打开页面不再强制重扫：宿主在后台定时保鲜，读快照时数据旧了也会自己静默补扫。
       const runRefresh = useCallback(async () => {
@@ -2754,6 +2871,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
         return deltaPercent(current, previous)
       }, [daily, rangeWin.startKey, rangeWin.endKey, firstKey])
       const lensTotals = useMemo(() => lensTotalsOf(rangeSummary), [rangeSummary])
+      const todaySummary = useMemo(() => summarizeDaily(daily, todayKey, todayKey), [daily, todayKey])
       const spark = useMemo(() => {
         // 累计范围下迷你趋势只画最近 90 天，避免几百根柱子挤成一团
         const days = range === 'all' ? 90 : RANGE_DAYS[range]
@@ -2793,10 +2911,15 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
             calls: rangeSummary.calls,
             inputTokens: rangeSummary.inputTokens,
             outputTokens: rangeSummary.outputTokens,
-            cacheTokens: rangeSummary.cacheTokens,
+            cacheReadTokens: rangeSummary.cacheReadTokens,
+            cacheWriteTokens: rangeSummary.cacheWriteTokens,
+            cacheHitRate: cacheHitRate(rangeSummary),
           },
           byProvider: rangeSummary.byProvider,
+          providerUsage: rangeSummary.providerUsage,
           byModel: rangeSummary.byModel,
+          // 上游 totalTokens 和四项之和对不上的步数（全部时间，正常应为 0）
+          diagnostics: { usageMismatchCalls: toNumber(totals.usageMismatchCalls) },
           daily: entries,
         }
         downloadFile(`dsh-profile-stats-${range}-${todayKey}.json`, 'application/json', JSON.stringify(payload, null, 2))
@@ -2859,7 +2982,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
             busy: refreshing || (manualScan && scanning),
             onRefresh: runRefresh,
             range,
-            onRange: setRange,
+            onRange: changeRange,
             onExport: handleExport,
           }),
           h(StatusBar, { snapshot, error, hasData, onRetry: reload }),
@@ -2869,7 +2992,18 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
             'div',
             { className: 'dps-grid' },
             h(ModelCard, { daily, today, range, rangeWin, spanDays }),
-            h('div', { className: 'dps-side' }, h(LensCard, { totals: lensTotals }), h(ProviderCard, { byProvider: rangeSummary.byProvider, scope: range })),
+            h(
+              'div',
+              { className: 'dps-side' },
+              h(LensCard, { totals: lensTotals }),
+              h(ProviderCard, {
+                summary: rangeSummary,
+                today: todaySummary,
+                scope: range,
+                todayOnly: providerToday,
+                onTodayOnly: setProviderToday,
+              }),
+            ),
           ),
         ),
       )

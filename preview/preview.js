@@ -92,7 +92,18 @@
    * 默认快照：数量级按任务说明第 4 节（累计约 33.3 亿、缓存约 32 亿、输出约 690 万、最长任务约 1 小时、
    * 当前连续 10 天），日期相对「今天」生成，所以任何一天打开都有今天的数据。
    */
-  function buildSnapshot() {
+  /**
+   * 各家供应商的缓存命中率不同（供应商卡片的「命中率」列才有区别）。
+   * write 只在「含缓存写入」视图里生效：relay-lab 演示一家会报缓存写入的供应商（Token 构成多出一行）。
+   */
+  var PROVIDER_PROFILES = {
+    'deepseek-official': { hit: 0.955, write: 0 },
+    'deepseek-account': { hit: 0.988, write: 0 },
+    'deepseek-modlens': { hit: 0.942, write: 0 },
+    'relay-lab': { hit: 0.9, write: 0.03 },
+  }
+
+  function buildSnapshot(withWrites) {
     var rand = mulberry32(20261104)
     var today = new Date()
     today.setHours(0, 0, 0, 0)
@@ -150,16 +161,33 @@
       // 预览数据只用公开的供应商 id（宿主内置的 deepseek-*）加一个虚构的未知 id，演示「未知 id 原样显示」
       var providers = { 'deepseek-official': 52, 'deepseek-account': 30, 'deepseek-modlens': 14, 'relay-lab': 4 }
       if (entry.offset === 0) providers = { 'deepseek-official': 70, 'deepseek-account': 30 }
-      var cache = Math.floor(tokens * (0.955 + rand() * 0.012))
-      var output = Math.floor(tokens * (0.0016 + rand() * 0.001))
+      // 和宿主一样四项互不重叠：每家 token = 未缓存输入 + 缓存读 + 缓存写 + 输出
+      var byProvider = split(tokens, providers)
+      var providerUsage = {}
+      var sums = { input: 0, read: 0, write: 0, output: 0 }
+      Object.keys(byProvider).forEach(function (id) {
+        var amount = byProvider[id]
+        var profile = PROVIDER_PROFILES[id]
+        var read = Math.floor(amount * (profile.hit + (rand() - 0.5) * 0.012))
+        var write = withWrites ? Math.floor(amount * profile.write) : 0
+        var output = Math.floor(amount * (0.0016 + rand() * 0.001))
+        var usage = { inputTokens: amount - read - write - output, cacheReadTokens: read, cacheWriteTokens: write, outputTokens: output }
+        providerUsage[id] = usage
+        sums.input += usage.inputTokens
+        sums.read += read
+        sums.write += write
+        sums.output += output
+      })
       return {
         date: key,
         tokens: tokens,
         calls: Math.max(1, Math.round(tokens / 260000)),
-        inputTokens: tokens - output,
-        outputTokens: output,
-        cacheTokens: cache,
-        byProvider: split(tokens, providers),
+        inputTokens: sums.input,
+        outputTokens: sums.output,
+        cacheReadTokens: sums.read,
+        cacheWriteTokens: sums.write,
+        byProvider: byProvider,
+        providerUsage: providerUsage,
         byModel: split(tokens, models),
       }
     })
@@ -180,7 +208,8 @@
       totals.calls += entry.calls
       totals.inputTokens += entry.inputTokens
       totals.outputTokens += entry.outputTokens
-      totals.cacheReadTokens += entry.cacheTokens
+      totals.cacheReadTokens += entry.cacheReadTokens
+      totals.cacheWriteTokens += entry.cacheWriteTokens
       Object.keys(entry.byProvider).forEach(function (id) {
         totals.byProvider[id] = (totals.byProvider[id] || 0) + entry.byProvider[id]
       })
@@ -243,7 +272,8 @@
     }
   }
 
-  var fullSnapshot = buildSnapshot()
+  var fullSnapshot = buildSnapshot(false)
+  var writeSnapshot = buildSnapshot(true)
   /** 每次挂载重置的「宿主」运行状态：刷新后扫描几轮、首扫进度、升级进度。 */
   var hostState = null
 
@@ -268,7 +298,7 @@
       hostState.firstScanDone = Math.min(68, hostState.firstScanDone + 3)
       return { ok: true, identity: identity, totals: emptyTotals(), daily: [], scanning: true, firstScan: true, progress: { done: hostState.firstScanDone, total: 69 }, generatedAt: 0, update: updateBlock() }
     }
-    var body = JSON.parse(JSON.stringify(fullSnapshot))
+    var body = JSON.parse(JSON.stringify(state.view === 'cache-write' ? writeSnapshot : fullSnapshot))
     body.generatedAt = Date.now()
     body.update = updateBlock()
     if (hostState.scanLeft > 0) {

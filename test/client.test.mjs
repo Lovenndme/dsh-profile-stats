@@ -8,60 +8,58 @@ import { loadClientHelpers, readClientSource } from './helpers/client-source.mjs
 
 const withLocale = { extraCode: ["const currentLocaleId = () => 'zh-CN'"] }
 
-test('deriveLens：缓存 / 未缓存输入 / 输出三段的派生口径', () => {
-  const { deriveLens } = loadClientHelpers({ functions: ['deriveLens', 'toNumber'] })
+const lensHelpers = () => loadClientHelpers({ functions: ['deriveLens', 'cacheHitRate', 'toNumber'] })
 
-  // 自洽数据：inputTokens 已包含缓存命中。
-  const coherent = deriveLens({
-    tokens: 2000,
-    inputTokens: 1500,
-    outputTokens: 500,
-    cacheReadTokens: 600,
-    cacheWriteTokens: 0,
-  })
-  assert.equal(coherent.cache, 600)
-  assert.equal(coherent.uncached, 900)
-  assert.equal(coherent.output, 500)
-  assert.equal(coherent.inputTotal, 1500)
-  assert.equal(coherent.partsTotal, 2000)
-  assert.equal(coherent.uncachedTotal, 1400)
-  assert.equal(coherent.hitRate, 40)
-  assert.equal(Number(coherent.uncachedShare.toFixed(4)), Number(((900 / 1400) * 100).toFixed(4)))
-
-  // cacheWrite 也要算进「缓存」。
-  const withWrite = deriveLens({ tokens: 500, inputTokens: 400, outputTokens: 100, cacheReadTokens: 100, cacheWriteTokens: 50 })
-  assert.equal(withWrite.cache, 150)
-  assert.equal(withWrite.uncached, 250)
+test('deriveLens：四项互不重叠，直接取用；几行加起来等于总量', () => {
+  const { deriveLens } = lensHelpers()
+  const lens = deriveLens({ tokens: 2000, inputTokens: 900, outputTokens: 500, cacheReadTokens: 600, cacheWriteTokens: 0 })
+  assert.equal(lens.cache, 600)
+  assert.equal(lens.write, 0)
+  assert.equal(lens.uncached, 900)
+  assert.equal(lens.output, 500)
+  assert.equal(lens.inputTotal, 1500)
+  assert.equal(lens.partsTotal, 2000)
+  assert.equal(lens.partsTotal, lens.total)
+  assert.equal(lens.uncachedTotal, 1400)
+  assert.equal(lens.hitRate, 40)
+  assert.equal(Number(lens.uncachedShare.toFixed(4)), Number(((900 / 1400) * 100).toFixed(4)))
 })
 
-test('deriveLens：inputTokens 缺失时退回「总量 − 缓存 − 输出」', () => {
-  const { deriveLens } = loadClientHelpers({ functions: ['deriveLens', 'toNumber'] })
+test('deriveLens：输入 ≥ 缓存时不再减掉缓存（旧算法在真实命中率 ≤ 50% 时算高，50% 直接跳成 100%）', () => {
+  const { deriveLens } = lensHelpers()
+  const half = deriveLens({ tokens: 2000, inputTokens: 1000, cacheReadTokens: 1000, outputTokens: 0 })
+  assert.equal(half.uncached, 1000)
+  assert.equal(half.hitRate, 50, '旧算法：未缓存 = 1000 − 1000 = 0 → 100%')
+  const third = deriveLens({ tokens: 1500, inputTokens: 1000, cacheReadTokens: 500, outputTokens: 0 })
+  assert.equal(Number(third.hitRate.toFixed(4)), Number(((500 / 1500) * 100).toFixed(4)), '旧算法给 50%')
+  // 命中率随缓存连续变化，没有跳变
+  const below = deriveLens({ tokens: 1999, inputTokens: 1000, cacheReadTokens: 999, outputTokens: 0 })
+  assert.ok(Math.abs(below.hitRate - half.hitRate) < 0.1)
+})
+
+test('deriveLens：缓存写入不算命中，只进命中率的分母', () => {
+  const { deriveLens } = lensHelpers()
+  const lens = deriveLens({ tokens: 650, inputTokens: 400, outputTokens: 100, cacheReadTokens: 100, cacheWriteTokens: 50 })
+  assert.equal(lens.cache, 100)
+  assert.equal(lens.write, 50)
+  assert.equal(lens.inputTotal, 550)
+  assert.equal(lens.partsTotal, 650)
+  assert.equal(lens.hitRate, (100 / 550) * 100)
+  assert.equal(lens.uncachedTotal, 400 + 50 + 100, '放大视图：除了命中以外的全部')
+})
+
+test('deriveLens：不再从总量反推未缓存输入', () => {
+  const { deriveLens } = lensHelpers()
+  // 旧实现在 inputTokens 缺失时用「总量 − 缓存 − 输出」= 500
   const lens = deriveLens({ tokens: 1000, outputTokens: 200, cacheReadTokens: 300 })
-  assert.equal(lens.uncached, 500)
-  assert.equal(lens.inputTotal, 800)
-  assert.equal(lens.hitRate, Number(((300 / 800) * 100).toFixed(10)))
+  assert.equal(lens.uncached, 0)
+  assert.equal(lens.total, 1000)
+  assert.equal(lens.partsTotal, 500)
 })
 
-test('deriveLens：上游不自洽（input < cache）时未缓存输入不为负，也不再凭空造出 100%', () => {
-  const { deriveLens } = loadClientHelpers({ functions: ['deriveLens', 'toNumber'] })
-  const lens = deriveLens({ tokens: 700, inputTokens: 100, outputTokens: 0, cacheReadTokens: 600 })
-  assert.equal(lens.uncached, 100, '未缓存输入被夹到 0 会让命中率变成假的 100%')
-  assert.equal(lens.inputTotal, 700)
-  assert.ok(lens.hitRate < 100, `命中率 ${lens.hitRate} 不该是 100%`)
-  assert.ok(lens.hitRate >= 0)
-
-  // 缓存 + 输出超过总量：三段仍按真实值，柱状条按自身合计归一。
-  const overflow = deriveLens({ tokens: 500, inputTokens: 400, outputTokens: 300, cacheReadTokens: 400 })
-  assert.equal(overflow.cache, 400)
-  assert.equal(overflow.uncached, 0)
-  assert.equal(overflow.output, 300)
-  assert.equal(overflow.partsTotal, 700)
-  assert.ok(overflow.partsTotal > overflow.total, '上游不自洽时三段合计可以大于总量，柱状条按自身合计铺满')
-})
-
-test('deriveLens：全零 / 空快照不产生 NaN', () => {
-  const { deriveLens } = loadClientHelpers({ functions: ['deriveLens', 'toNumber'] })
-  for (const totals of [undefined, {}, { tokens: 0 }, { tokens: null, inputTokens: 'x' }]) {
+test('deriveLens / cacheHitRate：全零 / 空快照不产生 NaN；没有输入时命中率为 null', () => {
+  const { deriveLens, cacheHitRate } = lensHelpers()
+  for (const totals of [undefined, {}, { tokens: 0 }, { tokens: null, inputTokens: 'x' }, { inputTokens: -5, cacheReadTokens: -1 }]) {
     const lens = deriveLens(totals)
     for (const [key, value] of Object.entries(lens)) {
       assert.ok(Number.isFinite(value), `${key} 必须是有限数字，实际 ${value}`)
@@ -70,24 +68,19 @@ test('deriveLens：全零 / 空快照不产生 NaN', () => {
     assert.equal(lens.partsTotal, 0)
     assert.equal(lens.uncachedShare, 0)
   }
+  assert.equal(cacheHitRate({}), null)
+  assert.equal(cacheHitRate(undefined), null)
+  assert.equal(cacheHitRate({ outputTokens: 100 }), null, '只有输出、没有输入')
+  assert.equal(cacheHitRate({ inputTokens: 100 }), 0)
+  assert.equal(cacheHitRate({ cacheReadTokens: 100 }), 100)
 })
 
-test('deriveLens：输出被夹到总量以内，柱状条不会超过 100%', () => {
-  const { deriveLens } = loadClientHelpers({ functions: ['deriveLens', 'toNumber'] })
-  const lens = deriveLens({ tokens: 100, outputTokens: 500, inputTokens: 0, cacheReadTokens: 0 })
-  assert.equal(lens.output, 100)
-  assert.equal(lens.partsTotal, 100)
-  assert.ok(lens.cache + lens.uncached === lens.inputTotal)
-  assert.equal(lens.partsTotal, lens.inputTotal + lens.output)
-})
-
-test('deriveLens：百分比列统一除以输入，缓存 + 未缓存输入恰好 100%', () => {
-  const { deriveLens } = loadClientHelpers({ functions: ['deriveLens', 'toNumber'] })
-  const lens = deriveLens({ tokens: 1000, inputTokens: 800, outputTokens: 200, cacheReadTokens: 400 })
-  const cachePercent = (lens.cache / lens.inputTotal) * 100
-  const inputPercent = (lens.uncached / lens.inputTotal) * 100
-  assert.equal(Math.round(cachePercent + inputPercent), 100)
-  assert.equal(Math.round(cachePercent), Math.round(lens.hitRate))
+test('deriveLens：百分比列除以全部输入，命中 + 写入 + 未缓存输入恰好 100%', () => {
+  const { deriveLens } = lensHelpers()
+  const lens = deriveLens({ tokens: 1230, inputTokens: 400, outputTokens: 200, cacheReadTokens: 600, cacheWriteTokens: 30 })
+  const percent = (value) => (value / lens.inputTotal) * 100
+  assert.equal(Math.round((percent(lens.cache) + percent(lens.write) + percent(lens.uncached)) * 1e6) / 1e6, 100)
+  assert.equal(percent(lens.cache), lens.hitRate)
 })
 
 test('tokenParts / formatTokens：中文单位按一位小数，亿 / 万不出现 10000.0 万', () => {
@@ -353,8 +346,11 @@ test('deriveKpis：五个指标 + 最近 14 天迷你柱（最后一根是今天
   for (const item of empty.spark) assert.equal(item.tokens, 0)
 })
 
+const providerHelpers = () =>
+  loadClientHelpers({ functions: ['toNumber', 'deriveProviders', 'cacheHitRate', 'addUsage', 'emptyUsage'] })
+
 test('deriveProviders：按用量降序，前 6 个各一行，其余并成「其他」', () => {
-  const { deriveProviders } = loadClientHelpers({ functions: ['toNumber', 'deriveProviders'] })
+  const { deriveProviders } = providerHelpers()
 
   const small = deriveProviders({ alpha: 600, bravo: 400 })
   assert.equal(small.total, 1000)
@@ -378,6 +374,67 @@ test('deriveProviders：按用量降序，前 6 个各一行，其余并成「�
   assert.deepEqual(messy.rows.map((row) => row.id), ['a', 'b'])
   assert.deepEqual(deriveProviders({}), { total: 0, rows: [] })
   assert.deepEqual(deriveProviders(undefined), { total: 0, rows: [] })
+})
+
+test('deriveProviders：每家按自己的四项算命中率，「其他」用合并后的四项，缺用量时为 null', () => {
+  const { deriveProviders } = providerHelpers()
+  const usage = (input, cacheRead, cacheWrite = 0) => ({ inputTokens: input, cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite, outputTokens: 1 })
+  const byProvider = { a: 900, b: 800, c: 700, d: 600, e: 500, f: 400, g: 300, h: 200 }
+  const providerUsage = { a: usage(10, 90), b: usage(50, 50), c: usage(100, 0), d: usage(0, 0), e: usage(20, 60, 20), g: usage(30, 70), h: usage(70, 30) }
+  const { rows } = deriveProviders(byProvider, providerUsage)
+  const hit = Object.fromEntries(rows.map((row) => [row.id, row.hitRate]))
+  assert.equal(hit.a, 90)
+  assert.equal(hit.b, 50)
+  assert.equal(hit.c, 0)
+  assert.equal(hit.d, null, '有 token 但没有输入（只有输出）')
+  assert.equal(hit.e, 60, '写入进分母不进分子：60 / (20 + 60 + 20)')
+  assert.equal(hit.f, null, '这一家缺四项用量')
+  assert.equal(hit.__other, 50, 'g + h：(70 + 30) / (30 + 70 + 70 + 30)')
+  assert.equal(deriveProviders({ a: 1 }, undefined).rows[0].hitRate, null)
+})
+
+test('summarizeDaily：缓存读写分开汇总、各家四项用量按窗口累加；旧版宿主的 cacheTokens 当作读', () => {
+  const { summarizeDaily, cacheHitRate } = loadClientHelpers({
+    functions: ['summarizeDaily', 'emptySummary', 'emptyUsage', 'addUsage', 'cacheHitRate', 'indexDaily', 'parseDateKey', 'toNumber'],
+  })
+  const daily = [
+    {
+      date: '2026-11-05',
+      tokens: 1100,
+      inputTokens: 100,
+      outputTokens: 0,
+      cacheReadTokens: 900,
+      cacheWriteTokens: 100,
+      byProvider: { a: 1100 },
+      providerUsage: { a: { inputTokens: 100, cacheReadTokens: 900, cacheWriteTokens: 100, outputTokens: 0 } },
+    },
+    {
+      date: '2026-11-06',
+      tokens: 500,
+      inputTokens: 200,
+      outputTokens: 0,
+      cacheReadTokens: 300,
+      cacheWriteTokens: 0,
+      byProvider: { a: 100, b: 400 },
+      providerUsage: {
+        a: { inputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 },
+        b: { inputTokens: 100, cacheReadTokens: 300, cacheWriteTokens: 0, outputTokens: 0 },
+      },
+    },
+  ]
+  const all = summarizeDaily(daily, '', '2026-11-06')
+  assert.equal(all.cacheReadTokens, 1200)
+  assert.equal(all.cacheWriteTokens, 100)
+  assert.deepEqual(all.providerUsage.a, { inputTokens: 200, cacheReadTokens: 900, cacheWriteTokens: 100, outputTokens: 0 })
+  assert.equal(cacheHitRate(all.providerUsage.a), 75)
+  const today = summarizeDaily(daily, '2026-11-06', '2026-11-06')
+  assert.deepEqual(today.byProvider, { a: 100, b: 400 })
+  assert.equal(cacheHitRate(today.providerUsage.b), 75)
+  assert.equal(cacheHitRate(today.providerUsage.a), 0)
+
+  const legacy = summarizeDaily([{ date: '2026-11-06', tokens: 10, inputTokens: 2, cacheTokens: 8 }], '', '')
+  assert.equal(legacy.cacheReadTokens, 8)
+  assert.equal(legacy.cacheWriteTokens, 0)
 })
 
 test('providerLabel：已知供应商走文案字典，未知原样显示', () => {
@@ -493,20 +550,24 @@ test('deltaWindows：本期已过完的天（不含今天）对上一期的前�
   assert.equal(deltaWindows(null), null)
 })
 
-test('buildCsv：供应商 id 含逗号 / 引号时按 RFC 4180 加引号', () => {
+test('buildCsv：缓存读 / 写各一列；供应商 id 含逗号 / 引号时按 RFC 4180 加引号', () => {
   const { buildCsv, csvCell } = loadClientHelpers({ functions: ['buildCsv', 'csvCell', 'indexDaily', 'parseDateKey', 'toNumber'] })
   assert.equal(csvCell('plain'), 'plain')
   assert.equal(csvCell('a,b'), '"a,b"')
   assert.equal(csvCell('say "hi"'), '"say ""hi"""')
   const csv = buildCsv(
-    [{ date: '2026-11-04', tokens: 3, calls: 1, inputTokens: 1, outputTokens: 1, cacheTokens: 1, byProvider: { 'relay,eu': 2, plain: 1 } }],
-    { byProvider: { 'relay,eu': 2, plain: 1 } },
+    [
+      { date: '2026-11-03', tokens: 9, calls: 1, inputTokens: 1, outputTokens: 1, cacheTokens: 7, byProvider: { plain: 9 } },
+      { date: '2026-11-04', tokens: 6, calls: 1, inputTokens: 1, outputTokens: 1, cacheReadTokens: 3, cacheWriteTokens: 1, byProvider: { 'relay,eu': 4, plain: 2 } },
+    ],
+    { byProvider: { 'relay,eu': 4, plain: 11 } },
     '2026-11-01',
     '2026-11-04',
   )
   const lines = csv.replace(/^﻿/, '').trim().split('\r\n')
-  assert.equal(lines[0], 'date,tokens,calls,input,output,cache,"relay,eu",plain')
-  assert.equal(lines[1], '2026-11-04,3,1,1,1,1,2,1')
+  assert.equal(lines[0], 'date,tokens,calls,input,output,cache_read,cache_write,plain,"relay,eu"')
+  assert.equal(lines[1], '2026-11-03,9,1,1,1,7,0,9,0', '旧版宿主的 cacheTokens 记作读')
+  assert.equal(lines[2], '2026-11-04,6,1,1,1,3,1,2,4')
 })
 
 test('client.js 里不能声明名为 window 的局部变量（会遮住全局对象：升级后 window.location.reload() 曾因此报错）', () => {
