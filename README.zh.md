@@ -17,7 +17,7 @@
 
 <p><a href="README.md">English</a> · <b>简体中文</b></p>
 
-<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/panel-v2.png" alt="DSH 侧栏里的个人用量主页" width="900">
+<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/panel-v2.png?v=3" alt="DSH 侧栏里的个人用量主页" width="900">
 
 </div>
 
@@ -30,23 +30,6 @@ dsh-profile-stats
 ```
 
 国内没有代理时，先把安装源切到 **中国大陆镜像源**（即 `registry.npmmirror.com`）再装——「发现」页本身挂在 GitHub Pages 上，无代理可能打不开。装好之后完全离线可用。
-
-## 截图
-
-<p align="center">
-  <img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/heatmap.png?v=2" alt="Token 活动热力图" width="760"><br>
-  <sub><b>Token 活动</b> — 近 12 个月，每天 / 每周 / 累计总量</sub>
-</p>
-
-<p align="center">
-  <img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/model-chart-v2.png" alt="模型分布" width="600"><br>
-  <sub><b>模型分布</b> — 按模型家族与档位堆叠</sub>
-</p>
-
-<p align="center">
-  <img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/mix.png?v=2" alt="Token 构成（Cache Lens）" width="440"><br>
-  <sub><b>Cache Lens</b> — 缓存命中 / 未缓存输入 / 输出</sub>
-</p>
 
 ## 能看到什么
 

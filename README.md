@@ -17,7 +17,7 @@ all folded from this machine's own session logs.</p>
 
 <p><b>English</b> · <a href="README.zh.md">简体中文</a></p>
 
-<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/panel-v2.png" alt="The profile page in the DSH sidebar" width="900">
+<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/panel-v2.png?v=3" alt="The profile page in the DSH sidebar" width="900">
 
 </div>
 
@@ -32,23 +32,6 @@ dsh-profile-stats
 If you are in mainland China without a proxy, set the install source to **中国大陆镜像源** (the
 mirror at `registry.npmmirror.com`) before installing — the Discover tab itself loads from GitHub
 Pages and may not open without a proxy. Afterwards the plugin works fully offline.
-
-## Screenshots
-
-<p align="center">
-  <img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/heatmap.png?v=2" alt="Token activity heatmap" width="760"><br>
-  <sub><b>Token activity</b> — 12 months, daily / weekly / cumulative total</sub>
-</p>
-
-<p align="center">
-  <img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/model-chart-v2.png" alt="Model distribution" width="600"><br>
-  <sub><b>Model distribution</b> — stacked by model family and tier</sub>
-</p>
-
-<p align="center">
-  <img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/mix.png?v=2" alt="Token mix (Cache Lens)" width="440"><br>
-  <sub><b>Cache Lens</b> — cache hit / uncached input / output</sub>
-</p>
 
 ## What you get
 
