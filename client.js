@@ -51,8 +51,6 @@ window.__ModuleLoader__.load({
       'grain.day': 'Daily',
       'grain.week': 'Weekly',
       'grain.month': 'Monthly',
-      'toggle.today': 'Today',
-      'toggle.all': 'All time',
       'range.7d': '7 days',
       'range.30d': '30 days',
       'range.90d': '90 days',
@@ -108,6 +106,7 @@ window.__ModuleLoader__.load({
       'aria.model': 'Token by model chart',
       'aria.lens': 'Token mix bar',
       'aria.spark': 'Daily token trend (7-day average)',
+      'aria.range': 'Time range',
     }
 
     const ZH = {
@@ -127,8 +126,6 @@ window.__ModuleLoader__.load({
       'grain.day': '按日',
       'grain.week': '按周',
       'grain.month': '按月',
-      'toggle.today': '今日',
-      'toggle.all': '累计',
       'range.7d': '近 7 天',
       'range.30d': '近 30 天',
       'range.90d': '近 90 天',
@@ -184,6 +181,7 @@ window.__ModuleLoader__.load({
       'aria.model': '模型分布图',
       'aria.lens': 'Token 构成条',
       'aria.spark': '每日用量趋势（7 日均线）',
+      'aria.range': '时间范围',
     }
 
     const localeBridge = {
@@ -534,13 +532,19 @@ window.__ModuleLoader__.load({
       return true
     }
 
+    /** CSV 单元格：含逗号、引号或换行时用双引号包起来，内部引号写两遍（RFC 4180）。 */
+    function csvCell(value) {
+      const text = String(value)
+      return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+    }
+
     /** 每天一行；供应商按范围内总量降序各占一列。Excel 需要 BOM 才认 UTF-8。 */
     function buildCsv(daily, summary, startKey, endKey) {
       const providers = Object.keys(summary.byProvider || {}).sort(
         (left, right) => toNumber(summary.byProvider[right]) - toNumber(summary.byProvider[left]) || (left < right ? -1 : 1),
       )
       const rows = []
-      rows.push(['date', 'tokens', 'calls', 'input', 'output', 'cache', ...providers].join(','))
+      rows.push(['date', 'tokens', 'calls', 'input', 'output', 'cache', ...providers].map(csvCell).join(','))
       for (const entry of indexDaily(daily).values()) {
         if (startKey && entry.date < startKey) continue
         if (endKey && entry.date > endKey) continue
@@ -553,7 +557,9 @@ window.__ModuleLoader__.load({
             toNumber(entry.outputTokens),
             toNumber(entry.cacheTokens),
             ...providers.map((id) => toNumber((entry.byProvider || {})[id])),
-          ].join(','),
+          ]
+            .map(csvCell)
+            .join(','),
         )
       }
       return `\ufeff${rows.join('\r\n')}\r\n`
@@ -2045,7 +2051,7 @@ window.__ModuleLoader__.load({
     }
 
     function ProviderCard(props) {
-      // 供应商分类跟随页面顶部的时间范围（范围=今日 时就是原来的「今日」口径）。
+      // 供应商分类跟随页面顶部的时间范围（原来卡片自带的「今日 / 累计」开关已取消）。
       const scope = props.scope || 'all'
       const source = props.byProvider || {}
       const data = useMemo(() => deriveProviders(source), [source])
@@ -2465,7 +2471,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
           { className: 'dps-actions' },
           h(Segmented, {
             control: 'range',
-            label: t('section.activity'),
+            label: t('aria.range'),
             value: props.range,
             onChange: props.onRange,
             options: RANGE_IDS.map((id) => ({ id, label: t(`range.${id}`) })),
@@ -2778,7 +2784,13 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
           exportedAt: new Date().toISOString(),
           range,
           window: { start: rangeWin.startKey || null, end: rangeWin.endKey },
-          totals: lensTotals,
+          totals: {
+            tokens: rangeSummary.tokens,
+            calls: rangeSummary.calls,
+            inputTokens: rangeSummary.inputTokens,
+            outputTokens: rangeSummary.outputTokens,
+            cacheTokens: rangeSummary.cacheTokens,
+          },
           byProvider: rangeSummary.byProvider,
           byModel: rangeSummary.byModel,
           daily: entries,
