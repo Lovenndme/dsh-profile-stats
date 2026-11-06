@@ -1,8 +1,11 @@
 name: Tests
 
-# The suite is plain node:test — no dependencies, so it runs in a few seconds.
-# It runs in three time zones on purpose:日/周/连续天数的口径全部走本地日历，
-# UTC+ 时区能过、UTC− 时区过不了的 bug 已经出现过（2026-10 连续天数恒为 1）。
+# 三件事：
+#   1. 在 UTC / America-Los_Angeles / Asia-Shanghai 各跑一遍 node:test —— 本地日历类 bug
+#      只在 UTC− 时区暴露（2026-10 连续天数恒为 1 就是这么漏过去的）；
+#   2. 全量输出留成 artifact：红了不必翻 runner 控制台，直接下 test-output-<tz>.log；
+#   3. 失败时自动开一个 issue 并指派给仓库所有者 —— 「快速通知 + 有日志可查」的通道
+#      （红色 run 本身也会触发 GitHub 默认的失败邮件）。
 on:
   push:
   pull_request:
@@ -10,6 +13,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   test:
@@ -28,7 +32,49 @@ jobs:
         with:
           node-version: 24
 
+      # tee 保证日志落盘（runner 中途挂掉也留得下）；pipefail 让失败判在测试上而不是 tee 上。
       - name: node --test
-        run: npm test
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test-output.log
+
+      - name: Upload the full log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output-${{ matrix.timezone }}
+          path: test-output.log
+          retention-days: 14
+          if-no-files-found: warn
+
+      # 只让 UTC 那个 job 建 issue，避免三条矩阵任务各开一个重复 issue。
+      # continue-on-error：issue 建不出来（比如只读 token）不该把失败状态弄得更乱。
+      - name: Open an issue with the failure
+        if: ${{ failure() && matrix.timezone == 'UTC' }}
+        continue-on-error: true
+        shell: bash
         env:
-          TZ: ${{ matrix.timezone }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          title="CI failed on ${SHA:0:7} ($(date -u +%Y-%m-%dT%H:%MZ))"
+          {
+            echo "由 Tests 工作流自动创建。"
+            echo
+            echo "- run: ${RUN_URL}"
+            echo "- commit: \`${SHA}\`"
+            echo "- 完整日志：该 run 的 artifact \`test-output-UTC\`（另两个时区各有同名 artifact）"
+            echo "- 命令行直达：\`gh run view ${RUN_ID} --log-failed\`"
+            echo
+            echo '```'
+            tail -n 80 test-output.log 2>/dev/null || echo '(日志文件缺失)'
+            echo '```'
+          } > issue-body.md
+          gh label create ci-failure --color B60205 --description "Automated CI failure report" --force >/dev/null 2>&1 || true
+          gh issue create --title "$title" --body-file issue-body.md --label ci-failure --assignee "$OWNER" \
+            || gh issue create --title "$title" --body-file issue-body.md
