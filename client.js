@@ -1575,11 +1575,12 @@ window.__ModuleLoader__.load({
       const endDate = startOfDay(today)
       const endKey = localDateKey(endDate)
       const available = granularitiesFor(range, spanDays)
-      // 用户在当前范围里点过的粒度。生效粒度在渲染时直接算：换了范围、或点过的那档不再可选
-      // （跨过午夜、累计跨度变长）就回到默认——不靠 effect 事后纠正，否则会先用旧粒度画一帧，
-      // 开关高亮的那档也可能和图对不上。
-      const [picked, setPicked] = useState(null)
-      const granularity = picked && picked.range === range && available.includes(picked.value) ? picked.value : available[0]
+      // 用户在当前范围里点过的粒度。换了范围就清掉（在渲染中直接重置，React 支持的「上一次渲染的信息」写法），
+      // 点过的那档不再可选（跨过午夜、累计跨度变长）也回到默认——都不靠 effect 事后纠正，
+      // 否则会先用旧粒度画一帧，开关高亮的那档也可能和图对不上。
+      const [picked, setPicked] = useState({ range, value: null })
+      if (picked.range !== range) setPicked({ range, value: null })
+      const granularity = picked.range === range && picked.value && available.includes(picked.value) ? picked.value : available[0]
       const barsRef = useRef(null)
       const pointer = usePointer()
       // 没有数据的累计范围也画 12 个空桶，卡片形状不变
