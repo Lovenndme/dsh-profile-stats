@@ -57,8 +57,8 @@ Pages and may not open without a proxy. Afterwards the plugin works fully offlin
 | 📊 | **Five headline numbers** | Tokens in the selected range (with a 7-day average trend and the change against the previous period), today's tokens, longest task, longest and current active-day streaks |
 | 🗓️ | **Token activity** | A 12-month day grid, switchable between daily, weekly and running-total views |
 | 🧩 | **Model distribution** | Stacked columns by model family (version + tier, so `v4-flash` and `v4.1-flash` stay apart) over the selected range, by day, week or month |
-| 🎯 | **Cache Lens** | Total tokens plus the cache hit rate, and the cache-hit / uncached-input / output split as a segmented bar, with a zoom into the uncached part |
-| 💳 | **Provider split** | Tokens per billing route in the selected range |
+| 🎯 | **Cache Lens** | Total tokens plus the cache hit rate, and the cache-hit / uncached-input / output split (plus cache write when a provider reports it) as a segmented bar, with a zoom into the uncached part |
+| 💳 | **Provider split** | Tokens and cache hit rate per billing route in the selected range, or today only |
 
 A range switch in the header — 7 / 30 / 90 days or all time — drives the first number, the model distribution, Cache Lens and the provider split; the selected range can be exported as CSV (one row per day) or JSON.
 

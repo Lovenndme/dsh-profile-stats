@@ -6,24 +6,38 @@ Back to the [README](../README.md) · [中文 README](../README.zh.md)
 
 | Card | Definition |
 |---|---|
-| Cumulative tokens | Per `assistant/message` step: `max(totalTokens, input + output)`, summed over all sessions. The provider's `totalTokens` already equals input + output + cache, so cache is counted once. |
+| Cumulative tokens | Per `assistant/message` step: uncached input + cache read + cache write + output, summed over all sessions. DSH logs the four parts disjointly (`inputTokens` is only the uncached part), so nothing is counted twice. `totalTokens` is used only when all four parts are missing; a step whose `totalTokens` disagrees with the sum is counted in `usageMismatchCalls` and never used to adjust a number. Some steps in older DSH logs (Aug–Sep 2026) have no `totalTokens`; the earlier `max(totalTokens, input + output)` dropped their cache. |
 | Today's tokens | The same per-step sum restricted to today's local calendar day. |
 | Longest task | Longest span between a `turn/start` and its `turn/end`. Turns interrupted without a `turn/end` are not counted. |
 | Streaks | An active day has at least one token. The current streak ends today, or yesterday when today has no activity yet. |
 | Token activity | Last 53 weeks (this week plus 52), weeks start on Monday. *Daily* colours each day by the quartile of non-zero days; *Weekly* draws one bar per week total; *Cumulative* is the running total including usage older than the window, so its last point equals the cumulative tokens. |
-| Time range | Header switch: last 7 / 30 / 90 days (today included) or all time. The first number, the model distribution, Token mix and the provider split are summed from daily entries inside the range, so they always agree; today's tokens, longest task and the streaks stay all-time. The delta chip compares the finished days of the current period (today excluded) with the same number of days at the start of the previous period, and is hidden when the previous period starts before the first day with data. Export writes the selected range as CSV (one row per day, a column per provider) or JSON. |
-| Token mix (Cache Lens) | cache = `cacheTokens` (read + write), output = `outputTokens`; **uncached input is taken from `inputTokens`**: when `inputTokens ≥ cache` it is treated as including cache hits and the cache is subtracted, otherwise it is used as is; without `inputTokens` it falls back to total − cache − output. Cache hit rate = cache ÷ (cache + uncached input). The bar spans the three parts' own sum; the percentage column is over input (cache + uncached input), output has none; the zoomed view's denominator is the uncached total (uncached input + output), which its column header says. |
+| Time range | Header switch: last 7 / 30 / 90 days (today included) or all time. The first number, the model distribution, Token mix and the provider split are summed from daily entries inside the range, so they always agree; today's tokens, longest task and the streaks stay all-time. The delta chip compares the finished days of the current period (today excluded) with the same number of days at the start of the previous period, and is hidden when the previous period starts before the first day with data. Export writes the selected range as CSV (one row per day: `input`, `output`, `cache_read`, `cache_write`, then a column per provider) or JSON (adds each provider's four parts and `usageMismatchCalls`). |
+| Token mix (Cache Lens) | The four parts as logged, nothing inferred: cache hit = `cacheReadTokens`, cache write = `cacheWriteTokens` (a row only when non-zero), uncached input = `inputTokens`, output = `outputTokens`; they add up to the total. **Cache hit rate = cache hit ÷ (uncached input + cache hit + cache write)**: a write is billed and is not a hit, so it is in the denominator only. Without writes this is DeepSeek's hit ÷ (hit + miss). The percentage column is over all input (so the cache-hit row equals the hit rate), output has none; the zoomed view's denominator is everything except hits (uncached input + cache write + output), which its column header says. |
 | Model split | Calendar buckets (days, Monday weeks or months) covering the selected range, including empty ones; a bucket that starts before the range counts only days inside it and is labelled with the dates it really holds. Granularity options are fixed per range: 7 days → day; 30 days → day / week; 90 days → week / month; all time → day / week up to a month of data, week / month up to two years, month beyond. DeepSeek ids are grouped by version and tier (`deepseek-v4-1-flash-261017`, `deepseek-v4.1-flash` → DeepSeek V4.1 Flash; the unversioned official `deepseek-flash` alias → V4.1 Flash). Other vendors keep their own family (`gemini-2-5-pro` → Gemini 2.5 Pro). The top six families get their own colour; the rest are merged into "Other models (N)". |
-| Provider breakdown | Per-step `data.message.source.provider`, e.g. `deepseek-official`, `deepseek-account`. Shares are of the selected range's total; unknown ids are shown as they are. |
+| Provider breakdown | Per-step `data.message.source.provider`, e.g. `deepseek-official`, `deepseek-account`. Shares are of the selected range's total; unknown ids are shown as they are. Each row has its own cache hit rate from that provider's four parts (the "Other" row uses their combined parts). The **Today** button shows today only; switching the header range releases it. |
 | Number format | ≥ 1 亿 → 亿, ≥ 1 万 → 万, one decimal; every sum and share is computed on raw integers and formatted only when drawn. Shares below 0.05% read "<0.1%". |
 
 ### Why the provider breakdown exists
 
-Gateway consoles often show `input + cache-hit + output` as one "total tokens" figure. Because cache-hit is
-a **subset of** input, that sum counts the cache twice. On a measured machine (2026-10-30) a gateway card
+Gateway consoles often show `input + cache-hit + output` as one "total tokens" figure. Because the gateway's
+input already **includes** the cache hits, that sum counts the cache twice. On a measured machine (2026-10-30) a gateway card
 said 340.15M for one route while `input + output` was 173.02M; this plugin's own number for the same route
 was 172.21M (0.5% apart, explained by the scan being a few minutes older). Compare one billing route at a
 time and the totals line up.
+
+### Comparing the cache hit rate with a provider console
+
+The Token mix figure combines every provider in the range, so it will not equal any single console. To compare:
+
+1. Use the provider card's row for that provider, not the combined figure.
+2. Compare token counts before percentages. If this machine's counts are lower, the console also includes
+   requests from other clients or machines on the same key; that is a scope difference, not a formula one.
+3. Line up the dates: ranges here are rolling and end today in local time; consoles usually use calendar days
+   or months. DeepSeek's documentation does not state the console's day boundary.
+
+None of DeepSeek, OpenAI, Anthropic or Volcengine Ark defines a hit-rate formula in its API documentation.
+The formula here follows Langfuse (cache read ÷ all input, writes in the denominator); the comparison of
+open-source projects behind that choice is in [FINDINGS](../FINDINGS.md) under the cache hit rate design reference.
 
 ## Data flow and network surface
 
@@ -58,8 +72,10 @@ top:     ok, generatedAt, scanning, firstScan, progress {done, total}, identity,
 totals:  tokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, calls,
          sessions, activeDays, firstDay, lastDay,
          peakDay {date, tokens}, peakStepTokens, peakSessionTokens, longestTurnMs,
-         longestStreak, currentStreak, byProvider {}, byModel {}
-daily[]: date, tokens, calls, inputTokens, outputTokens, cacheTokens, byProvider {}, byModel {}
+         longestStreak, currentStreak, usageMismatchCalls, byProvider {}, byModel {}
+daily[]: date, tokens, calls, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens,
+         byProvider {id: tokens}, providerUsage {id: {inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens}},
+         byModel {}
 update:  installed, latest, available, canUpdate, running, lastResult
 ```
 
@@ -126,7 +142,8 @@ $DSH_HOME/dsh-profile-stats/update.json     # last in-panel update result
 
 - **Local preview:** `node tools/preview.mjs` (or double-click `preview/index.html`) renders the real `client.js`
   against built-in data, with switches for light / dark theme, window width (1280 / 900 / 760), the model chart's
-  monthly view, the zoomed Cache Lens, empty / first-scan / failed-request states, language and the update button.
+  monthly view, the zoomed Cache Lens, a provider that reports cache writes, empty / first-scan / failed-request
+  states, language and the update button.
   Nothing leaves the page. The page state is kept in the URL hash.
 - **Tests:** `npm test` (`node --test`) runs the in-repo suite in `test/` — no dependencies, about a second.
   It covers the host fold/aggregate maths (`index.js` exports its pure functions for this), cache-file
