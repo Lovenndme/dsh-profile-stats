@@ -1435,20 +1435,20 @@ window.__ModuleLoader__.load({
       return Math.round((endDate.getTime() - startDate.getTime()) / 86400000) + 1
     }
 
-    /** 太粗（只有一根柱）或太细（>92 根像条形码）的粒度不给选。 */
-    const MODEL_MAX_BUCKETS = 92
-    function availableGranularities(startDate, endDate) {
-      return ['day', 'week', 'month'].filter((granularity) => {
-        const count = calendarBucketCount(granularity, startDate, endDate)
-        return count >= 2 && count <= MODEL_MAX_BUCKETS
-      })
-    }
-
-    /** 换范围时落到好读的默认粒度（用户手动点过就以手动为准）。 */
-    function defaultGranularity(range, startDate, endDate) {
-      const available = availableGranularities(startDate, endDate)
-      if (range === '7d' || range === '30d') return available.includes('day') ? 'day' : available[0] || 'day'
-      return available.includes('week') ? 'week' : available[0] || 'day'
+    /**
+     * 每个范围可选的粒度是固定的，第一项是默认值。
+     * 不按「桶数在 2–92 之间」动态判断：那样「近 7 天」也能选按月（两根残柱），
+     * 「按周」每到周日消失、「按月」只在每月头几天出现，选项天天变。
+     * 累计范围按数据跨度分档：一个月以内看日 / 周，两年以内看周 / 月，再长只看月。
+     */
+    function granularitiesFor(range, spanDays) {
+      if (range === '7d') return ['day']
+      if (range === '30d') return ['day', 'week']
+      if (range === '90d') return ['week', 'month']
+      const span = toNumber(spanDays)
+      if (span > 0 && span <= 31) return ['day', 'week']
+      if (span > 730) return ['month']
+      return ['week', 'month']
     }
 
     /**
@@ -1463,6 +1463,17 @@ window.__ModuleLoader__.load({
       const index = new Map(buckets.map((bucket) => [bucket.key, bucket]))
       const startKey = (window && window.startKey) || ''
       const endKey = (window && window.endKey) || ''
+      // 第一个桶若从窗口起点之前开始，只统计窗口内的天，所以把它的起点也截到窗口起点：
+      // 浮层 / 横轴写的日期就是这根柱子真正包含的日期（否则「10月5日 – 10月11日」里其实只有 4 天）。
+      const windowStart = parseDateKey(startKey)
+      if (windowStart) {
+        for (const bucket of buckets) {
+          if (bucket.start.getTime() < windowStart.getTime()) {
+            bucket.start = windowStart
+            bucket.clipped = true
+          }
+        }
+      }
       for (const entry of indexDaily(daily).values()) {
         if (startKey && entry.date < startKey) continue
         if (endKey && entry.date > endKey) continue
@@ -1526,8 +1537,10 @@ window.__ModuleLoader__.load({
     }
 
     function bucketTitle(bucket, granularity) {
-      if (granularity === 'month') return formatDate(bucket.start, { year: 'numeric', month: 'long' })
-      if (granularity === 'week') {
+      if (granularity === 'month' && !bucket.clipped) return formatDate(bucket.start, { year: 'numeric', month: 'long' })
+      // 截断后只剩一天（窗口起点正好是周日 / 月末）：写单个日期，不写「8月9日 – 8月9日」
+      if (localDateKey(bucket.start) === localDateKey(bucket.end)) return formatDate(bucket.start, { month: 'long', day: 'numeric', weekday: 'short' })
+      if (granularity === 'week' || granularity === 'month') {
         const short = { month: 'short', day: 'numeric' }
         return t('tip.weekRange', { start: formatDate(bucket.start, short), end: formatDate(bucket.end, short) })
       }
@@ -1547,33 +1560,27 @@ window.__ModuleLoader__.load({
       const startDate = parseDateKey(spanStartKey)
       const endDate = startOfDay(today)
       const endKey = localDateKey(endDate)
-      const available = useMemo(() => availableGranularities(startDate, endDate), [spanStartKey, endKey])
-      const [granularity, setGranularity] = useState(() => defaultGranularity(range, startDate, endDate))
-      const [chosen, setChosen] = useState(false)
-      const [active, setActive] = useState(null)
+      const available = granularitiesFor(range, spanDays)
+      // 用户在当前范围里点过的粒度。生效粒度在渲染时直接算：换了范围、或点过的那档不再可选
+      // （跨过午夜、累计跨度变长）就回到默认——不靠 effect 事后纠正，否则会先用旧粒度画一帧，
+      // 开关高亮的那档也可能和图对不上。
+      const [picked, setPicked] = useState(null)
+      const granularity = picked && picked.range === range && available.includes(picked.value) ? picked.value : available[0]
       const barsRef = useRef(null)
       const pointer = usePointer()
-      // 换范围：回到该范围的默认粒度（手动选的也重置）
-      useEffect(() => {
-        setGranularity(defaultGranularity(range, startDate, endDate))
-        setChosen(false)
-        setActive(null)
-      }, [range])
-      // 数据晚到（spanDays 从 0 变成真实跨度）时，没手动选过就跟着默认走
-      useEffect(() => {
-        if (chosen) return
-        setGranularity(defaultGranularity(range, startDate, endDate))
-      }, [spanStartKey, chosen])
-      const bucketCount = useMemo(
-        () => calendarBucketCount(granularity, startDate, endDate),
-        [granularity, spanStartKey, endKey],
-      )
+      // 没有数据的累计范围也画 12 个空桶，卡片形状不变
+      const bucketCount = startDate ? calendarBucketCount(granularity, startDate, endDate) : MODEL_WINDOW
       const data = useMemo(
         () => buildModelSeries(props.daily, granularity, today, bucketCount, rangeWin),
         [props.daily, granularity, bucketCount, rangeWin ? rangeWin.startKey : '', rangeWin ? rangeWin.endKey : '', endKey],
       )
       const count = data.buckets.length
       const empty = data.total <= 0
+      // 悬浮 / 键盘选中的桶只在同一范围、同一粒度下有效，换了就自然失效
+      const scope = `${range}|${granularity}`
+      const [activeState, setActiveState] = useState(null)
+      const active = activeState && activeState.scope === scope && activeState.index < count ? activeState.index : null
+      const setActive = (index) => setActiveState(index === null || index === undefined ? null : { scope, index })
 
       const indexFromEvent = (event) => {
         const element = barsRef.current
@@ -1727,8 +1734,7 @@ window.__ModuleLoader__.load({
                 label: t('section.model'),
                 value: granularity,
                 onChange: (next) => {
-                  setGranularity(next)
-                  setChosen(true)
+                  setPicked({ range, value: next })
                   setActive(null)
                 },
                 options: available.map((id) => ({ id, label: t(`grain.${id}`) })),
@@ -1776,8 +1782,9 @@ window.__ModuleLoader__.load({
             'div',
             { className: 'dps-mc-ticks', 'aria-hidden': true },
             data.buckets.map((bucket, position) => {
+              // 从最右边（今天）往左每隔 every 个标一个：最后一个标签总在，也不会和左边的挤在一起
               const every = Math.ceil(data.buckets.length / 12)
-              const hidden = every > 1 && position % every !== 0 && position !== data.buckets.length - 1
+              const hidden = every > 1 && (data.buckets.length - 1 - position) % every !== 0
               return h('span', { key: bucket.key, 'data-thin': hidden ? 'true' : 'false' }, hidden ? '' : bucketTick(bucket, granularity))
             }),
           ),
