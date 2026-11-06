@@ -1540,10 +1540,10 @@ window.__ModuleLoader__.load({
       const today = props.today
       const range = props.range || 'all'
       const spanDays = props.spanDays || 0
-      const window = props.window || null
+      const rangeWin = props.rangeWin || null
       // 图表的窗口起点：固定范围用范围内的第一天；累计范围用数据的第一天
       const spanStartKey =
-        window && window.startKey ? window.startKey : spanDays > 0 ? localDateKey(addDays(today, -(spanDays - 1))) : ''
+        rangeWin && rangeWin.startKey ? rangeWin.startKey : spanDays > 0 ? localDateKey(addDays(today, -(spanDays - 1))) : ''
       const startDate = parseDateKey(spanStartKey)
       const endDate = startOfDay(today)
       const endKey = localDateKey(endDate)
@@ -1569,8 +1569,8 @@ window.__ModuleLoader__.load({
         [granularity, spanStartKey, endKey],
       )
       const data = useMemo(
-        () => buildModelSeries(props.daily, granularity, today, bucketCount, window),
-        [props.daily, granularity, bucketCount, window ? window.startKey : '', window ? window.endKey : '', endKey],
+        () => buildModelSeries(props.daily, granularity, today, bucketCount, rangeWin),
+        [props.daily, granularity, bucketCount, rangeWin ? rangeWin.startKey : '', rangeWin ? rangeWin.endKey : '', endKey],
       )
       const count = data.buckets.length
       const empty = data.total <= 0
@@ -2709,12 +2709,12 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
       const kpis = useMemo(() => deriveKpis(snapshot, today), [snapshot, todayKey])
 
       // —— 时间范围：汇总卡都从日明细重算，宿主算好的全局 totals 只留给连续天数等全局指标 ——
-      const window = useMemo(() => rangeWindow(range, todayKey), [range, todayKey])
+      const rangeWin = useMemo(() => rangeWindow(range, todayKey), [range, todayKey])
       const rangeSummary = useMemo(
-        () => summarizeDaily(daily, window.startKey, window.endKey),
-        [daily, window.startKey, window.endKey],
+        () => summarizeDaily(daily, rangeWin.startKey, rangeWin.endKey),
+        [daily, rangeWin.startKey, rangeWin.endKey],
       )
-      const previous = useMemo(() => previousWindow(window), [window.startKey, window.endKey])
+      const previous = useMemo(() => previousWindow(rangeWin), [rangeWin.startKey, rangeWin.endKey])
       const previousSummary = useMemo(
         () => (previous ? summarizeDaily(daily, previous.startKey, previous.endKey) : null),
         [daily, previous ? previous.startKey : '', previous ? previous.endKey : ''],
@@ -2741,21 +2741,21 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 
       const handleExport = (format) => {
         if (format === 'csv') {
-          downloadFile(`dsh-profile-stats-${range}-${todayKey}.csv`, 'text/csv;charset=utf-8', buildCsv(daily, rangeSummary, window.startKey, window.endKey))
+          downloadFile(`dsh-profile-stats-${range}-${todayKey}.csv`, 'text/csv;charset=utf-8', buildCsv(daily, rangeSummary, rangeWin.startKey, rangeWin.endKey))
           return
         }
         const rows = indexDaily(daily)
         const entries = []
         for (const [date, entry] of rows) {
-          if (window.startKey && date < window.startKey) continue
-          if (date > window.endKey) continue
+          if (rangeWin.startKey && date < rangeWin.startKey) continue
+          if (date > rangeWin.endKey) continue
           entries.push(entry)
         }
         entries.sort((left, right) => (left.date < right.date ? -1 : 1))
         const payload = {
           exportedAt: new Date().toISOString(),
           range,
-          window: { start: window.startKey || null, end: window.endKey },
+          window: { start: rangeWin.startKey || null, end: rangeWin.endKey },
           totals: lensTotals,
           byProvider: rangeSummary.byProvider,
           byModel: rangeSummary.byModel,
@@ -2826,11 +2826,11 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
           }),
           h(StatusBar, { snapshot, error, hasData, onRetry: reload }),
           h(KpiStrip, { kpis, ready, range, summary: rangeSummary, delta, spark, average }),
-          h(ActivityCard, { daily, today, rangeStartKey: window.startKey, rangeEndKey: window.endKey }),
+          h(ActivityCard, { daily, today, rangeStartKey: rangeWin.startKey, rangeEndKey: rangeWin.endKey }),
           h(
             'div',
             { className: 'dps-grid' },
-            h(ModelCard, { daily, today, range, window, spanDays }),
+            h(ModelCard, { daily, today, range, rangeWin, spanDays }),
             h('div', { className: 'dps-side' }, h(LensCard, { totals: lensTotals }), h(ProviderCard, { byProvider: rangeSummary.byProvider, scope: range })),
           ),
         ),
