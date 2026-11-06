@@ -132,8 +132,10 @@ $DSH_HOME/dsh-profile-stats/update.json     # last in-panel update result
   robustness, the three routes and the update flow against a fake registry, plus the browser half's pure
   maths (read out of `client.js` by source slicing, so renaming a helper shows up as a failing test).
   `.github/workflows/test.yml` re-runs everything under UTC, Asia/Shanghai and America/Los_Angeles, and the
-  publish workflow refuses to release while the suite is red. The older out-of-tree harness in
-  `../profile-stats-verify/` is kept for full-render smoke checks.
+  publish workflow refuses to release while the suite is red. A red run keeps each timezone's full output as
+  a `test-output-*` artifact (14 days) and opens an issue labelled `ci-failure`, assigned to the repo owner,
+  carrying the run link and the tail of the log; the older out-of-tree harness in `../profile-stats-verify/`
+  is kept for full-render smoke checks.
 
 - Host changes need a fresh module generation: toggle `include:dsh-profile-stats` off and on via
   `plugin_manager`, or restart Harness. Client changes only need a page refresh.
