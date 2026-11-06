@@ -2272,18 +2272,19 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-kpi-label svg{width:15px;height:15px;flex:0 0 auto}
 .dps-kpi-label span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dps-kpi[data-hero="true"] .dps-kpi-label svg{color:var(--dps-accent)}
-.dps-kpi-body{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;min-width:0}
+.dps-kpi-body{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;min-width:0}
+.dps-kpi-main{display:flex;align-items:baseline;gap:10px;min-width:0;flex:0 1 auto}
+.dps-kpi-aside{flex:0 1 150px;min-width:56px;margin-left:auto;margin-bottom:3px}
 .dps-kpi-value{display:flex;align-items:baseline;flex-wrap:nowrap;white-space:nowrap;min-width:0;font-variant-numeric:tabular-nums}
 .dps-num{font-size:28px;font-weight:650;line-height:1;letter-spacing:-.02em}
 .dps-num-empty{color:var(--dps-faint);font-weight:500}
 .dps-unit{font-size:13px;font-weight:500;color:var(--dps-muted);margin:0 7px 0 3px}
 .dps-unit:last-child{margin-right:0}
 .dps-kpi[data-hero="true"] .dps-num{font-size:34px}
-.dps-spark{width:100%;height:26px;display:block}
+.dps-spark{width:100%;height:32px;display:block}
 .dps-spark-area{fill:color-mix(in srgb,var(--dps-accent) 14%,transparent)}
 .dps-spark-line{fill:none;stroke:var(--dps-accent);stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
 .dps-spark-dot{fill:var(--dps-card);stroke:var(--dps-accent);stroke-width:1.4;vector-effect:non-scaling-stroke}
-.dps-kpi-footer{margin-top:-2px}
 .dps-delta{display:inline-flex;align-items:center;gap:3px;font-size:11.5px;font-weight:600;line-height:1;font-variant-numeric:tabular-nums;color:var(--dps-muted)}
 .dps-delta[data-dir="up"]{color:var(--dsw-alias-state-warn-primary)}
 .dps-delta[data-dir="down"]{color:var(--dsw-alias-state-success-primary)}
@@ -2296,6 +2297,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 @container dps (max-width:1040px){
 .dps-kpis{grid-template-columns:repeat(4,minmax(0,1fr))}
 .dps-kpi[data-hero="true"]{grid-column:1 / -1}
+.dps-kpi-aside{flex-basis:260px}
 .dps-grid{grid-template-columns:minmax(0,1fr)}
 .dps-side{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
 }
@@ -2729,13 +2731,18 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
           'data-hero': props.hero ? 'true' : 'false',
         },
         h('div', { className: 'dps-kpi-label' }, h(Icon, { name: props.icon }), h('span', null, props.label)),
+        // 趋势线放在数字右边而不是下面：整排卡片同高，五个数字落在同一条底线上，小卡中间不留空
         h(
           'div',
           { className: 'dps-kpi-body' },
-          h('div', { className: 'dps-kpi-value', 'data-dps-field': 'value' }, h(ValueParts, { parts: props.parts })),
-          props.extra || null,
+          h(
+            'div',
+            { className: 'dps-kpi-main' },
+            h('div', { className: 'dps-kpi-value', 'data-dps-field': 'value' }, h(ValueParts, { parts: props.parts })),
+            props.extra || null,
+          ),
+          props.aside ? h('div', { className: 'dps-kpi-aside' }, props.aside) : null,
         ),
-        props.footer ? h('div', { className: 'dps-kpi-footer' }, props.footer) : null,
       )
     }
 
@@ -2780,7 +2787,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
           raw: ready ? summary.tokens : undefined,
           parts: ready ? tokenValue(shownRange) : null,
           extra: deltaChip,
-          footer: h(Sparkline, { points: ready ? props.spark || [] : [], average: ready ? props.average || [] : [] }),
+          aside: h(Sparkline, { points: ready ? props.spark || [] : [], average: ready ? props.average || [] : [] }),
         }),
         h(Kpi, { id: 'today', icon: 'today', label: t('stat.today'), raw: ready ? k.today : undefined, parts: ready ? tokenValue(shownToday) : null }),
         h(Kpi, {
