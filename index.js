@@ -38,8 +38,10 @@ const UPDATE_CHECK_TTL_MS = 6 * 60 * 60 * 1000
 /**
  * 缓存结构版本：折叠口径变了就 +1，旧缓存整份丢弃重折。
  * 12：继承前缀补记 provider / 每日 input·output·cache 明细（孤儿前缀补回时用它自己的数）。
+ * 13：单步总量改为四项之和（旧日志缺 totalTokens 时不再漏掉缓存）；缓存读 / 写分开记；
+ *     每天每个 provider 记四项用量。
  */
-const CACHE_VERSION = 12
+const CACHE_VERSION = 13
 const DAY_MS = 86400000
 /**
  * 数据保鲜不依赖用户打开页面：宿主运行期间每分钟看一眼，快照超过 5 分钟就在后台静默补扫；
@@ -149,14 +151,19 @@ function emptyFold(sessionId, createdAt, parentSession) {
     cacheWriteTokens: 0,
     maxStepTokens: 0,
     longestTurnMs: 0,
+    /** 给了 totalTokens 却和四项之和对不上的步数（只计数，见 usageMismatch）。 */
+    usageMismatchCalls: 0,
     perDay: {},
     perDayCalls: {},
     perDayInput: {},
     perDayOutput: {},
-    perDayCache: {},
+    perDayCacheRead: {},
+    perDayCacheWrite: {},
     /** 按 provider 拆的用量（deepseek-official / deepseek-account …），用于和网关账单对账。 */
     perProvider: {},
     perDayProvider: {},
+    /** 每天每个 provider 的四项用量：供应商卡片按范围算各家的缓存命中率。 */
+    perDayProviderUsage: {},
     /** 按模型大类拆的用量（flash / pro / other）。 */
     perModel: {},
     perDayModel: {},
@@ -177,22 +184,114 @@ function emptyFold(sessionId, createdAt, parentSession) {
     /** 继承前缀的 provider 与每日明细：孤儿前缀补回总量时，明细也必须用前缀自己的数。 */
     inheritedPerProvider: {},
     inheritedPerDayProvider: {},
+    inheritedPerDayProviderUsage: {},
     inheritedPerDayInput: {},
     inheritedPerDayOutput: {},
-    inheritedPerDayCache: {},
+    inheritedPerDayCacheRead: {},
+    inheritedPerDayCacheWrite: {},
     complete: false,
   }
 }
 
 /**
- * 一次模型调用的 token 数。`totalTokens` 由 provider 直接给，优先用它；缺失或
- * 小于输入+输出（个别适配器只填部分字段）时退回输入+输出。
+ * 一步的用量四项。DSH 的约定是四项互不重叠：inputTokens 只是未缓存的那部分输入，
+ * 缓存读 / 缓存写各自单列（DeepSeek 适配器从 prompt_tokens 里减掉命中，pi-ai 从 prompt 里减掉读写）。
+ * 非数字、负数按 0。
+ */
+function usageParts(usage) {
+  const source = usage || {}
+  const count = (value) => Math.max(0, toNumber(value))
+  return {
+    inputTokens: count(source.inputTokens),
+    cacheReadTokens: count(source.cacheReadTokens),
+    cacheWriteTokens: count(source.cacheWriteTokens),
+    outputTokens: count(source.outputTokens),
+  }
+}
+
+function partsSum(parts) {
+  return parts.inputTokens + parts.cacheReadTokens + parts.cacheWriteTokens + parts.outputTokens
+}
+
+/**
+ * 一次模型调用的 token 数 = 未缓存输入 + 缓存读 + 缓存写 + 输出。
+ * 不再以 totalTokens 为准：2026-08 ~ 09 的旧版 DSH 日志里有的步骤没写它，旧实现退回「输入 + 输出」，
+ * 把缓存整块漏掉了。四项都没有时才用 totalTokens。
  */
 function stepTokens(usage) {
-  const input = toNumber(usage.inputTokens)
-  const output = toNumber(usage.outputTokens)
-  const total = toNumber(usage.totalTokens)
-  return Math.max(total, input + output)
+  const sum = partsSum(usageParts(usage))
+  return sum > 0 ? sum : Math.max(0, toNumber(usage && usage.totalTokens))
+}
+
+/** 上游给了 totalTokens 却和四项之和对不上。只计数（进快照 totals，供导出核对），不拿它修正任何数字。 */
+function usageMismatch(usage) {
+  if (!usage || typeof usage.totalTokens !== 'number' || !Number.isFinite(usage.totalTokens)) return false
+  return usage.totalTokens !== partsSum(usageParts(usage))
+}
+
+function emptyUsage() {
+  return { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 }
+}
+
+/** 把一步的四项加进一份用量合计（没有就新建），返回这份合计。 */
+function addUsage(target, parts) {
+  const sum = target && typeof target === 'object' ? target : emptyUsage()
+  sum.inputTokens = toNumber(sum.inputTokens) + toNumber(parts.inputTokens)
+  sum.cacheReadTokens = toNumber(sum.cacheReadTokens) + toNumber(parts.cacheReadTokens)
+  sum.cacheWriteTokens = toNumber(sum.cacheWriteTokens) + toNumber(parts.cacheWriteTokens)
+  sum.outputTokens = toNumber(sum.outputTokens) + toNumber(parts.outputTokens)
+  return sum
+}
+
+/**
+ * 一份会话按天拆的那几张表。本体和继承前缀各一套、字段一一对应；
+ * 折叠与聚合都经过这里，两条路径不会再各写一遍、漏掉某张表。
+ */
+function dayMapsOf(fold, inherited) {
+  const map = (name) => {
+    if (!fold[name] || typeof fold[name] !== 'object') fold[name] = {}
+    return fold[name]
+  }
+  if (inherited) {
+    return {
+      tokens: map('inheritedPerDay'),
+      calls: map('inheritedPerDayCalls'),
+      input: map('inheritedPerDayInput'),
+      output: map('inheritedPerDayOutput'),
+      cacheRead: map('inheritedPerDayCacheRead'),
+      cacheWrite: map('inheritedPerDayCacheWrite'),
+      providers: map('inheritedPerDayProvider'),
+      providerUsage: map('inheritedPerDayProviderUsage'),
+      models: map('inheritedPerDayModel'),
+    }
+  }
+  return {
+    tokens: map('perDay'),
+    calls: map('perDayCalls'),
+    input: map('perDayInput'),
+    output: map('perDayOutput'),
+    cacheRead: map('perDayCacheRead'),
+    cacheWrite: map('perDayCacheWrite'),
+    providers: map('perDayProvider'),
+    providerUsage: map('perDayProviderUsage'),
+    models: map('perDayModel'),
+  }
+}
+
+/** 一步记进某一天。 */
+function addStepToDay(maps, key, parts, tokens, provider, modelFamily) {
+  maps.tokens[key] = toNumber(maps.tokens[key]) + tokens
+  maps.calls[key] = toNumber(maps.calls[key]) + 1
+  maps.input[key] = toNumber(maps.input[key]) + parts.inputTokens
+  maps.output[key] = toNumber(maps.output[key]) + parts.outputTokens
+  maps.cacheRead[key] = toNumber(maps.cacheRead[key]) + parts.cacheReadTokens
+  maps.cacheWrite[key] = toNumber(maps.cacheWrite[key]) + parts.cacheWriteTokens
+  const providers = maps.providers[key] || (maps.providers[key] = {})
+  providers[provider] = toNumber(providers[provider]) + tokens
+  const providerUsage = maps.providerUsage[key] || (maps.providerUsage[key] = {})
+  providerUsage[provider] = addUsage(providerUsage[provider], parts)
+  const models = maps.models[key] || (maps.models[key] = {})
+  models[modelFamily] = toNumber(models[modelFamily]) + tokens
 }
 
 /** 这一步是谁服务的（deepseek-official / deepseek-account …），用于和网关账单对账。 */
@@ -247,13 +346,15 @@ function applyEvent(fold, event) {
     case 'assistant/message': {
       const usage = data.usage
       if (!usage) break
+      const parts = usageParts(usage)
       const tokens = stepTokens(usage)
       fold.calls += 1
       fold.tokens += tokens
-      fold.inputTokens += toNumber(usage.inputTokens)
-      fold.outputTokens += toNumber(usage.outputTokens)
-      fold.cacheReadTokens += toNumber(usage.cacheReadTokens)
-      fold.cacheWriteTokens += toNumber(usage.cacheWriteTokens)
+      fold.inputTokens += parts.inputTokens
+      fold.outputTokens += parts.outputTokens
+      fold.cacheReadTokens += parts.cacheReadTokens
+      fold.cacheWriteTokens += parts.cacheWriteTokens
+      if (usageMismatch(usage)) fold.usageMismatchCalls = toNumber(fold.usageMismatchCalls) + 1
       if (tokens > fold.maxStepTokens) fold.maxStepTokens = tokens
       const modelFamily = modelFamilyOf(event)
       fold.perModel[modelFamily] = toNumber(fold.perModel[modelFamily]) + tokens
@@ -262,20 +363,7 @@ function applyEvent(fold, event) {
       fold.perProvider[provider] = toNumber(fold.perProvider[provider]) + tokens
       if (time > 0) {
         const key = localDayKey(time)
-        if (key) {
-          fold.perDay[key] = toNumber(fold.perDay[key]) + tokens
-          fold.perDayCalls[key] = toNumber(fold.perDayCalls[key]) + 1
-          fold.perDayInput[key] = toNumber(fold.perDayInput[key]) + toNumber(usage.inputTokens)
-          fold.perDayOutput[key] = toNumber(fold.perDayOutput[key]) + toNumber(usage.outputTokens)
-          fold.perDayCache[key] =
-            toNumber(fold.perDayCache[key]) + toNumber(usage.cacheReadTokens) + toNumber(usage.cacheWriteTokens)
-          const day = fold.perDayProvider[key] || {}
-          day[provider] = toNumber(day[provider]) + tokens
-          fold.perDayProvider[key] = day
-          const modelDay = fold.perDayModel[key] || {}
-          modelDay[modelFamily] = toNumber(modelDay[modelFamily]) + tokens
-          fold.perDayModel[key] = modelDay
-        }
+        if (key) addStepToDay(dayMapsOf(fold, false), key, parts, tokens, provider, modelFamily)
       }
       break
     }
@@ -323,13 +411,14 @@ function foldSnapshot(snapshot) {
       // 继承前缀：只累加用量，不进任务用时/首末时间。
       const usage = event.type === 'assistant/message' && event.data ? event.data.usage : undefined
       if (usage) {
+        const parts = usageParts(usage)
         const tokens = stepTokens(usage)
         fold.inheritedTokens += tokens
         fold.inheritedCalls += 1
-        fold.inheritedInputTokens += toNumber(usage.inputTokens)
-        fold.inheritedOutputTokens += toNumber(usage.outputTokens)
-        fold.inheritedCacheReadTokens += toNumber(usage.cacheReadTokens)
-        fold.inheritedCacheWriteTokens += toNumber(usage.cacheWriteTokens)
+        fold.inheritedInputTokens += parts.inputTokens
+        fold.inheritedOutputTokens += parts.outputTokens
+        fold.inheritedCacheReadTokens += parts.cacheReadTokens
+        fold.inheritedCacheWriteTokens += parts.cacheWriteTokens
         const time = toNumber(event.time)
         const inheritedModelFamily = modelFamilyOf(event)
         fold.inheritedPerModel[inheritedModelFamily] = toNumber(fold.inheritedPerModel[inheritedModelFamily]) + tokens
@@ -339,20 +428,7 @@ function foldSnapshot(snapshot) {
           toNumber(fold.inheritedPerProvider[inheritedProvider]) + tokens
         if (time > 0) {
           const key = localDayKey(time)
-          if (key) {
-            fold.inheritedPerDay[key] = toNumber(fold.inheritedPerDay[key]) + tokens
-            fold.inheritedPerDayCalls[key] = toNumber(fold.inheritedPerDayCalls[key]) + 1
-            fold.inheritedPerDayInput[key] = toNumber(fold.inheritedPerDayInput[key]) + toNumber(usage.inputTokens)
-            fold.inheritedPerDayOutput[key] = toNumber(fold.inheritedPerDayOutput[key]) + toNumber(usage.outputTokens)
-            fold.inheritedPerDayCache[key] =
-              toNumber(fold.inheritedPerDayCache[key]) + toNumber(usage.cacheReadTokens) + toNumber(usage.cacheWriteTokens)
-            const inheritedDayProviders = fold.inheritedPerDayProvider[key] || {}
-            inheritedDayProviders[inheritedProvider] = toNumber(inheritedDayProviders[inheritedProvider]) + tokens
-            fold.inheritedPerDayProvider[key] = inheritedDayProviders
-            const inheritedDayModels = fold.inheritedPerDayModel[key] || {}
-            inheritedDayModels[inheritedModelFamily] = toNumber(inheritedDayModels[inheritedModelFamily]) + tokens
-            fold.inheritedPerDayModel[key] = inheritedDayModels
-          }
+          if (key) addStepToDay(dayMapsOf(fold, true), key, parts, tokens, inheritedProvider, inheritedModelFamily)
         }
       }
       if (seq > fold.seq) fold.seq = seq
@@ -408,6 +484,7 @@ function aggregate(sessions, now, knownIds) {
     inheritedSessions: 0,
     orphanedTokens: 0,
     orphanedSessions: 0,
+    usageMismatchCalls: 0,
     byProvider: {},
     byModel: {},
   }
@@ -423,24 +500,38 @@ function aggregate(sessions, now, knownIds) {
   let lastDay = ''
 
   /**
-   * 每天一份 { tokens, calls, inputTokens, outputTokens, cacheTokens, byProvider, byModel }。
-   * `maps` 里的每张表必须来自同一份来源（会话自身 或 它的继承前缀）：
+   * 每天一份 { tokens, calls, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens,
+   * byProvider, providerUsage, byModel }。`maps` 来自 dayMapsOf，每张表都出自同一份来源（会话自身 或 它的继承前缀）：
    * 旧实现补回孤儿前缀时拿的是会话自身的每日明细，同一天会把自身用量算两次、前缀明细一笔不进。
    */
   const mergeDay = (maps) => {
-    for (const [key, value] of Object.entries(maps.tokens || {})) {
+    for (const [key, value] of Object.entries(maps.tokens)) {
       const tokens = toNumber(value)
       if (tokens <= 0) continue
-      const entry = daily.get(key) || { tokens: 0, calls: 0, inputTokens: 0, outputTokens: 0, cacheTokens: 0, byProvider: {}, byModel: {} }
+      const entry = daily.get(key) || {
+        tokens: 0,
+        calls: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        byProvider: {},
+        providerUsage: {},
+        byModel: {},
+      }
       entry.tokens += tokens
-      entry.calls += toNumber(maps.calls && maps.calls[key])
-      entry.inputTokens += toNumber(maps.input && maps.input[key])
-      entry.outputTokens += toNumber(maps.output && maps.output[key])
-      entry.cacheTokens += toNumber(maps.cache && maps.cache[key])
-      for (const [provider, amount] of Object.entries((maps.providers && maps.providers[key]) || {})) {
+      entry.calls += toNumber(maps.calls[key])
+      entry.inputTokens += toNumber(maps.input[key])
+      entry.outputTokens += toNumber(maps.output[key])
+      entry.cacheReadTokens += toNumber(maps.cacheRead[key])
+      entry.cacheWriteTokens += toNumber(maps.cacheWrite[key])
+      for (const [provider, amount] of Object.entries(maps.providers[key] || {})) {
         entry.byProvider[provider] = toNumber(entry.byProvider[provider]) + toNumber(amount)
       }
-      for (const [modelFamily, amount] of Object.entries((maps.models && maps.models[key]) || {})) {
+      for (const [provider, usage] of Object.entries(maps.providerUsage[key] || {})) {
+        entry.providerUsage[provider] = addUsage(entry.providerUsage[provider], usage || {})
+      }
+      for (const [modelFamily, amount] of Object.entries(maps.models[key] || {})) {
         entry.byModel[modelFamily] = toNumber(entry.byModel[modelFamily]) + toNumber(amount)
       }
       daily.set(key, entry)
@@ -454,6 +545,7 @@ function aggregate(sessions, now, knownIds) {
     totals.cacheReadTokens += fold.cacheReadTokens
     totals.cacheWriteTokens += fold.cacheWriteTokens
     totals.calls += fold.calls
+    totals.usageMismatchCalls += toNumber(fold.usageMismatchCalls)
     for (const [provider, value] of Object.entries(fold.perProvider || {})) {
       totals.byProvider[provider] = toNumber(totals.byProvider[provider]) + toNumber(value)
     }
@@ -485,15 +577,7 @@ function aggregate(sessions, now, knownIds) {
         for (const [provider, value] of Object.entries(fold.inheritedPerProvider || {})) {
           totals.byProvider[provider] = toNumber(totals.byProvider[provider]) + toNumber(value)
         }
-        mergeDay({
-          tokens: fold.inheritedPerDay,
-          calls: fold.inheritedPerDayCalls,
-          input: fold.inheritedPerDayInput,
-          output: fold.inheritedPerDayOutput,
-          cache: fold.inheritedPerDayCache,
-          providers: fold.inheritedPerDayProvider,
-          models: fold.inheritedPerDayModel,
-        })
+        mergeDay(dayMapsOf(fold, true))
       }
     }
 
@@ -510,28 +594,11 @@ function aggregate(sessions, now, knownIds) {
       longestTurnSession = fold.sessionId
     }
 
-    mergeDay({
-      tokens: fold.perDay,
-      calls: fold.perDayCalls,
-      input: fold.perDayInput,
-      output: fold.perDayOutput,
-      cache: fold.perDayCache,
-      providers: fold.perDayProvider,
-      models: fold.perDayModel,
-    })
+    mergeDay(dayMapsOf(fold, false))
   }
 
   const dailyList = Array.from(daily.entries())
-    .map(([date, entry]) => ({
-      date,
-      tokens: entry.tokens,
-      calls: entry.calls,
-      inputTokens: entry.inputTokens,
-      outputTokens: entry.outputTokens,
-      cacheTokens: entry.cacheTokens,
-      byProvider: entry.byProvider,
-      byModel: entry.byModel,
-    }))
+    .map(([date, entry]) => ({ date, ...entry }))
     .sort((left, right) => (left.date < right.date ? -1 : 1))
 
   for (const entry of dailyList) {
@@ -1109,7 +1176,9 @@ export {
   shiftDayKey,
   nextDayKey,
   emptyFold,
+  usageParts,
   stepTokens,
+  usageMismatch,
   providerOf,
   normalizeModelId,
   modelFamilyOf,

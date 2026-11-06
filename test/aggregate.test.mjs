@@ -18,7 +18,7 @@ function foldOf(id, events, extra = {}) {
 function corpus() {
   const s1 = foldOf('s1', [
     assistantEvent({ seq: 0, time: DAY_1, input: 400, output: 100, total: 500, provider: 'alpha', model: 'deepseek-v4-1-flash' }),
-    assistantEvent({ seq: 1, time: DAY_2, input: 800, output: 200, cacheRead: 600, total: 1000, provider: 'bravo', model: 'deepseek-v4-pro' }),
+    assistantEvent({ seq: 1, time: DAY_2, input: 200, output: 200, cacheRead: 600, total: 1000, provider: 'bravo', model: 'deepseek-v4-pro' }),
     turnStartEvent({ seq: 2, time: DAY_2, turn: 't1' }),
     turnEndEvent({ seq: 3, time: DAY_2 + 45000, turn: 't1' }),
   ])
@@ -33,10 +33,11 @@ test('aggregate：总量、每日、峰值、连续天数口径一致', () => {
 
   assert.equal(totals.tokens, 1650)
   assert.equal(totals.calls, 3)
-  assert.equal(totals.inputTokens, 1300)
+  assert.equal(totals.inputTokens, 700)
   assert.equal(totals.outputTokens, 350)
   assert.equal(totals.cacheReadTokens, 600)
   assert.equal(totals.cacheWriteTokens, 0)
+  assert.equal(totals.usageMismatchCalls, 0)
   assert.equal(totals.sessions, 2)
   assert.equal(totals.activeDays, 2)
   assert.equal(totals.firstDay, '2026-11-05')
@@ -44,15 +45,25 @@ test('aggregate：总量、每日、峰值、连续天数口径一致', () => {
 
   assert.deepEqual(daily.map((entry) => entry.date), ['2026-11-05', '2026-11-06'])
   const [day1, day2] = daily
-  assert.deepEqual(
-    { tokens: day1.tokens, calls: day1.calls, input: day1.inputTokens, output: day1.outputTokens, cache: day1.cacheTokens },
-    { tokens: 500, calls: 1, input: 400, output: 100, cache: 0 },
-  )
-  assert.deepEqual(
-    { tokens: day2.tokens, calls: day2.calls, input: day2.inputTokens, output: day2.outputTokens, cache: day2.cacheTokens },
-    { tokens: 1150, calls: 2, input: 900, output: 250, cache: 600 },
-  )
+  const shape = (entry) => ({
+    tokens: entry.tokens,
+    calls: entry.calls,
+    input: entry.inputTokens,
+    output: entry.outputTokens,
+    cacheRead: entry.cacheReadTokens,
+    cacheWrite: entry.cacheWriteTokens,
+  })
+  assert.deepEqual(shape(day1), { tokens: 500, calls: 1, input: 400, output: 100, cacheRead: 0, cacheWrite: 0 })
+  assert.deepEqual(shape(day2), { tokens: 1150, calls: 2, input: 300, output: 250, cacheRead: 600, cacheWrite: 0 })
+  // 每天四项之和 = 当天总量（Token 构成的几行加起来等于大数字）
+  for (const entry of daily) {
+    assert.equal(entry.inputTokens + entry.cacheReadTokens + entry.cacheWriteTokens + entry.outputTokens, entry.tokens, entry.date)
+  }
   assert.deepEqual(day2.byProvider, { bravo: 1000, alpha: 150 })
+  assert.deepEqual(day2.providerUsage, {
+    bravo: { inputTokens: 200, cacheReadTokens: 600, cacheWriteTokens: 0, outputTokens: 200 },
+    alpha: { inputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 50 },
+  })
   assert.deepEqual(day2.byModel, { 'deepseek-v4-pro': 1000, 'deepseek-v4-1-flash': 150 })
 
   assert.deepEqual(totals.peakDay, { date: '2026-11-06', tokens: 1150 })
@@ -161,7 +172,7 @@ test('aggregate：多个孤儿前缀各按自己的明细补回', () => {
       session: { id, parentSession: `gone-${id}` },
       inheritedEventCount: 1,
       events: [
-        assistantEvent({ seq: 0, time: DAY_1, input: 100, output: 0, total: 120, provider: 'charlie', model: 'deepseek-v4-pro' }),
+        assistantEvent({ seq: 0, time: DAY_1, input: 100, output: 20, total: 120, provider: 'charlie', model: 'deepseek-v4-pro' }),
         assistantEvent({ seq: 1, time: DAY_2, input: 10, output: 5, total: 15, provider: 'bravo', model: 'deepseek-v4-1-flash' }),
       ],
     })
@@ -171,6 +182,30 @@ test('aggregate：多个孤儿前缀各按自己的明细补回', () => {
   assert.equal(totals.tokens, 2 * 120 + 2 * 15)
   assert.equal(daily.find((entry) => entry.date === '2026-11-05').tokens, 240)
   assert.deepEqual(daily.find((entry) => entry.date === '2026-11-05').byProvider, { 'charlie': 240 })
+})
+
+test('aggregate：孤儿前缀补回时，缓存读写和各家四项用量也用前缀自己的数', () => {
+  const copy = foldSnapshot({
+    session: { id: 'copy', parentSession: 'gone' },
+    inheritedEventCount: 1,
+    events: [
+      // 前缀：旧日志没有 totalTokens，缓存 900 不能丢
+      assistantEvent({ seq: 0, time: DAY_1, input: 100, cacheRead: 900, cacheWrite: 30, output: 20, provider: 'alpha' }),
+      assistantEvent({ seq: 1, time: DAY_1, input: 50, cacheRead: 0, output: 10, total: 60, provider: 'bravo' }),
+    ],
+  })
+  const { totals, daily } = aggregate([copy], NOW, new Set(['copy']))
+  assert.equal(totals.tokens, 1050 + 60)
+  assert.equal(totals.cacheReadTokens, 900)
+  assert.equal(totals.cacheWriteTokens, 30)
+  assert.equal(daily.length, 1)
+  assert.equal(daily[0].cacheReadTokens, 900)
+  assert.equal(daily[0].cacheWriteTokens, 30)
+  assert.deepEqual(daily[0].providerUsage, {
+    alpha: { inputTokens: 100, cacheReadTokens: 900, cacheWriteTokens: 30, outputTokens: 20 },
+    bravo: { inputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 10 },
+  })
+  assert.equal(daily[0].tokens, totals.tokens)
 })
 
 test('aggregate：单日峰值取严格最大，最早出现的胜出', () => {

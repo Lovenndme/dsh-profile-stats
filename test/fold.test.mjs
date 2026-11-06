@@ -9,22 +9,42 @@ import {
   normalizeModelId,
   providerOf,
   stepTokens,
+  usageMismatch,
+  usageParts,
 } from '../index.js'
 import { assistantEvent, turnEndEvent, turnStartEvent } from './helpers/fake-host.mjs'
 
 const localNoon = (year, month, day, hour = 12) => new Date(year, month - 1, day, hour, 0, 0, 0).getTime()
 
-test('stepTokens：优先上游 totalTokens，但不小于输入 + 输出', () => {
+test('stepTokens：总量 = 未缓存输入 + 缓存读 + 缓存写 + 输出（四项互不重叠）', () => {
   assert.equal(stepTokens({ inputTokens: 100, outputTokens: 50 }), 150)
-  assert.equal(stepTokens({ inputTokens: 100, outputTokens: 50, totalTokens: 200 }), 200)
-  assert.equal(
-    stepTokens({ inputTokens: 100, outputTokens: 50, totalTokens: 120 }),
-    150,
-    '适配器只填了部分字段时，别让总量小于可见的两段',
-  )
+  assert.equal(stepTokens({ inputTokens: 100, cacheReadTokens: 900, cacheWriteTokens: 20, outputTokens: 50, totalTokens: 1070 }), 1070)
+  // 旧版 DSH 日志（2026-08 ~ 09）有的步骤没写 totalTokens：旧实现退回「输入 + 输出」= 150，缓存 900 整块漏掉
+  assert.equal(stepTokens({ inputTokens: 100, cacheReadTokens: 900, outputTokens: 50 }), 1050)
+  // totalTokens 和四项对不上时不拿它当总量（只在 usageMismatch 里计数）
+  assert.equal(stepTokens({ inputTokens: 100, outputTokens: 50, totalTokens: 120 }), 150)
+  assert.equal(stepTokens({ inputTokens: 100, outputTokens: 50, totalTokens: 999 }), 150)
+  // 四项都没有时才用 totalTokens
+  assert.equal(stepTokens({ totalTokens: 300 }), 300)
   assert.equal(stepTokens({}), 0)
   assert.equal(stepTokens({ inputTokens: '100', outputTokens: NaN, totalTokens: null }), 0)
-  assert.equal(stepTokens({ inputTokens: -5, outputTokens: 10 }), 5, '负数按 0 参与 toNumber')
+  assert.equal(stepTokens({ inputTokens: -5, outputTokens: 10 }), 10, '负数按 0')
+  assert.equal(stepTokens({ totalTokens: -5 }), 0)
+})
+
+test('usageParts / usageMismatch：只计数对不上的 totalTokens，没给 totalTokens 不算对不上', () => {
+  assert.deepEqual(usageParts({ inputTokens: 5, cacheReadTokens: -1, outputTokens: 'x' }), {
+    inputTokens: 5,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    outputTokens: 0,
+  })
+  assert.deepEqual(usageParts(undefined), { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 })
+  assert.equal(usageMismatch({ inputTokens: 100, cacheReadTokens: 900, outputTokens: 50 }), false)
+  assert.equal(usageMismatch({ inputTokens: 100, cacheReadTokens: 900, outputTokens: 50, totalTokens: 1050 }), false)
+  assert.equal(usageMismatch({ inputTokens: 100, cacheReadTokens: 900, outputTokens: 50, totalTokens: 150 }), true)
+  assert.equal(usageMismatch({ totalTokens: 10 }), true)
+  assert.equal(usageMismatch(undefined), false)
 })
 
 test('providerOf：读 message.source.provider，缺失回落 unknown', () => {
@@ -77,13 +97,14 @@ test('modelFamilyOf：没有模型信息时记 unknown，而不是空键', () =>
 test('applyEvent：一次模型调用的全部口径同步累加', () => {
   const day = localNoon(2026, 11, 6)
   const fold = emptyFold('s1', day)
+  // 没写 totalTokens 的旧日志步骤：总量按四项相加，缓存不能漏
   const event = assistantEvent({
     seq: 3,
     time: day,
     input: 1000,
     output: 100,
     cacheRead: 600,
-    cacheWrite: 0,
+    cacheWrite: 40,
     model: 'deepseek-v4-1-flash-261017',
     provider: 'alpha',
   })
@@ -91,23 +112,33 @@ test('applyEvent：一次模型调用的全部口径同步累加', () => {
 
   assert.equal(fold.seq, 3)
   assert.equal(fold.calls, 1)
-  assert.equal(fold.tokens, 1100)
+  assert.equal(fold.tokens, 1740)
   assert.equal(fold.inputTokens, 1000)
   assert.equal(fold.outputTokens, 100)
   assert.equal(fold.cacheReadTokens, 600)
-  assert.equal(fold.cacheWriteTokens, 0)
-  assert.equal(fold.maxStepTokens, 1100)
+  assert.equal(fold.cacheWriteTokens, 40)
+  assert.equal(fold.maxStepTokens, 1740)
+  assert.equal(fold.usageMismatchCalls, 0)
   assert.equal(fold.firstTime, day)
   assert.equal(fold.lastTime, day)
-  assert.deepEqual(fold.perDay, { '2026-11-06': 1100 })
+  assert.deepEqual(fold.perDay, { '2026-11-06': 1740 })
   assert.deepEqual(fold.perDayCalls, { '2026-11-06': 1 })
   assert.deepEqual(fold.perDayInput, { '2026-11-06': 1000 })
   assert.deepEqual(fold.perDayOutput, { '2026-11-06': 100 })
-  assert.deepEqual(fold.perDayCache, { '2026-11-06': 600 })
-  assert.deepEqual(fold.perProvider, { alpha: 1100 })
-  assert.deepEqual(fold.perDayProvider, { '2026-11-06': { alpha: 1100 } })
-  assert.deepEqual(fold.perModel, { 'deepseek-v4-1-flash': 1100 })
-  assert.deepEqual(fold.perDayModel, { '2026-11-06': { 'deepseek-v4-1-flash': 1100 } })
+  assert.deepEqual(fold.perDayCacheRead, { '2026-11-06': 600 })
+  assert.deepEqual(fold.perDayCacheWrite, { '2026-11-06': 40 })
+  assert.deepEqual(fold.perProvider, { alpha: 1740 })
+  assert.deepEqual(fold.perDayProvider, { '2026-11-06': { alpha: 1740 } })
+  assert.deepEqual(fold.perDayProviderUsage, {
+    '2026-11-06': { alpha: { inputTokens: 1000, cacheReadTokens: 600, cacheWriteTokens: 40, outputTokens: 100 } },
+  })
+  assert.deepEqual(fold.perModel, { 'deepseek-v4-1-flash': 1740 })
+  assert.deepEqual(fold.perDayModel, { '2026-11-06': { 'deepseek-v4-1-flash': 1740 } })
+
+  // totalTokens 和四项对不上：总量仍按四项，只计一次 mismatch
+  applyEvent(fold, assistantEvent({ seq: 4, time: day, input: 10, output: 5, total: 999, provider: 'alpha' }))
+  assert.equal(fold.tokens, 1755)
+  assert.equal(fold.usageMismatchCalls, 1)
 })
 
 test('applyEvent：没有 usage 的 assistant/message 不算一次调用', () => {
