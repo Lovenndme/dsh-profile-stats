@@ -17,7 +17,7 @@ all folded from this machine's own session logs.</p>
 
 <p><b>English</b> · <a href="README.zh.md">简体中文</a></p>
 
-<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/panel.png" alt="The profile page in the DSH sidebar" width="900">
+<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/panel-v2.png" alt="The profile page in the DSH sidebar" width="900">
 
 </div>
 
@@ -41,7 +41,7 @@ Pages and may not open without a proxy. Afterwards the plugin works fully offlin
 </p>
 
 <p align="center">
-  <img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/model-chart.png?v=2" alt="Model distribution" width="600"><br>
+  <img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/model-chart-v2.png" alt="Model distribution" width="600"><br>
   <sub><b>Model distribution</b> — stacked by model family and tier</sub>
 </p>
 

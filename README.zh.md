@@ -17,7 +17,7 @@
 
 <p><a href="README.md">English</a> · <b>简体中文</b></p>
 
-<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/panel.png" alt="DSH 侧栏里的个人用量主页" width="900">
+<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/panel-v2.png" alt="DSH 侧栏里的个人用量主页" width="900">
 
 </div>
 
@@ -39,7 +39,7 @@ dsh-profile-stats
 </p>
 
 <p align="center">
-  <img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/model-chart.png?v=2" alt="模型分布" width="600"><br>
+  <img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/model-chart-v2.png" alt="模型分布" width="600"><br>
   <sub><b>模型分布</b> — 按模型家族与档位堆叠</sub>
 </p>
 
