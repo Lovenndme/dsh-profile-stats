@@ -66,6 +66,7 @@ window.__ModuleLoader__.load({
       'tip.none': 'No activity',
       'tip.weekRange': '{start} – {end}',
       'tip.through': 'Through {date}',
+      'tip.average7': '7-day average',
       'tip.total': 'Total',
       'chart.total': 'total {value}',
       'chart.empty': 'No data',
@@ -112,6 +113,7 @@ window.__ModuleLoader__.load({
       'aria.model': 'Token by model chart',
       'aria.lens': 'Token mix bar',
       'aria.spark': 'Daily token trend (7-day average)',
+      'aria.sparkDaily': 'Tokens per day',
       'aria.range': 'Time range',
     }
 
@@ -147,6 +149,7 @@ window.__ModuleLoader__.load({
       'tip.none': '无活动',
       'tip.weekRange': '{start} – {end}',
       'tip.through': '截至 {date}',
+      'tip.average7': '7 日均值',
       'tip.total': '合计',
       'chart.total': '总计 {value}',
       'chart.empty': '暂无数据',
@@ -193,6 +196,7 @@ window.__ModuleLoader__.load({
       'aria.model': '模型分布图',
       'aria.lens': 'Token 构成条',
       'aria.spark': '每日用量趋势（7 日均线）',
+      'aria.sparkDaily': '每日用量',
       'aria.range': '时间范围',
     }
 
@@ -2288,7 +2292,12 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-spark{width:100%;height:32px;display:block}
 .dps-spark-area{fill:color-mix(in srgb,var(--dps-accent) 14%,transparent)}
 .dps-spark-line{fill:none;stroke:var(--dps-accent);stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
-.dps-spark-end{position:absolute;width:6px;height:6px;border-radius:50%;box-sizing:border-box;background:var(--dps-card);border:1.5px solid var(--dps-accent);transform:translate(-50%,-50%);pointer-events:none}
+.dps-spark-end{position:absolute;width:8px;height:8px;border-radius:50%;background:var(--dps-accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--dps-accent) 5%,var(--dps-card));transform:translate(-50%,-50%);pointer-events:none}
+.dps-spark-bars{display:flex;align-items:flex-end;gap:2px;height:32px}
+.dps-spark-bars[data-dense="true"]{gap:1px}
+.dps-spark-bar{flex:1 1 0;min-width:0;max-width:24px;border-radius:2px 2px 0 0;background:color-mix(in srgb,var(--dps-accent) 42%,transparent);transition:background-color .12s ease}
+.dps-spark-bar[data-today="true"],.dps-spark-bar[data-active="true"]{background:var(--dps-accent)}
+.dps-spark-bars[data-hovering="true"] .dps-spark-bar[data-today="true"]:not([data-active="true"]){background:color-mix(in srgb,var(--dps-accent) 42%,transparent)}
 .dps-delta{display:inline-flex;align-items:center;gap:3px;font-size:11.5px;font-weight:600;line-height:1;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--dps-muted)}
 .dps-delta[data-dir="up"]{color:var(--dsw-alias-state-error-primary)}
 .dps-delta[data-dir="down"]{color:var(--dsw-alias-state-success-primary)}
@@ -2690,31 +2699,123 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
     /* -------------------------------------------------------------- 指标卡 */
 
     /**
-     * 指标卡里的趋势：7 日移动平均的面积线。
-     * 日用量毛刺很大（单日峰值可以是日常的 5–6 倍），画柱会把其余天压成一条线，
-     * 所以这里只画移动平均——它是趋势，不是每日明细（明细在活动热力图里）。
+     * 指标卡里的趋势，按范围选画法：
+     *   - 近 7 / 30 天（mode = 'bars'）：每天的实际用量，一天一根小柱，今天那根用强调色；
+     *   - 近 90 天 / 累计（mode = 'average'）：7 日移动平均的面积线。天数多时日用量毛刺很大
+     *     （单日峰值可以是日常的 5–6 倍），画柱会把其余天压成一条线，所以只画趋势。
+     * 悬停显示那一天的日期与用量（均线模式写「7 日均值」）。浮层跟随鼠标，和其他图一致。
      */
     function Sparkline(props) {
       const points = props.points || []
+      const bars = props.mode === 'bars'
       const average =
         Array.isArray(props.average) && props.average.length === points.length && points.length > 0
           ? props.average
           : points.map((point) => toNumber(point.tokens))
+      const values = bars ? points.map((point) => toNumber(point.tokens)) : average
+      const count = values.length
+      const [hover, setHover] = useState(null)
+      const wrapRef = useRef(null)
+      const pointer = usePointer()
       let max = 0
-      for (const value of average) max = Math.max(max, value)
-      const width = Math.max(average.length * 4, 8)
+      for (const value of values) max = Math.max(max, value)
+
+      const indexAt = (clientX) => {
+        const node = wrapRef.current
+        if (!node || typeof node.getBoundingClientRect !== 'function' || count === 0) return null
+        const rect = node.getBoundingClientRect()
+        if (!(rect.width > 0)) return null
+        const ratio = (clientX - rect.left) / rect.width
+        // 柱子：按等宽的格子取；均线：取离鼠标最近的点（点落在两端与等分处）
+        const index = bars ? Math.floor(ratio * count) : Math.round(ratio * (count - 1))
+        return Math.max(0, Math.min(count - 1, index))
+      }
+      const handlers = {
+        onMouseEnter: (event) => {
+          pointer.move(event.clientX, event.clientY)
+          setHover(indexAt(event.clientX))
+        },
+        onMouseMove: (event) => {
+          pointer.move(event.clientX, event.clientY)
+          const index = indexAt(event.clientX)
+          if (index !== hover) setHover(index)
+        },
+        onMouseLeave: () => {
+          pointer.leave()
+          setHover(null)
+        },
+      }
+
+      let tip = null
+      if (hover !== null && hover < count && wrapRef.current && typeof wrapRef.current.getBoundingClientRect === 'function') {
+        const rect = wrapRef.current.getBoundingClientRect()
+        const point = points[hover]
+        const date = parseDateKey(point.key)
+        const value = values[hover]
+        tip = h(
+          Popover,
+          { pointer, anchor: { left: rect.left + ((hover + 0.5) / count) * rect.width, top: rect.top, width: 0, height: rect.height } },
+          h('div', { className: 'dps-pop-title' }, date ? formatDate(date, { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' }) : point.key),
+          h(
+            'div',
+            { className: 'dps-pop-value' },
+            bars
+              ? value > 0
+                ? t('tip.tokens', { value: formatTokens(value) })
+                : t('tip.none')
+              : `${t('tip.average7')} ${t('tip.tokens', { value: formatTokens(Math.round(value)) })}`,
+          ),
+        )
+      }
+
+      if (bars) {
+        return h(
+          'span',
+          {
+            ref: wrapRef,
+            className: 'dps-spark-wrap',
+            role: 'img',
+            'aria-label': t('aria.sparkDaily'),
+            ...handlers,
+          },
+          h(
+            'span',
+            {
+              className: 'dps-spark-bars',
+              'data-dps-field': 'daily-bars',
+              'data-dense': count > 14 ? 'true' : 'false',
+              'data-hovering': hover !== null ? 'true' : 'false',
+            },
+            points.map((point, index) =>
+              h('span', {
+                key: point.key,
+                className: 'dps-spark-bar',
+                'data-value': values[index],
+                'data-today': point.today ? 'true' : 'false',
+                'data-active': hover === index ? 'true' : 'false',
+                // 高度严格按比例；非零的天至少 2px，免得被峰值压成看不见
+                style: { height: `${max > 0 ? (values[index] / max) * 100 : 0}%`, minHeight: values[index] > 0 ? '2px' : '0px' },
+              }),
+            ),
+          ),
+          tip,
+        )
+      }
+
+      const width = Math.max(count * 4, 8)
       const height = 36
-      const xOf = (index) => (average.length <= 1 ? width / 2 : (index / (average.length - 1)) * width)
+      const xOf = (index) => (count <= 1 ? width / 2 : (index / (count - 1)) * width)
       const yOf = (value) => height - (max > 0 ? (value / max) * (height - 4) : 0) - 2
-      const line = average.map((value, index) => `${index === 0 ? 'M' : 'L'}${xOf(index).toFixed(2)} ${yOf(value).toFixed(2)}`).join(' ')
-      const area = average.length > 1 ? `${line} L${width.toFixed(2)} ${height} L0 ${height} Z` : ''
-      const last = average.length > 0 ? average[average.length - 1] : 0
+      const line = values.map((value, index) => `${index === 0 ? 'M' : 'L'}${xOf(index).toFixed(2)} ${yOf(value).toFixed(2)}`).join(' ')
+      const area = count > 1 ? `${line} L${width.toFixed(2)} ${height} L0 ${height} Z` : ''
+      // 圆点标在悬停的那一天，平时标在最后一天
+      const marked = hover !== null ? hover : count - 1
       // SVG 用 preserveAspectRatio="none" 横向拉满卡片：线条没问题，但画在里面的圆点会被拉成扁椭圆、
       // 又被右边缘切掉一半，看起来像线条在末尾分叉（近 7 天只有 7 个点，横向拉伸约 5 倍）。
-      // 所以末端圆点用 HTML 按百分比定位叠在上面，永远是正圆。
+      // 所以圆点用 HTML 按百分比定位叠在上面，永远是正圆。
       return h(
         'span',
-        { className: 'dps-spark-wrap' },
+        { ref: wrapRef, className: 'dps-spark-wrap', ...handlers },
         h(
           'svg',
           {
@@ -2725,15 +2826,16 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
             'aria-label': t('aria.spark'),
           },
           area ? h('path', { className: 'dps-spark-area', d: area }) : null,
-          average.length > 1 ? h('path', { className: 'dps-spark-line', d: line, 'data-dps-field': 'moving-average' }) : null,
+          count > 1 ? h('path', { className: 'dps-spark-line', d: line, 'data-dps-field': 'moving-average' }) : null,
         ),
-        average.length > 0
+        count > 0
           ? h('span', {
               className: 'dps-spark-end',
               'aria-hidden': true,
-              style: { left: `${(xOf(average.length - 1) / width) * 100}%`, top: `${(yOf(last) / height) * 100}%` },
+              style: { left: `${(xOf(marked) / width) * 100}%`, top: `${(yOf(values[marked]) / height) * 100}%` },
             })
           : null,
+        tip,
       )
     }
 
@@ -2803,7 +2905,12 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
           raw: ready ? summary.tokens : undefined,
           parts: ready ? tokenValue(shownRange) : null,
           extra: deltaChip,
-          aside: h(Sparkline, { points: ready ? props.spark || [] : [], average: ready ? props.average || [] : [] }),
+          // 近 7 / 30 天画每天的实际用量；近 90 天 / 累计画 7 日均线（天数多时柱子会被峰值压扁）
+          aside: h(Sparkline, {
+            mode: range === '7d' || range === '30d' ? 'bars' : 'average',
+            points: ready ? props.spark || [] : [],
+            average: ready ? props.average || [] : [],
+          }),
         }),
         h(Kpi, { id: 'today', icon: 'today', label: t('stat.today'), raw: ready ? k.today : undefined, parts: ready ? tokenValue(shownToday) : null }),
         h(Kpi, {
