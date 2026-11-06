@@ -772,16 +772,58 @@ window.__ModuleLoader__.load({
     /* ------------------------------------------------------------ 浮层 */
 
     /**
-     * 悬浮浮层。先以 visibility:hidden 渲染，layout effect 里量出真实尺寸，再相对锚点定位：
-     * 优先放在锚点上方，放不下就翻到下方，左右夹在面板可视区（.dps-root 与视口的交集）以内。
-     * 用 position:fixed，但会量出包含块的实际原点再修正——祖先有 transform / 容器查询时也不会错位。
+     * 每张图一个鼠标位置跟踪器：mousemove 只更新坐标并通知浮层自己挪位置，
+     * 不触发整张图重渲染（活动图有 371 个格子，每移动一像素都重渲染太浪费）。
+     */
+    function createPointer() {
+      const listeners = new Set()
+      const pointer = {
+        x: 0,
+        y: 0,
+        active: false,
+        move(x, y) {
+          pointer.x = x
+          pointer.y = y
+          pointer.active = true
+          for (const listener of Array.from(listeners)) listener()
+        },
+        /** 鼠标离开：停止跟随。reposition = true（改用键盘时）还要让浮层立刻回到锚点，即使选中项没变、组件不重渲染。 */
+        leave(reposition) {
+          pointer.active = false
+          if (reposition) for (const listener of Array.from(listeners)) listener()
+        },
+        subscribe(listener) {
+          listeners.add(listener)
+          return () => listeners.delete(listener)
+        },
+      }
+      return pointer
+    }
+
+    function usePointer() {
+      const ref = useRef(null)
+      if (!ref.current) ref.current = createPointer()
+      return ref.current
+    }
+
+    /**
+     * 悬浮浮层。先以 visibility:hidden 渲染，layout effect 里量出真实尺寸再定位：
+     *   - 鼠标悬浮时显示在鼠标右下方并跟着鼠标走，右边 / 下边放不下就翻到左边 / 上边；
+     *   - 键盘聚焦（没有鼠标位置）时贴着锚点（柱子 / 格子）显示，优先上方，放不下翻到下方。
+     * 最后都夹在面板可视区（.dps-root 与视口的交集）以内。用 position:fixed，但会量出包含块的
+     * 实际原点再修正——祖先有 transform / 容器查询时也不会错位。
      */
     function Popover(props) {
       const ref = useRef(null)
       const anchor = props.anchor
-      useLayoutEffect(() => {
+      const pointer = props.pointer || null
+      const latest = useRef(null)
+      latest.current = { anchor, pointer }
+
+      const place = () => {
         const element = ref.current
-        if (!element || !anchor || typeof element.getBoundingClientRect !== 'function') return
+        const current = latest.current
+        if (!element || !current.anchor || typeof element.getBoundingClientRect !== 'function') return
         element.style.left = '0px'
         element.style.top = '0px'
         const origin = element.getBoundingClientRect()
@@ -797,20 +839,34 @@ window.__ModuleLoader__.load({
         }
         const width = origin.width
         const height = origin.height
-        const gap = 10
-        const center = anchor.left + anchor.width / 2
-        const left = Math.max(bounds.left, Math.min(center - width / 2, bounds.right - width))
-        let top = anchor.top - gap - height
-        if (top < bounds.top) {
-          const below = anchor.top + anchor.height + gap
-          top = below + height <= bounds.bottom ? below : top
+        let left
+        let top
+        if (current.pointer && current.pointer.active) {
+          const { x, y } = current.pointer
+          left = x + 14
+          if (left + width > bounds.right) left = x - 14 - width
+          top = y + 18
+          if (top + height > bounds.bottom) top = y - 12 - height
+        } else {
+          const box = current.anchor
+          const gap = 10
+          left = box.left + box.width / 2 - width / 2
+          top = box.top - gap - height
+          if (top < bounds.top) {
+            const below = box.top + box.height + gap
+            if (below + height <= bounds.bottom) top = below
+          }
         }
-        // 锚点本身可能在可视区外（图表下半截滚出了视口）：最后再上下夹一次，浮层永远完整可见
+        // 最后夹一次：锚点可能在可视区外（图表下半截滚出了视口），浮层也要完整可见
+        left = Math.max(bounds.left, Math.min(left, bounds.right - width))
         top = Math.max(bounds.top, Math.min(top, bounds.bottom - height))
         element.style.left = `${Math.round(left - origin.left)}px`
         element.style.top = `${Math.round(top - origin.top)}px`
         element.style.visibility = 'visible'
-      })
+      }
+
+      useLayoutEffect(place)
+      useEffect(() => (pointer ? pointer.subscribe(place) : undefined), [pointer])
       if (!anchor) return null
       return h(
         'div',
@@ -837,6 +893,7 @@ window.__ModuleLoader__.load({
       const [mode, setMode] = useState('day')
       const [active, setActive] = useState(null)
       const plotRef = useRef(null)
+      const pointer = usePointer()
       const data = useMemo(() => buildActivity(props.daily, today), [props.daily, localDateKey(today)])
       const columns = Math.max(1, data.columns)
       const width = columns * ACT_PITCH - (ACT_PITCH - ACT_CELL)
@@ -858,6 +915,7 @@ window.__ModuleLoader__.load({
       }
 
       const onMove = (event) => {
+        pointer.move(event.clientX, event.clientY)
         const element = plotRef.current
         if (!element || typeof element.getBoundingClientRect !== 'function') return
         const rect = element.getBoundingClientRect()
@@ -876,6 +934,8 @@ window.__ModuleLoader__.load({
 
       const todayCell = data.cells.find((cell) => cell.today)
       const onKeyDown = (event) => {
+        // 键盘操作时浮层回到贴着格子 / 柱子显示（没有鼠标位置可跟）
+        pointer.leave(true)
         const current = active || (todayCell ? { col: todayCell.col, row: todayCell.row } : { col: columns - 1, row: 0 })
         let next = null
         if (event.key === 'ArrowLeft') next = { col: current.col - 1, row: current.row }
@@ -1031,6 +1091,7 @@ window.__ModuleLoader__.load({
         tip = h(
           Popover,
           {
+            pointer,
             anchor: {
               left: rect.left + active.col * ACT_PITCH * unit,
               top: anchorTop,
@@ -1100,7 +1161,10 @@ window.__ModuleLoader__.load({
                 role: 'group',
                 'aria-label': t('aria.activity'),
                 onMouseMove: onMove,
-                onMouseLeave: () => setActive(null),
+                onMouseLeave: () => {
+                  pointer.leave()
+                  setActive(null)
+                },
                 onKeyDown,
                 onFocus,
                 onBlur: () => setActive(null),
@@ -1262,6 +1326,7 @@ window.__ModuleLoader__.load({
       const [granularity, setGranularity] = useState('week')
       const [active, setActive] = useState(null)
       const barsRef = useRef(null)
+      const pointer = usePointer()
       const data = useMemo(() => buildModelSeries(props.daily, granularity, today), [props.daily, granularity, localDateKey(today)])
       const count = data.buckets.length
       const empty = data.total <= 0
@@ -1275,10 +1340,12 @@ window.__ModuleLoader__.load({
         return position >= 0 && position < count ? position : null
       }
       const onMove = (event) => {
+        pointer.move(event.clientX, event.clientY)
         const position = indexFromEvent(event)
         if (position !== active) setActive(position)
       }
       const onKeyDown = (event) => {
+        pointer.leave(true)
         const current = active === null ? count - 1 : active
         let next = null
         if (event.key === 'ArrowLeft') next = Math.max(0, current - 1)
@@ -1344,7 +1411,7 @@ window.__ModuleLoader__.load({
         liveText = `${title} ${t('tip.total')} ${formatTokens(bucket.total)}`
         tip = h(
           Popover,
-          { anchor: { left: rect.left + active * columnWidth, top, width: columnWidth, height: 1 } },
+          { pointer, anchor: { left: rect.left + active * columnWidth, top, width: columnWidth, height: 1 } },
           h('div', { className: 'dps-pop-title' }, title),
           rows.length === 0
             ? h('div', { className: 'dps-pop-value' }, t('tip.none'))
@@ -1443,7 +1510,10 @@ window.__ModuleLoader__.load({
               role: 'group',
               'aria-label': t('aria.model'),
               onMouseMove: onMove,
-              onMouseLeave: () => setActive(null),
+              onMouseLeave: () => {
+                pointer.leave()
+                setActive(null)
+              },
               onKeyDown,
               onFocus: () => {
                 if (active === null) setActive(count - 1)
@@ -1518,6 +1588,7 @@ window.__ModuleLoader__.load({
       const [zoomed, setZoomed] = useState(false)
       const [hover, setHover] = useState(null)
       const segmentRefs = useRef({})
+      const pointer = usePointer()
 
       // 柱宽描述的是「构成本身」，分母是总量（放大视图是非缓存合计）。
       const denominator = zoomed ? lens.uncachedTotal : lens.partsTotal
@@ -1562,8 +1633,15 @@ window.__ModuleLoader__.load({
           'data-dim': hover && hover !== row.key ? 'true' : 'false',
           // 宽度严格按占比（flex-grow = 百分比）；非零段最少 3px 才看得见，但不把 0.2% 画成 20%
           style: { flexGrow: ratio, minWidth: shown ? '3px' : '0px', background: LENS_COLORS[row.key] },
-          onMouseEnter: () => setHover(row.key),
-          onMouseLeave: () => setHover(null),
+          onMouseEnter: (event) => {
+            pointer.move(event.clientX, event.clientY)
+            setHover(row.key)
+          },
+          onMouseMove: (event) => pointer.move(event.clientX, event.clientY),
+          onMouseLeave: () => {
+            pointer.leave()
+            setHover(null)
+          },
         })
       })
 
@@ -1574,7 +1652,7 @@ window.__ModuleLoader__.load({
         const rect = hoveredNode.getBoundingClientRect()
         tip = h(
           Popover,
-          { anchor: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } },
+          { pointer, anchor: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } },
           h('div', { className: 'dps-pop-title' }, hovered.label),
           h('div', { className: 'dps-pop-value' }, t('tip.tokens', { value: formatTokens(hovered.value) })),
           h(
