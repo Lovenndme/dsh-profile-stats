@@ -535,7 +535,9 @@ window.__ModuleLoader__.load({
     /** CSV 单元格：含逗号、引号或换行时用双引号包起来，内部引号写两遍（RFC 4180）。 */
     function csvCell(value) {
       const text = String(value)
-      return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+      // 不用含引号的正则字面量：test/helpers/client-source.mjs 按引号切片源码，会把它当成字符串开头
+      const quoted = ['"', ',', '\r', '\n'].some((char) => text.includes(char))
+      return quoted ? `"${text.split('"').join('""')}"` : text
     }
 
     /** 每天一行；供应商按范围内总量降序各占一列。Excel 需要 BOM 才认 UTF-8。 */

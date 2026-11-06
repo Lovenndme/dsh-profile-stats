@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { loadClientHelpers } from './helpers/client-source.mjs'
+import { loadClientHelpers, readClientSource } from './helpers/client-source.mjs'
 
 /* 这些用例测的是 client.js 里的纯函数（数值格式、日期窗口、图表几何、Cache Lens 口径）。
  * 组件渲染由 profile-stats-verify/client-smoke.mjs 那套 smoke 覆盖，这里只管算得对不对。 */
@@ -408,4 +408,108 @@ test('durationParts：毫秒 → 时/分，0 与负数返回 null', () => {
     { value: '1', unit: 'unit.hourShort' },
     { value: '1', unit: 'unit.minuteShort' },
   ])
+})
+
+/* ------------------------------------------------------------ 顶部时间范围 */
+
+test('granularitiesFor：每个范围的粒度选项固定，不随星期几 / 月初月末变化', () => {
+  const { granularitiesFor } = loadClientHelpers({ functions: ['toNumber', 'granularitiesFor'] })
+  assert.deepEqual(granularitiesFor('7d', 7), ['day'])
+  assert.deepEqual(granularitiesFor('30d', 30), ['day', 'week'])
+  assert.deepEqual(granularitiesFor('90d', 90), ['week', 'month'])
+  // 累计：按数据跨度分档，第一项是默认
+  assert.deepEqual(granularitiesFor('all', 10), ['day', 'week'])
+  assert.deepEqual(granularitiesFor('all', 31), ['day', 'week'])
+  assert.deepEqual(granularitiesFor('all', 82), ['week', 'month'])
+  assert.deepEqual(granularitiesFor('all', 730), ['week', 'month'])
+  assert.deepEqual(granularitiesFor('all', 731), ['month'])
+  assert.deepEqual(granularitiesFor('all', 0), ['week', 'month'], '没有数据时按周 / 月画空图')
+})
+
+const modelSeriesHelpers = () =>
+  loadClientHelpers({
+    extraCode: [
+      'const MODEL_WINDOW = 12',
+      'const MODEL_TOP = 6',
+      "const SERIES_COLORS = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6']",
+      "const OTHER_COLOR = 'c0'",
+      "const MODEL_ALIASES = { 'deepseek-flash': 'deepseek-v4-1-flash' }",
+      "const MODEL_VENDORS = { deepseek: 'DeepSeek' }",
+      "const t = (key, vars) => (key === 'tip.weekRange' ? `${vars.start}~${vars.end}` : key)",
+      'function formatDate(date) { return localDateKey(date) }',
+      'function monthLabel(date) { return localDateKey(date).slice(0, 7) }',
+    ],
+    functions: [
+      'buildModelSeries', 'modelBucketFrames', 'modelBucketKeyOf', 'calendarBucketCount', 'bucketTitle', 'indexDaily',
+      'parseDateKey', 'localDateKey', 'startOfDay', 'startOfWeek', 'addDays', 'toNumber', 'niceScale', 'niceStep',
+      'modelFamily', 'familyLabel', 'prettyModelName',
+    ],
+  })
+
+test('buildModelSeries + 范围窗口：第一个桶截到窗口起点，总计恰好等于窗口内的日明细之和', () => {
+  const { buildModelSeries, calendarBucketCount, bucketTitle, parseDateKey } = modelSeriesHelpers()
+  const today = new Date(2026, 10, 4, 12) // 周三
+  const window = { startKey: '2026-10-06', endKey: '2026-11-04' } // 近 30 天，起点是周二
+  const daily = [
+    { date: '2026-10-05', tokens: 999, byModel: { 'deepseek-v4-1-flash': 999 } }, // 窗口前一天：同一周，但不该算进来
+    { date: '2026-10-06', tokens: 100, byModel: { 'deepseek-v4-1-flash': 100 } },
+    { date: '2026-10-11', tokens: 50, byModel: { 'deepseek-v4-pro': 50 } },
+    { date: '2026-11-04', tokens: 7, byModel: { 'deepseek-v4-1-flash': 7 } },
+  ]
+  const count = calendarBucketCount('week', parseDateKey(window.startKey), parseDateKey(window.endKey))
+  assert.equal(count, 5, '10/5、10/12、10/19、10/26、11/2 五个自然周')
+  const series = buildModelSeries(daily, 'week', today, count, window)
+  assert.equal(series.buckets.length, 5)
+  assert.equal(series.total, 157, '窗口外的 999 不进来')
+  const first = series.buckets[0]
+  assert.equal(first.key, '2026-10-05', '桶键仍是这一周的周一，和日明细的归桶方式一致')
+  assert.equal(first.clipped, true)
+  assert.equal(bucketTitle(first, 'week'), '2026-10-06~2026-10-11', '浮层只写真正包含的日期')
+  assert.equal(first.total, 150)
+
+  // 按月：第一个月截成 10/6 起
+  const months = buildModelSeries(daily, 'month', today, calendarBucketCount('month', parseDateKey(window.startKey), today), window)
+  assert.equal(months.buckets.length, 2)
+  assert.equal(bucketTitle(months.buckets[0], 'month'), '2026-10-06~2026-10-31')
+  assert.equal(months.total, 157)
+})
+
+test('bucketTitle：截断后只剩一天时写单个日期', () => {
+  const { buildModelSeries, bucketTitle } = modelSeriesHelpers()
+  const today = new Date(2026, 10, 6, 12) // 周五：近 90 天从 8/9（周日）开始
+  const window = { startKey: '2026-08-09', endKey: '2026-11-06' }
+  const series = buildModelSeries([{ date: '2026-08-09', tokens: 5, byModel: { x: 5 } }], 'week', today, 14, window)
+  assert.equal(series.buckets[0].key, '2026-08-03')
+  assert.equal(bucketTitle(series.buckets[0], 'week'), '2026-08-09', '不写「8/9 ~ 8/9」')
+})
+
+test('deltaWindows：本期已过完的天（不含今天）对上一期的前同样天数；累计没有上一期', () => {
+  const { deltaWindows } = loadClientHelpers({ functions: ['deltaWindows', 'parseDateKey', 'addDays', 'localDateKey'] })
+  assert.deepEqual(deltaWindows({ days: 7, startKey: '2026-10-29', endKey: '2026-11-04' }), {
+    current: { startKey: '2026-10-29', endKey: '2026-11-03' },
+    previous: { startKey: '2026-10-22', endKey: '2026-10-27' },
+  })
+  assert.equal(deltaWindows({ days: 0, startKey: '', endKey: '2026-11-04' }), null)
+  assert.equal(deltaWindows(null), null)
+})
+
+test('buildCsv：供应商 id 含逗号 / 引号时按 RFC 4180 加引号', () => {
+  const { buildCsv, csvCell } = loadClientHelpers({ functions: ['buildCsv', 'csvCell', 'indexDaily', 'parseDateKey', 'toNumber'] })
+  assert.equal(csvCell('plain'), 'plain')
+  assert.equal(csvCell('a,b'), '"a,b"')
+  assert.equal(csvCell('say "hi"'), '"say ""hi"""')
+  const csv = buildCsv(
+    [{ date: '2026-11-04', tokens: 3, calls: 1, inputTokens: 1, outputTokens: 1, cacheTokens: 1, byProvider: { 'relay,eu': 2, plain: 1 } }],
+    { byProvider: { 'relay,eu': 2, plain: 1 } },
+    '2026-11-01',
+    '2026-11-04',
+  )
+  const lines = csv.replace(/^﻿/, '').trim().split('\r\n')
+  assert.equal(lines[0], 'date,tokens,calls,input,output,cache,"relay,eu",plain')
+  assert.equal(lines[1], '2026-11-04,3,1,1,1,1,2,1')
+})
+
+test('client.js 里不能声明名为 window 的局部变量（会遮住全局对象：升级后 window.location.reload() 曾因此报错）', () => {
+  const source = readClientSource()
+  assert.equal(/\b(const|let|var)\s+window\b/.test(source), false)
 })
