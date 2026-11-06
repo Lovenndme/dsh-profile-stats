@@ -49,6 +49,42 @@ async function boot(t, options = {}) {
   return { host, controller }
 }
 
+test('identity：profile.json 覆盖系统账户，坏文件 / 空字段回落到 os', async (t) => {
+  withTemporaryHome(t)
+  const dir = path.join(process.env.DSH_HOME, 'dsh-profile-stats')
+  fs.mkdirSync(dir, { recursive: true })
+  const file = path.join(dir, 'profile.json')
+  const host = createFakeHost({ sessions: makeSessions() })
+  t.after(() => host.dispose())
+  const controller = createController(host.ctx)
+
+  fs.writeFileSync(file, JSON.stringify({ name: '张三', handle: 'zhangsan', avatar: 'z' }))
+  const full = controller.identity()
+  assert.equal(full.name, '张三')
+  assert.equal(full.handle, '@zhangsan', 'handle 缺 @ 时自动补上')
+  assert.equal(full.avatar, 'Z', '头像取首字母大写')
+  assert.equal(full.source, 'file')
+  assert.equal(full.file, file)
+
+  // 只覆盖一部分：其余字段各自回落
+  fs.writeFileSync(file, JSON.stringify({ handle: '@someone' }))
+  const partial = controller.identity()
+  assert.equal(partial.handle, '@someone')
+  assert.equal(partial.source, 'file')
+  assert.ok(partial.name.length > 0, '没写 name 时用系统账户名')
+  assert.equal(partial.avatar.length, 1)
+
+  // 写坏的 JSON：当作没有覆盖，绝不抛错
+  fs.writeFileSync(file, '{not json')
+  const broken = controller.identity()
+  assert.equal(broken.source, 'os')
+  assert.ok(broken.handle.startsWith('@'))
+
+  // 全是空字符串：同样当作没有覆盖
+  fs.writeFileSync(file, JSON.stringify({ name: '   ', handle: '', avatar: '' }))
+  assert.equal(controller.identity().source, 'os')
+})
+
 test('createController：一次扫描把会话折成快照，并落盘完整缓存', async (t) => {
   const { host, controller } = await boot(t)
   await controller.scan('test')
@@ -293,6 +329,8 @@ test('apply：注册三条同源路由，方法不对返回 405', async (t) => {
   assert.equal((await host.request(SNAPSHOT, 'POST')).json.error, 'method-not-allowed')
   assert.equal((await host.request(REFRESH, 'GET')).json.error, 'method-not-allowed')
   assert.equal((await host.request(UPDATE, 'GET')).json.error, 'method-not-allowed')
+  // HEAD 与 GET 同权（浏览器 / 探活脚本会发 HEAD）
+  assert.equal((await host.request(SNAPSHOT, 'HEAD')).status, 200)
 })
 
 test('apply：GET 快照在扫描完成后给出完整数据，缓存落在 $DSH_HOME', async (t) => {
@@ -462,4 +500,30 @@ test('update：非 registry 安装 / 没有新版 / registry 不可达都不升�
   assert.equal(controller2.updateInfo().latest, '')
   assert.equal(controller2.updateInfo().available, false)
   assert.deepEqual(controller2.startUpdate(), { ok: false, error: 'no-target' })
+})
+
+test('update：6 小时内不重复问 registry（打开面板不该每次都联网）', async (t) => {
+  const { manager } = fakeManager()
+  const host = createFakeHost({ sessions: makeSessions(), services: { pluginManager: manager } })
+  withTemporaryHome(t)
+  t.after(() => host.dispose())
+  const controller = createController(host.ctx)
+
+  let calls = 0
+  const previousFetch = globalThis.fetch
+  globalThis.fetch = async () => {
+    calls += 1
+    return { ok: true, async json() { return { version: '9.9.9' } } }
+  }
+  t.after(() => {
+    globalThis.fetch = previousFetch
+  })
+
+  await controller.refreshUpdateInfo(false)
+  assert.equal(calls, 1)
+  await controller.refreshUpdateInfo(false)
+  assert.equal(calls, 1, 'TTL 内不再问 registry')
+  await controller.refreshUpdateInfo(true)
+  assert.equal(calls, 2, 'force 才再问一次')
+  assert.equal(controller.updateInfo().latest, '9.9.9')
 })

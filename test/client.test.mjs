@@ -353,6 +353,45 @@ test('deriveKpis：五个指标 + 最近 14 天迷你柱（最后一根是今天
   for (const item of empty.spark) assert.equal(item.tokens, 0)
 })
 
+test('deriveProviders：按用量降序，前 6 个各一行，其余并成「其他」', () => {
+  const { deriveProviders } = loadClientHelpers({ functions: ['toNumber', 'deriveProviders'] })
+
+  const small = deriveProviders({ myapi: 600, wincode: 400 })
+  assert.equal(small.total, 1000)
+  assert.deepEqual(small.rows.map((row) => row.id), ['myapi', 'wincode'])
+  assert.equal(small.rows[0].share, 60)
+  assert.equal(small.rows[1].share, 40)
+
+  // 8 个供应商 → 前 6 行 + __other（后 2 个合并）
+  const many = {}
+  for (let index = 0; index < 8; index += 1) many[`p${index}`] = (8 - index) * 100
+  const grouped = deriveProviders(many)
+  assert.equal(grouped.rows.length, 7)
+  assert.deepEqual(grouped.rows.slice(0, 6).map((row) => row.id), ['p0', 'p1', 'p2', 'p3', 'p4', 'p5'])
+  assert.equal(grouped.rows.at(-1).id, '__other')
+  assert.equal(grouped.rows.at(-1).tokens, 200 + 100)
+  assert.equal(Math.round(grouped.rows.at(-1).share * 100) / 100, 8.33, '300 / 3600')
+  assert.equal(grouped.rows.reduce((sum, row) => sum + row.share, 0).toFixed(6), '100.000000')
+
+  // 0 / 负数 / 非数字都被过滤；同量按 id 升序保证稳定
+  const messy = deriveProviders({ b: 100, a: 100, zero: 0, neg: -5, junk: 'x' })
+  assert.deepEqual(messy.rows.map((row) => row.id), ['a', 'b'])
+  assert.deepEqual(deriveProviders({}), { total: 0, rows: [] })
+  assert.deepEqual(deriveProviders(undefined), { total: 0, rows: [] })
+})
+
+test('providerLabel：已知供应商走文案字典，未知原样显示', () => {
+  const { providerLabel } = loadClientHelpers({
+    extraCode: [
+      'const t = (key) => ({ "provider.myapi": "My API", "provider.other": "其他" }[key] || key)',
+    ],
+    functions: ['providerLabel'],
+  })
+  assert.equal(providerLabel('myapi'), 'My API')
+  assert.equal(providerLabel('__other'), '其他')
+  assert.equal(providerLabel('wincode'), 'wincode')
+})
+
 test('durationParts：毫秒 → 时/分，0 与负数返回 null', () => {
   const { durationParts } = loadClientHelpers({
     extraCode: ['const t = (key) => key'],

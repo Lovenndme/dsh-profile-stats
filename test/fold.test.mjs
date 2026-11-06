@@ -260,6 +260,25 @@ test('foldSnapshot：inheritedEventCount 为 0 / 缺失时全部按主口径', (
   assert.equal(fold.parentSession, '')
 })
 
+test('foldSnapshot：整份日志都是继承前缀时主口径为空、前缀完整', () => {
+  const day = localNoon(2026, 11, 4)
+  const fold = foldSnapshot({
+    session: { id: 'copy-only', parentSession: 'origin' },
+    inheritedEventCount: 2,
+    events: [
+      assistantEvent({ seq: 0, time: day, input: 100, output: 50, total: 150 }),
+      assistantEvent({ seq: 1, time: day, input: 100, output: 50, total: 150 }),
+    ],
+  })
+  assert.equal(fold.tokens, 0)
+  assert.equal(fold.calls, 0)
+  assert.equal(fold.firstTime, 0, '前缀不参与主口径的首末时间')
+  assert.equal(fold.inheritedTokens, 300)
+  assert.equal(fold.inheritedCalls, 2)
+  assert.deepEqual(fold.inheritedPerDay, { '2026-11-04': 300 })
+  assert.equal(fold.complete, true)
+})
+
 test('foldSnapshot：空日志 / 缺字段都不炸', () => {
   for (const snapshot of [undefined, null, {}, { session: null, events: null }, { session: {}, events: [] }]) {
     const fold = foldSnapshot(snapshot)
