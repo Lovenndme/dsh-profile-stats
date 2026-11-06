@@ -1,0 +1,34 @@
+name: Tests
+
+# The suite is plain node:test — no dependencies, so it runs in a few seconds.
+# It runs in three time zones on purpose:日/周/连续天数的口径全部走本地日历，
+# UTC+ 时区能过、UTC− 时区过不了的 bug 已经出现过（2026-10 连续天数恒为 1）。
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        timezone:
+          - UTC
+          - America/Los_Angeles
+          - Asia/Shanghai
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: node --test
+        run: npm test
+        env:
+          TZ: ${{ matrix.timezone }}

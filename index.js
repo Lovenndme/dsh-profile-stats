@@ -93,11 +93,21 @@ function localDayKey(time) {
   return `${year}-${month}-${day}`
 }
 
-/** 'YYYY-MM-DD' → UTC 毫秒（只用来做日期间隔算术，不受时区影响）。 */
+/** 'YYYY-MM-DD' → UTC 毫秒（只用来做日期间隔算术，不受时区影响）。非法日历键返回 NaN。 */
 function dayIndex(key) {
-  const parts = key.split('-')
-  if (parts.length !== 3) return Number.NaN
-  return Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]))
+  const text = String(key || '')
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return Number.NaN
+  const year = Number(text.slice(0, 4))
+  const month = Number(text.slice(5, 7))
+  const day = Number(text.slice(8, 10))
+  const index = Date.UTC(year, month - 1, day)
+  // Date.UTC 会把 13 月、2 月 30 日这类值静默归一到别的日期；这里要求原样读回来，
+  // 免得坏键被「修正」成一个看起来合理的错误日期。
+  const date = new Date(index)
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+    return Number.NaN
+  }
+  return index
 }
 
 /**
@@ -247,6 +257,9 @@ function applyEvent(fold, event) {
       if (tokens > fold.maxStepTokens) fold.maxStepTokens = tokens
       const modelFamily = modelFamilyOf(event)
       fold.perModel[modelFamily] = toNumber(fold.perModel[modelFamily]) + tokens
+      // provider 不需要日期，照记；否则按供应商拆出来的合计会小于总量。
+      const provider = providerOf(event)
+      fold.perProvider[provider] = toNumber(fold.perProvider[provider]) + tokens
       if (time > 0) {
         const key = localDayKey(time)
         if (key) {
@@ -256,8 +269,6 @@ function applyEvent(fold, event) {
           fold.perDayOutput[key] = toNumber(fold.perDayOutput[key]) + toNumber(usage.outputTokens)
           fold.perDayCache[key] =
             toNumber(fold.perDayCache[key]) + toNumber(usage.cacheReadTokens) + toNumber(usage.cacheWriteTokens)
-          const provider = providerOf(event)
-          fold.perProvider[provider] = toNumber(fold.perProvider[provider]) + tokens
           const day = fold.perDayProvider[key] || {}
           day[provider] = toNumber(day[provider]) + tokens
           fold.perDayProvider[key] = day
@@ -322,6 +333,10 @@ function foldSnapshot(snapshot) {
         const time = toNumber(event.time)
         const inheritedModelFamily = modelFamilyOf(event)
         fold.inheritedPerModel[inheritedModelFamily] = toNumber(fold.inheritedPerModel[inheritedModelFamily]) + tokens
+        // provider 与主口径一致：不需要日期，一律记。
+        const inheritedProvider = providerOf(event)
+        fold.inheritedPerProvider[inheritedProvider] =
+          toNumber(fold.inheritedPerProvider[inheritedProvider]) + tokens
         if (time > 0) {
           const key = localDayKey(time)
           if (key) {
@@ -331,9 +346,6 @@ function foldSnapshot(snapshot) {
             fold.inheritedPerDayOutput[key] = toNumber(fold.inheritedPerDayOutput[key]) + toNumber(usage.outputTokens)
             fold.inheritedPerDayCache[key] =
               toNumber(fold.inheritedPerDayCache[key]) + toNumber(usage.cacheReadTokens) + toNumber(usage.cacheWriteTokens)
-            // provider 与主口径一致：只记有日期的步（主口径 perProvider 也在 time > 0 分支里）。
-            const inheritedProvider = providerOf(event)
-            fold.inheritedPerProvider[inheritedProvider] = toNumber(fold.inheritedPerProvider[inheritedProvider]) + tokens
             const inheritedDayProviders = fold.inheritedPerDayProvider[key] || {}
             inheritedDayProviders[inheritedProvider] = toNumber(inheritedDayProviders[inheritedProvider]) + tokens
             fold.inheritedPerDayProvider[key] = inheritedDayProviders
@@ -356,7 +368,8 @@ function foldSnapshot(snapshot) {
 
 function computeStreaks(activeDays, now) {
   if (activeDays.length === 0) return { longestStreak: 0, currentStreak: 0 }
-  const sorted = activeDays.slice().sort()
+  // 去重：同一天出现两次会把连续段落打断，最长连续天数会被算小。
+  const sorted = Array.from(new Set(activeDays)).sort()
   let longest = 1
   let run = 1
   for (let index = 1; index < sorted.length; index += 1) {
@@ -560,11 +573,21 @@ function readCache() {
   const empty = { version: CACHE_VERSION, generatedAt: 0, sessions: {}, complete: false }
   try {
     const parsed = JSON.parse(fs.readFileSync(cacheFile(), 'utf8'))
-    if (!parsed || parsed.version !== CACHE_VERSION || typeof parsed.sessions !== 'object') return empty
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || parsed.version !== CACHE_VERSION) return empty
+    // 缓存文件是本地可改的：sessions 可能是 null / 数组，单条记录也可能被写坏。
+    // 这类记录直接丢掉（下次扫描会重折），不能让 Object.keys(null) 或 fold.tokens 在启动时抛错。
+    const sessions = {}
+    const source = parsed.sessions
+    if (source && typeof source === 'object' && !Array.isArray(source)) {
+      for (const [id, fold] of Object.entries(source)) {
+        if (!fold || typeof fold !== 'object' || Array.isArray(fold)) continue
+        sessions[id] = fold
+      }
+    }
     return {
       version: CACHE_VERSION,
       generatedAt: toNumber(parsed.generatedAt),
-      sessions: parsed.sessions,
+      sessions,
       // 只有首次全量扫描中途落盘时才显式写 false；没有这个字段的旧缓存视为完整
       complete: parsed.complete !== false,
     }
@@ -595,12 +618,19 @@ function readOwnVersion() {
   }
 }
 
-/** 够用的 semver 比较：-1 / 0 / 1；同号时预发布版本低于正式版。 */
+/**
+ * 够用的 semver 比较：-1 / 0 / 1。
+ *
+ * 主版本三段按数字比；预发布标识按 semver 的规则比（数字段按数字、字母段按字典序、
+ * 数字段低于字母段、段数少的一方更低）。旧实现直接拿 `rc.10` 和 `rc.5` 比字符串，
+ * 会得出 rc.10 更旧的错误结论。
+ */
 function compareVersions(left, right) {
   const parse = (value) => {
-    const [core, ...rest] = String(value || '').split('-')
+    const text = String(value || '').trim().replace(/^v/i, '').split('+')[0]
+    const [core, ...rest] = text.split('-')
     const parts = core.split('.').map((piece) => Number.parseInt(piece, 10) || 0)
-    return { parts, pre: rest.join('-') }
+    return { parts, pre: rest.length > 0 ? rest.join('-') : '' }
   }
   const a = parse(left)
   const b = parse(right)
@@ -611,7 +641,26 @@ function compareVersions(left, right) {
   if (a.pre === b.pre) return 0
   if (!a.pre) return 1
   if (!b.pre) return -1
-  return a.pre > b.pre ? 1 : -1
+  const leftIds = a.pre.split('.')
+  const rightIds = b.pre.split('.')
+  for (let index = 0; index < Math.max(leftIds.length, rightIds.length); index += 1) {
+    const x = leftIds[index]
+    const y = rightIds[index]
+    if (x === undefined) return -1
+    if (y === undefined) return 1
+    const xNumeric = /^\d+$/.test(x)
+    const yNumeric = /^\d+$/.test(y)
+    if (xNumeric && yNumeric) {
+      const diff = Number(x) - Number(y)
+      if (diff !== 0) return diff > 0 ? 1 : -1
+      continue
+    }
+    // semver：数字标识 < 字母标识
+    if (xNumeric) return -1
+    if (yNumeric) return 1
+    if (x !== y) return x > y ? 1 : -1
+  }
+  return 0
 }
 
 /**
@@ -631,7 +680,14 @@ function updateResultFile() {
 
 /* ------------------------------------------------------------------ 插件本体 */
 
-export function apply(ctx) {
+/**
+ * 控制器的全部状态与行为（扫描、聚合、身份、版本检查、一键升级）。
+ *
+ * 和 `apply` 分开是为了让 `test/` 能直接驱动：不需要宿主、不需要等定时器，
+ * `await controller.scan('test')` 就是一次完整的扫描。`apply` 只负责把路由和
+ * 定时器接到控制器上。
+ */
+export function createController(ctx) {
   const cache = readCache()
   const state = {
     cache,
@@ -775,7 +831,8 @@ export function apply(ctx) {
     if (reason === 'forced') {
       if (age < 15000) return
     } else {
-      const cold = Object.keys(state.cache.sessions).length === 0
+      // 缓存不完整（首次全量扫描被打断）也算「冷」：立刻补扫，别等 5 分钟的保鲜窗口。
+      const cold = Object.keys(state.cache.sessions).length === 0 || state.cache.complete === false
       const staleAfter = reason === 'view' ? VIEW_STALE_MS : BACKGROUND_STALE_MS
       if (!cold && age <= staleAfter) return
       if (Date.now() - state.lastKick < 5000) return
@@ -937,6 +994,8 @@ export function apply(ctx) {
       } catch {
         /* 结果文件写不了不影响升级本身 */
       }
+      // 失败时放开重入锁，让用户能再试一次；成功时保持锁定（本模块马上会被卸载）。
+      if (!result.ok) updateState.running = false
     }, 400)
     return { ok: true, target }
   }
@@ -957,6 +1016,15 @@ export function apply(ctx) {
       failedSessions: Object.keys(state.errors).length,
     }
   }
+
+  return { state, scan, kick, snapshotBody, identity, updateInfo, refreshUpdateInfo, startUpdate }
+}
+
+/* ------------------------------------------------------------------ 插件本体 */
+
+export function apply(ctx) {
+  const controller = createController(ctx)
+  const { state, kick, snapshotBody, startUpdate, refreshUpdateInfo } = controller
 
   const sendJson = (res, status, payload) => {
     const body = JSON.stringify(payload)
@@ -1025,4 +1093,33 @@ export function apply(ctx) {
       clearTimeout(updateTimer)
     }
   })
+}
+
+/* ---------------------------------------------------------------- 测试导出面 */
+/*
+ * 下面这些是纯函数/纯读写，插件运行时只用 `apply` / `inject`；导出它们是为了让
+ * `test/` 下的 node:test 用例能直接调用，不必启动宿主，也不必复制一份实现。
+ * 新增/修改统计口径时，必须同时在 test/ 里改断言。
+ */
+export {
+  CACHE_VERSION,
+  toNumber,
+  localDayKey,
+  dayIndex,
+  shiftDayKey,
+  nextDayKey,
+  emptyFold,
+  stepTokens,
+  providerOf,
+  normalizeModelId,
+  modelFamilyOf,
+  applyEvent,
+  foldSnapshot,
+  computeStreaks,
+  aggregate,
+  readCache,
+  writeCache,
+  readOwnVersion,
+  compareVersions,
+  isRegistrySpec,
 }

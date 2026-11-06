@@ -94,6 +94,11 @@ jobs:
           node --check index.js
           node --check client.js
 
+      # 门禁：测试不过就不发版。测试是纯 node:test，不需要装依赖。
+      - name: Run the test suite
+        if: steps.gate.outputs.pending == 'true'
+        run: npm test
+
       - name: Commit the release
         if: steps.gate.outputs.pending == 'true'
         run: |

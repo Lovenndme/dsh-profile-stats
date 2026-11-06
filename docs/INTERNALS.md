@@ -127,18 +127,21 @@ $DSH_HOME/dsh-profile-stats/update.json     # last in-panel update result
   against built-in data, with switches for light / dark theme, window width (1280 / 900 / 760), the model chart's
   monthly view, the zoomed Cache Lens, empty / first-scan / failed-request states, language and the update button.
   Nothing leaves the page. The page state is kept in the URL hash.
-- Tests live next to the repository in `../profile-stats-verify/`: `client-smoke.mjs` (behaviour of the browser half,
-  dependency-free) and `host-integration.mjs` (the host half against fake sessions). The host test re-runs itself in
-  America/Los_Angeles and the client test runs a DST suite in America/New_York, to catch date arithmetic that only
-  works in UTC+ zones without daylight saving.
+- **Tests:** `npm test` (`node --test`) runs the in-repo suite in `test/` — no dependencies, about a second.
+  It covers the host fold/aggregate maths (`index.js` exports its pure functions for this), cache-file
+  robustness, the three routes and the update flow against a fake registry, plus the browser half's pure
+  maths (read out of `client.js` by source slicing, so renaming a helper shows up as a failing test).
+  `.github/workflows/test.yml` re-runs everything under UTC, Asia/Shanghai and America/Los_Angeles, and the
+  publish workflow refuses to release while the suite is red. The older out-of-tree harness in
+  `../profile-stats-verify/` is kept for full-render smoke checks.
 
 - Host changes need a fresh module generation: toggle `include:dsh-profile-stats` off and on via
   `plugin_manager`, or restart Harness. Client changes only need a page refresh.
-- `index.js` exports `apply` / `inject` only; `client.js` registers through `window.__ModuleLoader__`.
-- Releases are **batched**: a change lands as test + version bump + CHANGELOG + commit, and publishing waits
-  for the schedule. `pwsh tools/publish-pending.ps1` publishes only when `package.json` is ahead of npm's
-  `latest`; it runs the test suites first, skips silently when nothing is pending, and logs to
-  `$HOME/.dsh/dsh-profile-stats/publish.log`. On Windows it is registered as a scheduled task every 4 hours.
-  `pwsh tools/release.ps1` still exists for an immediate full release (test → bump → commit → push → publish).
-  No script stores credentials in the repository: they come from `$env:NPM_TOKEN` or
-  `$HOME/.dsh/.npm-publish-token`.
+- `index.js` exports `apply` / `inject` for the host, plus its pure functions and `createController` so a test
+  can drive one scan without a host; `client.js` registers through `window.__ModuleLoader__`.
+- Releases are **batched** and happen only in GitHub Actions: every 4 hours
+  `.github/workflows/publish-pending.yml` looks for commits after the last `v*` tag, runs the test suite, then
+  bumps the patch version, appends the CHANGELOG section from the commit subjects, publishes to npm, tags the
+  commit and publishes a GitHub Release. Do not bump `version` or edit `CHANGELOG.md` by hand, and keep
+  `package.json` BOM-free — a BOM makes DSH drop the whole bundle silently. The local publish scripts are
+  intentionally disabled.

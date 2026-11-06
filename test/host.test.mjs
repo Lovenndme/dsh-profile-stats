@@ -1,0 +1,465 @@
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import test from 'node:test'
+
+import { apply, createController, readCache } from '../index.js'
+import {
+  assistantEvent,
+  createFakeHost,
+  turnEndEvent,
+  turnStartEvent,
+  waitFor,
+  withTemporaryHome,
+} from './helpers/fake-host.mjs'
+
+const SNAPSHOT = '/api/dsh-profile-stats/snapshot'
+const REFRESH = '/api/dsh-profile-stats/refresh'
+const UPDATE = '/api/dsh-profile-stats/update'
+
+const at = (month, day, hour = 12) => new Date(2026, month - 1, day, hour, 0, 0, 0).getTime()
+
+function makeSessions() {
+  return [
+    {
+      header: { id: 's1', createdAt: at(11, 5) },
+      live: false,
+      events: [
+        assistantEvent({ seq: 0, time: at(11, 5), input: 100, output: 50, total: 150, provider: 'myapi', model: 'deepseek-v4-1-flash' }),
+        turnStartEvent({ seq: 1, time: at(11, 5), turn: 't1' }),
+        turnEndEvent({ seq: 2, time: at(11, 5) + 45000, turn: 't1' }),
+      ],
+    },
+    {
+      header: { id: 's2', createdAt: at(11, 6) },
+      live: false,
+      events: [
+        assistantEvent({ seq: 0, time: at(11, 6), input: 150, output: 50, total: 200, provider: 'wincode', model: 'deepseek-v4-pro' }),
+      ],
+    },
+  ]
+}
+
+async function boot(t, options = {}) {
+  withTemporaryHome(t)
+  const host = createFakeHost({ sessions: makeSessions(), ...options })
+  const controller = createController(host.ctx)
+  t.after(() => host.dispose())
+  return { host, controller }
+}
+
+test('createController：一次扫描把会话折成快照，并落盘完整缓存', async (t) => {
+  const { host, controller } = await boot(t)
+  await controller.scan('test')
+
+  assert.equal(controller.state.scanning, false)
+  assert.ok(controller.state.generatedAt > 0)
+  assert.equal(controller.state.cache.complete, true)
+  assert.deepEqual(Object.keys(controller.state.cache.sessions).sort(), ['s1', 's2'])
+  assert.deepEqual(host.reads, ['s1', 's2'])
+
+  const body = controller.snapshotBody()
+  assert.equal(body.ok, true)
+  assert.equal(body.scanning, false)
+  assert.equal(body.firstScan, false)
+  assert.equal(body.failedSessions, 0)
+  assert.equal(body.totals.tokens, 350)
+  assert.equal(body.totals.calls, 2)
+  assert.equal(body.totals.sessions, 2)
+  assert.equal(body.totals.longestTurnMs, 45000)
+  assert.equal(body.daily.length, 2)
+  assert.match(body.update.installed, /^\d+\.\d+\.\d+/)
+
+  const cache = readCache()
+  assert.equal(cache.complete, true)
+  assert.deepEqual(Object.keys(cache.sessions).sort(), ['s1', 's2'])
+
+  const identity = controller.identity()
+  assert.equal(typeof identity.name, 'string')
+  assert.ok(identity.name.length > 0)
+  assert.ok(identity.handle.startsWith('@'))
+  assert.equal(identity.avatar.length, 1)
+})
+
+test('createController：第二次扫描只重读活着的会话，已落盘的会话不再读', async (t) => {
+  const { host, controller } = await boot(t)
+  await controller.scan('first')
+
+  host.sessions[0].live = true
+  host.sessions[0].events.push(
+    assistantEvent({ seq: 3, time: at(11, 7), input: 60, output: 40, total: 100, provider: 'myapi', model: 'deepseek-v4-1-flash' }),
+  )
+  await controller.scan('second')
+
+  assert.deepEqual(host.reads, ['s1', 's2', 's1'], '只有 live 的 s1 需要重读')
+  assert.equal(controller.snapshotBody().totals.tokens, 450)
+})
+
+test('createController：会话被删掉后从缓存里剔除，总量同步下降', async (t) => {
+  const { host, controller } = await boot(t)
+  await controller.scan('first')
+  assert.equal(controller.snapshotBody().totals.tokens, 350)
+
+  host.setSessions([])
+  await controller.scan('second')
+
+  assert.deepEqual(Object.keys(controller.state.cache.sessions), [])
+  const body = controller.snapshotBody()
+  assert.equal(body.totals.tokens, 0)
+  assert.equal(body.daily.length, 0)
+  assert.equal(body.totals.sessions, 0)
+})
+
+test('createController：单个会话读失败不影响其它会话，且下次扫描会重试', async (t) => {
+  const sessions = makeSessions()
+  sessions.push({ header: { id: 'broken', createdAt: at(11, 6) }, live: false, broken: true })
+  const { host, controller } = await boot(t, { sessions })
+
+  await controller.scan('first')
+  const body = controller.snapshotBody()
+  assert.equal(body.failedSessions, 1)
+  assert.equal(body.totals.tokens, 350, '坏掉的会话不参与聚合，其它会话照常')
+  assert.deepEqual(Object.keys(controller.state.cache.sessions).sort(), ['s1', 's2'])
+
+  host.reads.length = 0
+  await controller.scan('second')
+  assert.deepEqual(host.reads, ['broken'], '没有缓存记录的失败会话必须重试（而不是被当成已完成）')
+})
+
+test('createController：首次扫描中途暴露 firstScan + 进度，结束后归零', async (t) => {
+  const { host, controller } = await boot(t)
+  host.holdReads()
+  const running = controller.scan('first')
+
+  await waitFor(() => controller.state.scanning, { label: '进入扫描' })
+  const during = controller.snapshotBody()
+  assert.equal(during.scanning, true)
+  assert.equal(during.firstScan, true, '缓存为空的首次扫描要让页面显示进度')
+  assert.deepEqual(during.progress, { done: 0, total: 2 })
+
+  host.releaseReads()
+  await running
+
+  const after = controller.snapshotBody()
+  assert.equal(after.scanning, false)
+  assert.equal(after.firstScan, false)
+  assert.deepEqual(after.progress, { done: 0, total: 0 })
+})
+
+test('createController：并发调用 scan 只会真正扫一次', async (t) => {
+  const { host, controller } = await boot(t)
+  await Promise.all([controller.scan('a'), controller.scan('b'), controller.scan('c')])
+  assert.deepEqual(host.reads, ['s1', 's2'])
+})
+
+test('createController：kick 的保鲜门禁（刚扫完不重复扫）', async (t) => {
+  const { host, controller } = await boot(t)
+  controller.kick('view')
+  await waitFor(() => controller.state.generatedAt > 0, { label: '首次扫描完成' })
+  assert.deepEqual(host.reads, ['s1', 's2'])
+
+  for (const reason of ['forced', 'view', 'background']) {
+    controller.kick(reason)
+  }
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.deepEqual(host.reads, ['s1', 's2'], '刚扫过的快照不该被三个入口各重扫一次')
+})
+
+test('createController：缓存已存在时冷启动直接用缓存，不等扫描', async (t) => {
+  const { controller } = await boot(t)
+  await controller.scan('first')
+  const scannedAt = controller.state.generatedAt
+
+  // 再起一个控制器（模拟插件重启）：应当立刻能从缓存算出聚合。
+  const second = createController(createFakeHost().ctx)
+  const body = second.snapshotBody()
+  assert.equal(body.generatedAt, scannedAt, '生成的时刻跟着缓存走，页面能判断数据新旧')
+  assert.equal(body.totals.tokens, 350, '缓存里的折叠结果启动即可用，不依赖本次扫描')
+  assert.equal(body.totals.sessions, 2)
+})
+
+test('createController：首次扫描被打断（complete=false）时重启立刻补扫并显示进度', async (t) => {
+  const { host, controller } = await boot(t)
+  await controller.scan('first')
+
+  // 模拟「首扫写到一半就被关掉」：缓存里有部分会话，但显式标了 complete=false。
+  const cacheFile = path.join(process.env.DSH_HOME, 'dsh-profile-stats', 'cache.json')
+  const partial = JSON.parse(fs.readFileSync(cacheFile, 'utf8'))
+  partial.complete = false
+  fs.writeFileSync(cacheFile, JSON.stringify(partial))
+
+  const restartedHost = createFakeHost({ sessions: makeSessions() })
+  t.after(() => restartedHost.dispose())
+  const restarted = createController(restartedHost.ctx)
+  assert.equal(restarted.state.cache.complete, false)
+  restartedHost.holdReads()
+  restarted.kick('view')
+  await waitFor(() => restarted.state.scanning, { label: '不完整缓存立刻补扫' })
+  assert.equal(restarted.snapshotBody().firstScan, true, '补扫期间页面要显示进度（数字还不完整）')
+  restartedHost.releaseReads()
+  await waitFor(() => !restarted.state.scanning && restarted.state.cache.complete === true, { label: '补扫完成' })
+})
+
+test('createController：listSessions 抛错时扫描不卡死，恢复后能继续用', async (t) => {
+  const { host, controller } = await boot(t)
+  const original = host.ctx.sessionQuery.listSessions
+  const warnings = []
+  const originalWarn = console.warn
+  console.warn = (...args) => warnings.push(args.join(' '))
+  t.after(() => {
+    console.warn = originalWarn
+  })
+
+  host.ctx.sessionQuery.listSessions = async () => {
+    throw new Error('listSessions boom')
+  }
+  await controller.scan('broken')
+  assert.equal(controller.state.scanning, false)
+  assert.equal(controller.state.inflight, null)
+  assert.equal(controller.state.generatedAt, 0)
+  assert.equal(controller.snapshotBody().ok, true, '扫描失败也要能回一份空快照，页面不能白屏')
+  assert.equal(controller.snapshotBody().totals.tokens, 0)
+  assert.ok(warnings.some((line) => line.includes('扫描失败')), '失败要留下日志')
+
+  host.ctx.sessionQuery.listSessions = original
+  await controller.scan('recover')
+  assert.equal(controller.snapshotBody().totals.tokens, 350)
+})
+
+test('createController：缓存写不进去也照常出数（缓存只是加速层）', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dps-blocker-'))
+  const blocker = path.join(dir, 'not-a-dir')
+  fs.writeFileSync(blocker, 'x')
+  const previousHome = process.env.DSH_HOME
+  process.env.DSH_HOME = blocker
+  const originalWarn = console.warn
+  console.warn = () => {}
+  t.after(() => {
+    console.warn = originalWarn
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  const host = createFakeHost({ sessions: makeSessions() })
+  t.after(() => host.dispose())
+  const controller = createController(host.ctx)
+  await controller.scan('no-disk')
+
+  assert.equal(controller.snapshotBody().totals.tokens, 350)
+  assert.equal(controller.state.cache.complete, true, '内存里的缓存状态仍然完整，下次还能接着用')
+})
+
+test('createController：继承前缀的会话在扫描后按「原件是否还在」正确归类', async (t) => {
+  const prefixEvents = [
+    assistantEvent({ seq: 0, time: at(11, 1), input: 200, output: 100, total: 300, provider: 'myapi', model: 'deepseek-v4-1-flash' }),
+  ]
+  const sessions = [
+    { header: { id: 'origin', createdAt: at(11, 1) }, live: false, events: prefixEvents },
+    {
+      header: { id: 'copy', createdAt: at(11, 2), parentSession: 'origin' },
+      live: false,
+      inheritedEventCount: 1,
+      events: [
+        ...prefixEvents,
+        assistantEvent({ seq: 1, time: at(11, 2), input: 400, output: 100, total: 500, provider: 'wincode', model: 'deepseek-v4-pro' }),
+      ],
+    },
+  ]
+  const { controller } = await boot(t, { sessions })
+  await controller.scan('first')
+  const totals = controller.snapshotBody().totals
+  assert.equal(totals.inheritedTokens, 300, '原件还在语料里 → 前缀只记账')
+  assert.equal(totals.tokens, 800, '300（原件本体）+ 500（副本本体）')
+
+  // 原件被删掉之后再扫：前缀必须补回总量，否则少算 300。
+  const orphanHost = createFakeHost({ sessions: [sessions[1]] })
+  const orphan = createController(orphanHost.ctx)
+  await orphan.scan('orphan')
+  const orphanTotals = orphan.snapshotBody().totals
+  assert.equal(orphanTotals.tokens, 800)
+  assert.equal(orphanTotals.orphanedTokens, 300)
+  assert.equal(orphanTotals.orphanedSessions, 1)
+})
+
+test('apply：注册三条同源路由，方法不对返回 405', async (t) => {
+  withTemporaryHome(t)
+  const host = createFakeHost({ sessions: makeSessions() })
+  apply(host.ctx)
+  t.after(() => host.dispose())
+
+  assert.deepEqual([...host.routes.keys()].sort(), [REFRESH, SNAPSHOT, UPDATE].sort())
+  assert.equal((await host.request(SNAPSHOT, 'POST')).json.error, 'method-not-allowed')
+  assert.equal((await host.request(REFRESH, 'GET')).json.error, 'method-not-allowed')
+  assert.equal((await host.request(UPDATE, 'GET')).json.error, 'method-not-allowed')
+})
+
+test('apply：GET 快照在扫描完成后给出完整数据，缓存落在 $DSH_HOME', async (t) => {
+  withTemporaryHome(t)
+  const host = createFakeHost({ sessions: makeSessions() })
+  apply(host.ctx)
+  t.after(() => host.dispose())
+
+  const first = await host.request(SNAPSHOT, 'GET')
+  assert.equal(first.status, 200)
+  assert.match(first.headers['content-type'], /application\/json/)
+  assert.equal(first.headers['cache-control'], 'no-store')
+  assert.equal(first.json.ok, true)
+
+  // 首次 GET 会顺带在后台起一次扫描；等它落盘后再取一次快照。
+  await waitFor(() => readCache().complete === true, { label: '缓存落盘' })
+  const second = await host.request(SNAPSHOT, 'GET')
+  assert.equal(second.json.totals.tokens, 350)
+  assert.equal(second.json.scanning, false)
+})
+
+test('apply：POST /refresh 接受请求；/update 在没有 pluginManager 时安全拒绝', async (t) => {
+  withTemporaryHome(t)
+  const host = createFakeHost({ sessions: makeSessions() })
+  apply(host.ctx)
+  t.after(() => host.dispose())
+
+  const refresh = await host.request(REFRESH, 'POST')
+  assert.equal(refresh.status, 200)
+  assert.equal(refresh.json.accepted, true)
+
+  const update = await host.request(UPDATE, 'POST')
+  assert.equal(update.status, 200)
+  assert.deepEqual(update.json, { ok: false, error: 'manager-unavailable' })
+})
+
+test('apply：卸载时清掉定时器和路由（不留下后台扫描）', async (t) => {
+  withTemporaryHome(t)
+  const host = createFakeHost({ sessions: makeSessions() })
+  apply(host.ctx)
+  host.dispose()
+  assert.equal(host.routes.size, 0)
+  assert.equal(host.disposers.length, 0)
+  await assert.rejects(() => host.request(SNAPSHOT, 'GET'), /route not registered/)
+})
+
+/* ------------------------------------------------------------ 一键升级（假 registry） */
+
+function fakeManager(overrides = {}) {
+  const calls = { remove: 0, install: [] }
+  const manager = {
+    async listBundles() {
+      return [{ name: 'dsh-profile-stats', version: '0.0.1', source: 'dsh-profile-stats', installed: true }]
+    },
+    async removeBundle(name) {
+      calls.remove += 1
+      return { application: 'applied', name }
+    },
+    async installBundle(spec, options) {
+      calls.install.push({ spec, options })
+      return { application: 'applied', version: '9.9.9' }
+    },
+    ...overrides,
+  }
+  return { manager, calls }
+}
+
+function stubRegistry(version, { ok = true } = {}) {
+  const previous = globalThis.fetch
+  globalThis.fetch = async () => {
+    if (!ok) throw new Error('network down')
+    return { ok: true, async json() { return { version } } }
+  }
+  return () => {
+    globalThis.fetch = previous
+  }
+}
+
+test('update：registry 有新版时 /update 完成 remove → install，并写结果文件', async (t) => {
+  const { manager, calls } = fakeManager()
+  const host = createFakeHost({ sessions: makeSessions(), services: { pluginManager: manager } })
+  withTemporaryHome(t)
+  t.after(() => host.dispose())
+  const controller = createController(host.ctx)
+
+  const restore = stubRegistry('9.9.9')
+  t.after(restore)
+  await controller.refreshUpdateInfo(true)
+
+  const info = controller.updateInfo()
+  assert.equal(info.latest, '9.9.9')
+  assert.equal(info.installed, '0.0.1')
+  assert.equal(info.canUpdate, true)
+  assert.equal(info.available, true)
+
+  assert.deepEqual(controller.startUpdate(), { ok: true, target: '9.9.9' })
+  // 防重入
+  assert.equal(controller.startUpdate().error, 'in-progress')
+
+  await waitFor(() => fs.existsSync(path.join(process.env.DSH_HOME, 'dsh-profile-stats', 'update.json')), {
+    label: '升级结果落盘',
+  })
+  const result = JSON.parse(fs.readFileSync(path.join(process.env.DSH_HOME, 'dsh-profile-stats', 'update.json'), 'utf8'))
+  assert.equal(result.ok, true)
+  assert.equal(result.target, '9.9.9')
+  assert.equal(result.from, '0.0.1')
+  assert.equal(result.step, 'install')
+  assert.equal(calls.remove, 1)
+  assert.equal(calls.install.length, 1)
+  assert.equal(calls.install[0].spec, 'dsh-profile-stats@9.9.9')
+  assert.equal(calls.install[0].options.saveExact, true)
+  assert.equal(calls.install[0].options.enabled, true)
+})
+
+test('update：安装失败后写失败结果并放开重入锁（不能卡在 running 上）', async (t) => {
+  const { manager } = fakeManager({
+    async installBundle() {
+      throw new Error('registry 502')
+    },
+  })
+  const host = createFakeHost({ sessions: makeSessions(), services: { pluginManager: manager } })
+  withTemporaryHome(t)
+  t.after(() => host.dispose())
+  const controller = createController(host.ctx)
+
+  const restore = stubRegistry('9.9.9')
+  t.after(restore)
+  await controller.refreshUpdateInfo(true)
+
+  assert.equal(controller.startUpdate().ok, true)
+  const resultFile = path.join(process.env.DSH_HOME, 'dsh-profile-stats', 'update.json')
+  await waitFor(() => fs.existsSync(resultFile), { label: '失败结果落盘' })
+  await waitFor(() => controller.updateInfo().running === false, { label: 'running 复位' })
+
+  const result = JSON.parse(fs.readFileSync(resultFile, 'utf8'))
+  assert.equal(result.ok, false)
+  assert.match(result.error, /registry 502/)
+  assert.equal(controller.updateInfo().available, true, '失败后仍应显示「有新版」，让用户能再试一次')
+})
+
+test('update：非 registry 安装 / 没有新版 / registry 不可达都不升级', async (t) => {
+  const linkManager = fakeManager({
+    async listBundles() {
+      return [{ name: 'dsh-profile-stats', version: '0.0.1', source: 'link:C:\\dev\\dsh-profile-stats', installed: true }]
+    },
+  })
+  const host = createFakeHost({ sessions: makeSessions(), services: { pluginManager: linkManager.manager } })
+  withTemporaryHome(t)
+  t.after(() => host.dispose())
+  const controller = createController(host.ctx)
+
+  const restore = stubRegistry('9.9.9')
+  t.after(restore)
+  await controller.refreshUpdateInfo(true)
+  assert.equal(controller.updateInfo().canUpdate, false)
+  assert.equal(controller.updateInfo().available, false)
+  assert.deepEqual(controller.startUpdate(), { ok: false, error: 'not-registry-install' })
+
+  // registry 不可达：不炸，保持「没有新版」。
+  const broken = fakeManager()
+  const host2 = createFakeHost({ sessions: [], services: { pluginManager: broken.manager } })
+  t.after(() => host2.dispose())
+  const controller2 = createController(host2.ctx)
+  const restore2 = stubRegistry('0.0.0', { ok: false })
+  t.after(restore2)
+  await controller2.refreshUpdateInfo(true)
+  assert.equal(controller2.updateInfo().latest, '')
+  assert.equal(controller2.updateInfo().available, false)
+  assert.deepEqual(controller2.startUpdate(), { ok: false, error: 'no-target' })
+})

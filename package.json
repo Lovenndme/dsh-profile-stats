@@ -12,6 +12,9 @@
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
   },
+  "scripts": {
+    "test": "node --test"
+  },
   "files": [
     "index.js",
     "client.js",
