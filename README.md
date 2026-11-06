@@ -39,9 +39,11 @@ Pages and may not open without a proxy. Afterwards the plugin works fully offlin
 
 <table>
   <tr>
-    <td align="center" width="33%"><img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/heatmap.png?v=2" alt="Token activity heatmap"><br><sub><b>Token activity</b><br>12 months, daily / weekly / cumulative</sub></td>
-    <td align="center" width="33%"><img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/model-chart.png?v=2" alt="Model distribution"><br><sub><b>Model distribution</b><br>by model family and tier</sub></td>
-    <td align="center" width="33%"><img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/mix.png?v=2" alt="Token mix (Cache Lens)"><br><sub><b>Cache Lens</b><br>cache hit / uncached input / output</sub></td>
+    <td align="center"><img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/heatmap.png?v=2" alt="Token activity heatmap" width="100%"><br><sub><b>Token activity</b> — 12 months, daily / weekly / cumulative total</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/model-chart.png?v=2" alt="Model distribution" width="100%"><br><sub><b>Model distribution</b> — by model family and tier</sub></td>
+    <td align="center" width="50%"><img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/mix.png?v=2" alt="Token mix (Cache Lens)" width="100%"><br><sub><b>Cache Lens</b> — cache hit / uncached input / output</sub></td>
   </tr>
 </table>
 

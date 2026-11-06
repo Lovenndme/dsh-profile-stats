@@ -37,9 +37,11 @@ dsh-profile-stats
 
 <table>
   <tr>
-    <td align="center" width="33%"><img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/heatmap.png?v=2" alt="Token 活动热力图"><br><sub><b>Token 活动</b><br>近 12 个月，每天 / 每周 / 累计总量</sub></td>
-    <td align="center" width="33%"><img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/model-chart.png?v=2" alt="模型分布"><br><sub><b>模型分布</b><br>按模型家族与档位堆叠</sub></td>
-    <td align="center" width="33%"><img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/mix.png?v=2" alt="Token 构成（Cache Lens）"><br><sub><b>Cache Lens</b><br>缓存命中 / 未缓存输入 / 输出</sub></td>
+    <td align="center"><img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/heatmap.png?v=2" alt="Token 活动热力图" width="100%"><br><sub><b>Token 活动</b> — 近 12 个月，每天 / 每周 / 累计总量</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%"><img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/model-chart.png?v=2" alt="模型分布" width="100%"><br><sub><b>模型分布</b> — 按模型家族与档位堆叠</sub></td>
+    <td align="center" width="50%"><img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/mix.png?v=2" alt="Token 构成（Cache Lens）" width="100%"><br><sub><b>Cache Lens</b> — 缓存命中 / 未缓存输入 / 输出</sub></td>
   </tr>
 </table>
 
