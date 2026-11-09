@@ -38,7 +38,6 @@ window.__ModuleLoader__.load({
 
     const EN = {
       'panel.title': 'Profile',
-      'stat.tokens': 'Total tokens',
       'stat.today': 'Tokens today',
       'stat.longestTurn': 'Longest task',
       'stat.longestStreak': 'Longest streak',
@@ -53,11 +52,10 @@ window.__ModuleLoader__.load({
       'grain.day': 'Daily',
       'grain.week': 'Weekly',
       'grain.month': 'Monthly',
-      'range.7d': '7 days',
-      'range.30d': '30 days',
-      'range.90d': '90 days',
-      'range.all': 'All time',
+      'range.day': 'Today',
+      'range.week': 'This week',
       'range.month': 'This month',
+      'range.all': 'All time',
       'range.custom': 'Custom',
       'range.from': 'From',
       'range.to': 'To',
@@ -73,6 +71,7 @@ window.__ModuleLoader__.load({
       'project.others': 'Other projects ({count})',
       'model.modeTokens': 'Tokens',
       'model.modeShare': 'Share',
+      'stat.tokens': 'Total tokens',
       'stat.cost': '{range} spend',
       'stat.totalCost': 'Total spend',
       'stat.peakShare': 'peak {value}',
@@ -163,7 +162,6 @@ window.__ModuleLoader__.load({
 
     const ZH = {
       'panel.title': '个人主页',
-      'stat.tokens': '累计 Token 数',
       'stat.today': '今日 Token 用量',
       'stat.longestTurn': '最长任务用时',
       'stat.longestStreak': '最长连续天数',
@@ -178,11 +176,10 @@ window.__ModuleLoader__.load({
       'grain.day': '按日',
       'grain.week': '按周',
       'grain.month': '按月',
-      'range.7d': '近 7 天',
-      'range.30d': '近 30 天',
-      'range.90d': '近 90 天',
-      'range.all': '累计',
+      'range.day': '本日',
+      'range.week': '本周',
       'range.month': '本月',
+      'range.all': '累计',
       'range.custom': '自定义',
       'range.from': '开始',
       'range.to': '结束',
@@ -198,6 +195,7 @@ window.__ModuleLoader__.load({
       'project.others': '其他项目（{count}）',
       'model.modeTokens': '用量',
       'model.modeShare': '占比',
+      'stat.tokens': '累计 Token 数',
       'stat.cost': '{range}花费',
       'stat.totalCost': '累计花费',
       'stat.peakShare': '高峰 {value}',
@@ -536,21 +534,29 @@ window.__ModuleLoader__.load({
 
     /* ------------------------------------------------------------ 时间范围 */
 
-    /** 顶部范围：数值是窗口天数，0 表示不限制（累计）。本月 / 自定义的天数按日历算。 */
-    const RANGE_DAYS = { '7d': 7, '30d': 30, '90d': 90, all: 0 }
-    const RANGE_IDS = ['7d', '30d', '90d', 'month', 'all', 'custom']
+    /** 顶部范围：本日、本周（周一起算）、本月、累计（不限起点）、自定义。 */
+    const RANGE_IDS = ['day', 'week', 'month', 'all', 'custom']
 
     function daysBetween(start, end) {
       return Math.round((startOfDay(end).getTime() - startOfDay(start).getTime()) / 86400000) + 1
     }
 
     /**
-     * 范围 → 起止日期键。累计范围没有起点（用今天作终点）。
+     * 范围 → 起止日期键。
+     *   本日：今天一天（kind = 'day'）；
+     *   本周：本周一到今天（kind = 'week'，周一起算，和活动图一致；环比按周对齐）；
      *   本月：1 号到今天（kind = 'month'，环比按自然月对齐）；
+     *   累计：没有起点（用今天作终点），环比没有「上一期」；
      *   自定义：custom = { startKey, endKey }，终点不晚于今天、起止颠倒时自动对调。
+     * 不认识的范围也当累计处理。
      */
     function rangeWindow(range, todayKey, custom) {
       const end = parseDateKey(todayKey)
+      if (range === 'day' && end) return { range, kind: 'day', days: 1, startKey: todayKey, endKey: todayKey }
+      if (range === 'week' && end) {
+        const first = startOfWeek(end)
+        return { range, kind: 'week', days: daysBetween(first, end), startKey: localDateKey(first), endKey: todayKey }
+      }
       if (range === 'month' && end) {
         return { range, kind: 'month', days: end.getDate(), startKey: localDateKey(new Date(end.getFullYear(), end.getMonth(), 1)), endKey: todayKey }
       }
@@ -564,15 +570,13 @@ window.__ModuleLoader__.load({
           return { range, kind: 'custom', days: daysBetween(first, last), startKey: localDateKey(first), endKey: localDateKey(last) }
         }
       }
-      const days = RANGE_DAYS[range] || 0
-      if (!days || !end) return { range, days: 0, startKey: '', endKey: todayKey }
-      return { range, days, startKey: localDateKey(addDays(end, -(days - 1))), endKey: todayKey }
+      return { range, days: 0, startKey: '', endKey: todayKey }
     }
 
     /**
      * 环比要比的两段：本期里已经过完的天（不含今天）对上一期的前同样天数。
      * 直接拿「含今天的 N 天」去比「完整的上一个 N 天」会偏低——今天还没过完，越早看越低。
-     * 累计范围没有「上一期」，返回 null（页面据此不显示环比）。
+     * 没有「上一期」的范围返回 null（页面据此不显示环比）：不限起点的；本日（今天还没过完）；本周一、本月 1 号（本期还没有过完的天）。
      */
     function deltaWindows(rangeWin, todayKey) {
       if (!rangeWin || !rangeWin.startKey || !(rangeWin.days >= 1)) return null
@@ -584,6 +588,14 @@ window.__ModuleLoader__.load({
       const lastFull = endsToday ? addDays(end, -1) : end
       if (lastFull.getTime() < start.getTime()) return null
       const current = { startKey: rangeWin.startKey, endKey: localDateKey(lastFull) }
+      if (rangeWin.kind === 'week') {
+        // 本周：对上周从周一起的同样天数（本周一、二对上周一、二）
+        const previousStart = addDays(start, -7)
+        return {
+          current,
+          previous: { startKey: localDateKey(previousStart), endKey: localDateKey(addDays(previousStart, daysBetween(start, lastFull) - 1)) },
+        }
+      }
       if (rangeWin.kind === 'month') {
         // 本月：对上个月从 1 号起的同样天数（11 月 1–7 日对 10 月 1–7 日），不超过上个月的最后一天
         const finished = daysBetween(start, lastFull)
@@ -1977,14 +1989,14 @@ window.__ModuleLoader__.load({
 
     /**
      * 每个范围可选的粒度是固定的，第一项是默认值。
-     * 不按「桶数在 2–92 之间」动态判断：那样「近 7 天」也能选按月（两根残柱），
+     * 不按「桶数在 2–92 之间」动态判断：那样「本周」也能选按月（一根残柱），
      * 「按周」每到周日消失、「按月」只在每月头几天出现，选项天天变。
-     * 累计范围按数据跨度分档：一个月以内看日 / 周，两年以内看周 / 月，再长只看月。
+     * 本日、本周只看日；本月看日 / 周；累计按数据跨度、自定义按所选天数分档：一周以内（仅自定义）看日，
+     * 一个月以内看日 / 周，两年以内看周 / 月，再长只看月。
      */
     function granularitiesFor(range, spanDays) {
-      if (range === '7d') return ['day']
-      if (range === '30d' || range === 'month') return ['day', 'week']
-      if (range === '90d') return ['week', 'month']
+      if (range === 'day' || range === 'week') return ['day']
+      if (range === 'month') return ['day', 'week']
       const span = toNumber(spanDays)
       // 自定义范围按所选天数分档，一周以内只看日
       if (range === 'custom' && span > 0 && span <= 7) return ['day']
@@ -3063,17 +3075,20 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 'dps-panel-tools' },
-            h(
-            'button',
-            {
-              type: 'button',
-              className: 'dps-ghost dps-toggle',
-              'data-dps-control': 'provider-today',
-              'aria-pressed': todayOnly ? 'true' : 'false',
-              onClick: () => props.onTodayOnly(!todayOnly),
-            },
-            t('provider.today'),
-          ),
+            // 顶部范围已经是本日时，卡片跟随范围看的就是今天：按钮没有用处，不显示
+            props.scope === 'day'
+              ? null
+              : h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dps-ghost dps-toggle',
+                    'data-dps-control': 'provider-today',
+                    'aria-pressed': todayOnly ? 'true' : 'false',
+                    onClick: () => props.onTodayOnly(!todayOnly),
+                  },
+                  t('provider.today'),
+                ),
           ),
         ),
         data.rows.length === 0
@@ -4008,6 +4023,8 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
         observer.observe(node)
         return () => observer.disconnect()
       }, [daily, count, bars])
+      // 只有一天（本日）没有趋势可画：一根撑满的柱子没有意义
+      if (count === 1) return null
       let max = 0
       for (const value of values) max = Math.max(max, value)
 
@@ -4210,7 +4227,7 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
           raw: ready ? summary.tokens : undefined,
           parts: ready ? tokenValue(shownRange) : null,
           extra: deltaChip,
-          // 近 7 / 30 天画每天的实际用量；近 90 天 / 累计画 7 日均线（天数多时柱子会被峰值压扁）
+          // 一个月以内画每天的实际用量；累计和更长的自定义范围画 7 日均线（天数多时柱子会被峰值压扁）
           aside: h(Sparkline, {
             mode: props.sparkMode || 'average',
             points: ready ? props.spark || [] : [],
@@ -4310,7 +4327,7 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
       // 用户亲手点的刷新：图标一直转到这次重扫结束；宿主后台的保鲜补扫不转
       const [manualScan, setManualScan] = useState(false)
       const [updating, setUpdating] = useState(false)
-      // 顶部时间范围：近 7 / 30 / 90 天、本月、累计、自定义（custom 记自定义的起止日期）
+      // 顶部时间范围：本日、本周、本月、累计、自定义（custom 记自定义的起止日期）；默认累计
       const [range, setRange] = useState('all')
       const [custom, setCustom] = useState(null)
       // 供应商卡片的「今日」按钮；换顶部范围时弹起，卡片回到跟随范围
@@ -4390,7 +4407,7 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
         return points.map((point) => ({ ...point, today: point.key === todayKey }))
       }, [daily, rangeWin.startKey, rangeWin.endKey, todayKey])
       // 一个月以内画每天的实际用量；更长的范围画 7 日均线（柱子会被峰值压扁）
-      const sparkMode = range !== 'all' && rangeWin.days > 0 && rangeWin.days <= 31 ? 'bars' : 'average'
+      const sparkMode = rangeWin.days > 0 && rangeWin.days <= 31 ? 'bars' : 'average'
       const average = useMemo(() => movingAverage(daily, spark), [daily, spark])
       // 命中率小趋势：和第一张卡的趋势同一批日期
       const hitSeries = useMemo(() => {

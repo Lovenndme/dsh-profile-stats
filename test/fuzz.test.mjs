@@ -19,11 +19,11 @@ function mulberry32(seed) {
 }
 
 const helpers = loadClientHelpers({
-  extraCode: ["const RANGE_DAYS = { '7d': 7, '30d': 30, '90d': 90, all: 0 }", 'const isChineseLocale = () => true'],
+  extraCode: ['const isChineseLocale = () => true'],
   constants: ['OFFICIAL_PRICES', 'CN_HOLIDAYS', 'OFFICIAL_PROVIDERS', 'BILLING_MODES', 'holidayKeys'],
   functions: [
     'computeCosts', 'officialRate', 'isPeakHour', 'priceFamily', 'holidaySet', 'billingOf', 'daysInMonth', 'validDateKey',
-    'indexDaily', 'parseDateKey', 'localDateKey', 'addDays', 'startOfDay', 'toNumber', 'rangeWindow', 'deltaWindows', 'daysBetween',
+    'indexDaily', 'parseDateKey', 'localDateKey', 'addDays', 'startOfDay', 'toNumber', 'rangeWindow', 'deltaWindows', 'daysBetween', 'startOfWeek',
   ],
 })
 const { computeCosts, rangeWindow, deltaWindows, parseDateKey, localDateKey, addDays, daysBetween } = helpers
@@ -153,7 +153,7 @@ test('fuzz rangeWindow / deltaWindows：窗口在今天以内、天数对得上�
   for (let scenario = 0; scenario < 600; scenario += 1) {
     const today = addDays(base, int(rand, 365 * 3))
     const todayKey = localDateKey(today)
-    const range = pick(rand, ['7d', '30d', '90d', 'month', 'all', 'custom'])
+    const range = pick(rand, ['day', 'week', 'month', 'all', 'custom'])
     const custom = { startKey: localDateKey(addDays(today, -int(rand, 400) + 20)), endKey: localDateKey(addDays(today, -int(rand, 400) + 20)) }
     const win = rangeWindow(range, todayKey, custom)
     const where = `${range} ${todayKey} ${JSON.stringify(custom)}`
@@ -163,6 +163,8 @@ test('fuzz rangeWindow / deltaWindows：窗口在今天以内、天数对得上�
       continue
     }
     assert.ok(win.startKey <= win.endKey, `${where} 起点不晚于终点`)
+    if (range === 'week') assert.equal(parseDateKey(win.startKey).getDay(), 1, `${where} 本周从周一起算`)
+    if (range === 'day') assert.ok(win.startKey === todayKey && win.endKey === todayKey, `${where} 本日就是今天`)
     assert.equal(win.days, daysBetween(parseDateKey(win.startKey), parseDateKey(win.endKey)), `${where} 天数`)
     const delta = deltaWindows(win, todayKey)
     if (!delta) continue
@@ -170,7 +172,8 @@ test('fuzz rangeWindow / deltaWindows：窗口在今天以内、天数对得上�
     assert.ok(delta.previous.endKey < delta.current.startKey, `${where} 上一期在本期之前`)
     assert.ok(delta.current.startKey === win.startKey && delta.current.endKey <= win.endKey, `${where} 本期在窗口内`)
     assert.ok(length(delta.previous) <= length(delta.current), `${where} 上一期不比本期长`)
-    if (range !== 'month') assert.equal(length(delta.previous), length(delta.current), `${where} 固定范围 / 自定义：一样长`)
+    if (range === 'week') assert.equal(parseDateKey(delta.previous.startKey).getDay(), 1, `${where} 上一期也从周一起算`)
+    if (range !== 'month') assert.equal(length(delta.previous), length(delta.current), `${where} 本周 / 自定义：一样长`)
   }
 })
 

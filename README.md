@@ -33,7 +33,7 @@ dsh-profile-stats
 
 | | Section | What it shows |
 |---|---|---|
-| 📊 | **Five headline numbers** | Tokens in the selected range (with daily bars for 7 / 30 days or a 7-day average trend for longer ranges, and the change against the previous period), today's tokens, longest task, the active-day streak with your best, today's cache hit rate |
+| 📊 | **Five headline numbers** | Tokens in the selected range (with daily bars for a week or a month, or a 7-day average trend for all time and longer custom ranges, and the change against the previous period), today's tokens, longest task, the active-day streak with your best, today's cache hit rate |
 | 🗓️ | **Token activity** | A 12-month day grid, switchable between daily, weekly and running-total views |
 | 🧩 | **Model distribution** | Stacked columns by model family (version + tier, so `v4-flash` and `v4.1-flash` stay apart) over the selected range, by day, week or month, as token amounts or as each bucket's share |
 | 🎯 | **Cache Lens** | Total tokens plus the cache hit rate, and the cache-hit / uncached-input / output split (plus cache write when a provider reports it) as a segmented bar, with a zoom into the uncached part and the daily cache hit rate underneath |
@@ -41,7 +41,7 @@ dsh-profile-stats
 | 📁 | **Projects** | Tokens per working directory in the selected range, with the part used by subagent sessions |
 | 💰 | **Spend** | The selected range's spend and its peak-hour share, plus a spend column per provider and project. Usage is priced at the list price for its call time; each provider can be set to list price, a discount, a monthly plan or not counted, stored only on your machine |
 
-A range switch in the header — 7 / 30 / 90 days, this month, all time or custom dates — drives the first number, the model distribution, Cache Lens, the projects and the provider split; the selected range can be exported as CSV (one row per day) or JSON.
+A range switch in the header — today, this week, this month, all time or custom dates — drives the first number, the model distribution, Cache Lens, the projects and the provider split; the selected range can be exported as CSV (one row per day) or JSON.
 
 ## Privacy
 
