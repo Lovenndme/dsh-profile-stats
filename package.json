@@ -24,7 +24,9 @@
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
-    "README.zh.md"
+    "README.zh.md",
+    "prices.json",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "keywords": [
     "dsh",

@@ -118,8 +118,10 @@
     'deepseek-official': 'deepseek-flash',
     'deepseek-account': 'deepseek-v4-1-flash',
     'deepseek-modlens': 'deepseek-v4-pro',
-    'relay-lab': 'deepseek-v4-1-flash',
+    'relay-lab': 'claude-sonnet-5-5',
   }
+  /** 演示用的价格表（美元 / 百万 token：输入、输出、缓存读、缓存写），取自随包的 prices.json；宿主只发用到的模型。 */
+  var PREVIEW_PRICES = { 'claude-sonnet-5-5': [2, 10, 0.1, 2.5] }
 
   function buildSlots(date, providerUsage) {
     var slots = []
@@ -372,6 +374,8 @@
     var body = JSON.parse(JSON.stringify(state.view === 'cache-write' ? writeSnapshot : fullSnapshot))
     body.aliases = { providers: readAliases() }
     body.billing = { providers: billingMemory || readBillingStore() }
+    if (rateMemory !== null) body.billing.usdCny = rateMemory
+    body.prices = { currency: 'USD', unit: 'per 1M tokens', fetchedAt: '2026-11-09', defaultUsdCny: 6.7168, models: PREVIEW_PRICES }
     body.generatedAt = Date.now()
     body.update = updateBlock()
     if (hostState.scanLeft > 0) {
@@ -402,6 +406,7 @@
     }
   }
   var billingMemory = null
+  var rateMemory = null
   function writeBillingStore(provider, billing) {
     var current = billingMemory || readBillingStore()
     if (billing) current[provider] = billing
@@ -479,9 +484,14 @@
       } catch (error) {
         billingBody = {}
       }
-      result = billingBody && typeof billingBody.provider === 'string' && billingBody.provider
-        ? json(200, { ok: true, billing: { providers: writeBillingStore(billingBody.provider, billingBody.billing || null) } })
-        : json(400, { ok: false, error: 'invalid-provider' })
+      if (billingBody && Object.prototype.hasOwnProperty.call(billingBody, 'usdCny')) {
+        rateMemory = typeof billingBody.usdCny === 'number' ? billingBody.usdCny : null
+        result = json(200, { ok: true, billing: { providers: billingMemory || readBillingStore(), usdCny: rateMemory } })
+      } else {
+        result = billingBody && typeof billingBody.provider === 'string' && billingBody.provider
+          ? json(200, { ok: true, billing: { providers: writeBillingStore(billingBody.provider, billingBody.billing || null) } })
+          : json(400, { ok: false, error: 'invalid-provider' })
+      }
     } else if (url === ALIAS_URL && method === 'POST') {
       requestLog.alias += 1
       var payload = {}

@@ -585,14 +585,21 @@ test('计费接口：每家的计费方式存在本机 billing.json，快照带�
   assert.deepEqual(multiplier.json.billing.providers, { 'relay-x': { mode: 'multiplier', factor: 0.12 } })
   await host.request(BILLING, 'POST', { provider: 'plan-x', billing: { mode: 'plan', monthly: 199, since: '2026-10-20' } })
   await host.request(BILLING, 'POST', { provider: 'work', billing: { mode: 'free' } })
-  // 自定义单价没填缓存写入时按未命中价
+  // 自定义单价：旧写法（四个价直接挂在上面）当作「其他模型」；没填缓存写入时按未命中价
   const custom = await host.request(BILLING, 'POST', { provider: 'own', billing: { mode: 'custom', miss: 2, hit: 0.2, output: 8 } })
-  assert.deepEqual(custom.json.billing.providers.own, { mode: 'custom', miss: 2, hit: 0.2, write: 2, output: 8 })
+  assert.deepEqual(custom.json.billing.providers.own, { mode: 'custom', currency: 'CNY', prices: { '*': { miss: 2, hit: 0.2, write: 2, output: 8 } } })
+  // 新写法：按模型分开填、美元
+  const perModel = await host.request(BILLING, 'POST', {
+    provider: 'relay-us',
+    billing: { mode: 'custom', currency: 'USD', prices: { 'claude-sonnet-5-5': { miss: 3, hit: 0.3, write: 3.75, output: 15 }, bad: { miss: 'x' } } },
+  })
+  assert.deepEqual(perModel.json.billing.providers['relay-us'], { mode: 'custom', currency: 'USD', prices: { 'claude-sonnet-5-5': { miss: 3, hit: 0.3, write: 3.75, output: 15 } } })
+  await host.request(BILLING, 'POST', { provider: 'relay-us', billing: null })
   assert.deepEqual((await host.request(SNAPSHOT, 'GET')).json.billing.providers, {
     'relay-x': { mode: 'multiplier', factor: 0.12 },
     'plan-x': { mode: 'plan', monthly: 199, since: '2026-10-20' },
     work: { mode: 'free' },
-    own: { mode: 'custom', miss: 2, hit: 0.2, write: 2, output: 8 },
+    own: { mode: 'custom', currency: 'CNY', prices: { '*': { miss: 2, hit: 0.2, write: 2, output: 8 } } },
   })
 
   // null = 回到默认
@@ -620,4 +627,40 @@ test('billing.json 被手改坏也不影响快照：只留合法条目', async (
   apply(host.ctx)
   t.after(() => host.dispose())
   assert.deepEqual((await host.request(SNAPSHOT, 'GET')).json.billing.providers, { a: { mode: 'free' }, d: { mode: 'plan', monthly: 10 } })
+})
+
+test('汇率：POST { usdCny } 改美元兑人民币，null 回到默认；不合理的值被拒', async (t) => {
+  withTemporaryHome(t)
+  const host = createFakeHost({ sessions: makeSessions() })
+  apply(host.ctx)
+  t.after(() => host.dispose())
+  const snapshot = (await host.request(SNAPSHOT, 'GET')).json
+  assert.equal(snapshot.billing.usdCny, undefined)
+  assert.equal(snapshot.prices.defaultUsdCny, 6.7168, '默认值：中国外汇交易中心 2026-11-06 中间价')
+  assert.equal((await host.request(BILLING, 'POST', { usdCny: 7.2 })).json.billing.usdCny, 7.2)
+  assert.equal((await host.request(SNAPSHOT, 'GET')).json.billing.usdCny, 7.2)
+  assert.equal((await host.request(BILLING, 'POST', { usdCny: 0 })).json.error, 'invalid-rate')
+  assert.equal((await host.request(BILLING, 'POST', { usdCny: 'x' })).json.error, 'invalid-rate')
+  assert.equal((await host.request(BILLING, 'POST', { usdCny: null })).json.billing.usdCny, undefined)
+})
+
+test('价格表：快照只带用到的模型；名字带 -thinking / -high 之类后缀时退回基础模型；找不到的不带', async (t) => {
+  withTemporaryHome(t)
+  const { priceRowOf, pricesFor } = await import('../index.js')
+  const table = { fetchedAt: '2026-11-09', models: { 'claude-sonnet-5-5': [2, 10, 0.1, 2.5], 'gpt-6-astra': [10, 50, 1, null], broken: ['x', 1] } }
+  assert.deepEqual(priceRowOf('claude-sonnet-5-5', table), [2, 10, 0.1, 2.5])
+  assert.deepEqual(priceRowOf('claude-sonnet-5-5-thinking', table), [2, 10, 0.1, 2.5])
+  assert.deepEqual(priceRowOf('gpt-6-astra-high', table), [10, 50, 1, null])
+  assert.equal(priceRowOf('gpt-6-astra-turbo', table), null, '不认识的后缀不乱猜')
+  assert.equal(priceRowOf('broken', table), null)
+  assert.equal(priceRowOf('nobody', table), null)
+  const daily = [{ slots: [[1, 'p', 'claude-sonnet-5-5-thinking', '', 1, 0, 0, 0], [1, 'p', 'nobody', '', 1, 0, 0, 0]] }]
+  assert.deepEqual(pricesFor(daily, table).models, { 'claude-sonnet-5-5-thinking': [2, 10, 0.1, 2.5] })
+
+  // 随包的 prices.json：常见的几家都在
+  const real = JSON.parse(fs.readFileSync(new URL('../prices.json', import.meta.url), 'utf8'))
+  for (const id of ['claude-sonnet-5-5', 'claude-opus-5-5', 'gpt-6-astra', 'gemini-3-1-pro', 'kimi-k3', 'glm-5-2', 'qwen-max']) {
+    assert.ok(Array.isArray(real.models[id]), `${id} 应该在 prices.json 里`)
+  }
+  assert.match(real.license, /MIT/)
 })

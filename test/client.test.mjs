@@ -754,13 +754,14 @@ const costHelpers = () =>
   loadClientHelpers({
     constants: ['OFFICIAL_PRICES', 'CN_HOLIDAYS', 'OFFICIAL_PROVIDERS', 'holidayKeys'],
     functions: [
-      'computeCosts', 'officialRate', 'isPeakHour', 'priceFamily', 'holidaySet', 'billingOf', 'daysInMonth',
+      'computeCosts', 'officialRate', 'customPrices', 'isPeakHour', 'priceFamily', 'holidaySet', 'billingOf', 'daysInMonth',
       'moneyParts', 'formatMoney', 'indexDaily', 'parseDateKey', 'localDateKey', 'addDays', 'toNumber',
     ],
   })
 // 北京时间 → UTC 小时序号
 const bjHour = (year, month, day, hour) => Date.UTC(year, month - 1, day, hour - 8) / 3600000
 const near = (actual, expected, label) => assert.ok(Math.abs(actual - expected) < 1e-9, `${label}: ${actual} ≠ ${expected}`)
+const rateOf = (rate) => (rate ? { hit: rate.hit, miss: rate.miss, output: rate.output, peak: rate.peak } : rate)
 
 test('priceFamily：DeepSeek 的 Flash / Pro 各种写法归到两个价格系列；其他厂商没有内置价', () => {
   const { priceFamily } = costHelpers()
@@ -789,16 +790,28 @@ test('isPeakHour：北京时间工作日 9–12、14–18 点；周末、法定�
 
 test('officialRate：按调用时间选价格行；8 月 17 日前没有已知价格', () => {
   const { officialRate } = costHelpers()
-  assert.deepEqual(officialRate('deepseek-v4-flash', bjHour(2026, 8, 20, 10)), { hit: 0.1, miss: 3, output: 9, peak: true })
-  assert.deepEqual(officialRate('deepseek-v4-flash', bjHour(2026, 8, 20, 20)), { hit: 0.05, miss: 1.5, output: 4.5, peak: false })
+  assert.deepEqual(rateOf(officialRate('deepseek-v4-flash', bjHour(2026, 8, 20, 10))), { hit: 0.1, miss: 3, output: 9, peak: true })
+  assert.deepEqual(rateOf(officialRate('deepseek-v4-flash', bjHour(2026, 8, 20, 20))), { hit: 0.05, miss: 1.5, output: 4.5, peak: false })
   // 9 月 10 日北京时间 12:00 起 Flash 降价：11 点还是旧价，12 点是新价（12 点本身是空闲时段）
-  assert.deepEqual(officialRate('deepseek-flash', bjHour(2026, 9, 10, 11)), { hit: 0.1, miss: 3, output: 9, peak: true })
-  assert.deepEqual(officialRate('deepseek-flash', bjHour(2026, 9, 10, 12)), { hit: 0.02, miss: 1, output: 4, peak: false })
-  assert.deepEqual(officialRate('deepseek-flash', bjHour(2026, 9, 10, 14)), { hit: 0.04, miss: 2, output: 8, peak: true })
-  assert.deepEqual(officialRate('deepseek-v4-pro', bjHour(2026, 11, 6, 10)), { hit: 0.3, miss: 9, output: 27, peak: true })
+  assert.deepEqual(rateOf(officialRate('deepseek-flash', bjHour(2026, 9, 10, 11))), { hit: 0.1, miss: 3, output: 9, peak: true })
+  assert.deepEqual(rateOf(officialRate('deepseek-flash', bjHour(2026, 9, 10, 12))), { hit: 0.02, miss: 1, output: 4, peak: false })
+  assert.deepEqual(rateOf(officialRate('deepseek-flash', bjHour(2026, 9, 10, 14))), { hit: 0.04, miss: 2, output: 8, peak: true })
+  assert.deepEqual(rateOf(officialRate('deepseek-v4-pro', bjHour(2026, 11, 6, 10))), { hit: 0.3, miss: 9, output: 27, peak: true })
   assert.equal(officialRate('deepseek-v4-pro', bjHour(2026, 8, 16, 23)), null, '8 月 17 日 0 点之前')
-  assert.deepEqual(officialRate('deepseek-v4-pro', bjHour(2026, 8, 17, 0)), { hit: 0.15, miss: 4.5, output: 13.5, peak: false })
+  assert.deepEqual(rateOf(officialRate('deepseek-v4-pro', bjHour(2026, 8, 17, 0))), { hit: 0.15, miss: 4.5, output: 13.5, peak: false })
+  const deepseek = officialRate('deepseek-flash', bjHour(2026, 11, 6, 10))
+  assert.equal(deepseek.currency, 'CNY')
+  assert.equal(deepseek.timed, true)
+  assert.equal(deepseek.write, deepseek.miss, 'DeepSeek 没有缓存写入：按未命中价')
+  // DeepSeek 以外：价格表（美元），没有表时不知道
   assert.equal(officialRate('claude-sonnet-5-5', bjHour(2026, 11, 6, 10)), null)
+  const table = { 'claude-sonnet-5-5': [2, 10, 0.1, 2.5], 'gpt-5-5': [5, 30, 0.5, null], 'qwen-max': [1.6, 6.4, null, null], broken: ['x', 1] }
+  assert.deepEqual(officialRate('claude-sonnet-5-5', bjHour(2026, 11, 6, 10), table), { currency: 'USD', miss: 2, hit: 0.1, write: 2.5, output: 10, peak: false, timed: false })
+  assert.deepEqual(officialRate('gpt-5-5', 0, table), { currency: 'USD', miss: 5, hit: 0.5, write: 5, output: 30, peak: false, timed: false }, '没有缓存写入价：按未缓存输入价')
+  assert.deepEqual(officialRate('qwen-max', 0, table), { currency: 'USD', miss: 1.6, hit: 1.6, write: 1.6, output: 6.4, peak: false, timed: false }, '没有缓存读价：按未缓存输入价')
+  assert.equal(officialRate('broken', 0, table), null)
+  // DeepSeek 的 Flash / Pro 只认内置价表，不退回价格表里别家转售的旧价
+  assert.equal(officialRate('deepseek-v4-pro', bjHour(2026, 8, 1, 10), { 'deepseek-v4-pro': [1, 1, 1, 1] }), null)
 })
 
 test('computeCosts：官方价折算与五种计费方式；包月按天摊；未设置的不算进花费', () => {
@@ -863,4 +876,73 @@ test('moneyParts / formatMoney：100 元以下两位小数、以上一位，千�
   assert.equal(formatMoney(0.001), '<¥0.01')
   assert.equal(formatMoney(0), '¥0')
   assert.deepEqual(moneyParts(5.5), [{ prefix: '¥', value: '5.50', unit: '' }])
+})
+
+test('computeCosts：外国模型按价格表美元价换算人民币；缓存写入单独计价；高峰占比只看有峰谷价的模型', () => {
+  const { computeCosts } = costHelpers()
+  const M = 1e6
+  const peak = bjHour(2026, 11, 6, 10)
+  const table = { 'claude-sonnet-5-5': [2, 10, 0.1, 2.5], 'gpt-5-5': [5, 30, 0.5, null] }
+  const daily = [
+    {
+      date: '2026-11-06',
+      slots: [
+        // Claude（经中转）：未缓存 1M、读 10M、写 1M、输出 1M → 2 + 1 + 2.5 + 10 = 15.5 美元
+        [peak, 'relay', 'claude-sonnet-5-5', 'p1', M, 10 * M, M, M],
+        // GPT：没有写入价，写入按输入价 → 5 + 0.5 + 5 + 30 = 40.5 美元
+        [peak, 'relay', 'gpt-5-5', 'p2', M, M, M, M],
+        // DeepSeek 高峰：2 + 0.04 + 8 = 10.04 元
+        [peak, 'deepseek-official', 'deepseek-flash', 'p1', M, M, 0, M],
+        // 不认识的模型
+        [peak, 'relay', 'mystery-model', 'p1', M, 0, 0, 0],
+      ],
+    },
+  ]
+  const rate = 7
+  const settings = { relay: { mode: 'multiplier', factor: 0.1 } }
+  const day = computeCosts(daily, '2026-11-06', '2026-11-06', settings, '2026-11-06', { table, usdCny: rate })
+  near(day.byProvider.relay.value, (15.5 + 40.5) * rate, '官方价折算：美元 × 汇率')
+  near(day.byProvider.relay.spend, (15.5 + 40.5) * rate * 0.1, '打折作用在外国模型的官方价上')
+  assert.deepEqual(day.byProvider.relay.unpriced, ['mystery-model'])
+  assert.deepEqual(day.byProvider.relay.models, ['claude-sonnet-5-5', 'gpt-5-5', 'mystery-model'])
+  near(day.usdValue, (15.5 + 40.5) * rate, '美元计价部分（决定要不要显示汇率）')
+  near(day.peakBase, 10.04, '只有 DeepSeek 有峰谷价')
+  near(day.peakValue, 10.04, 'DeepSeek 这条在高峰时段')
+  // 汇率变了，人民币金额跟着线性变
+  const doubled = computeCosts(daily, '2026-11-06', '2026-11-06', settings, '2026-11-06', { table, usdCny: rate * 2 })
+  near(doubled.byProvider.relay.value, day.byProvider.relay.value * 2, '汇率翻倍')
+  near(doubled.byProvider['deepseek-official'].value, day.byProvider['deepseek-official'].value, '人民币价不受汇率影响')
+})
+
+test('computeCosts：自定义单价按模型分开、可选美元；没填的模型用「其他模型」那行，再没有就按官方价', () => {
+  const { computeCosts } = costHelpers()
+  const M = 1e6
+  const table = { 'claude-sonnet-5-5': [2, 10, 0.1, 2.5], 'gpt-5-5': [5, 30, 0.5, null] }
+  const daily = [{ date: '2026-11-06', slots: [[0, 'relay', 'claude-sonnet-5-5', 'p', M, M, M, M], [0, 'relay', 'gpt-5-5', 'p', M, 0, 0, 0], [0, 'relay', 'other', 'p', M, 0, 0, 0]] }]
+  const perModel = { relay: { mode: 'custom', currency: 'USD', prices: { 'claude-sonnet-5-5': { miss: 3, hit: 0.3, write: 3.75, output: 15 }, '*': { miss: 1, hit: 0.1, write: 1, output: 2 } } } }
+  const result = computeCosts(daily, '', '2026-11-06', perModel, '2026-11-06', { table, usdCny: 7 })
+  near(result.byProvider.relay.spend, ((3 + 0.3 + 3.75 + 15) + 1 + 1) * 7, 'Claude 按自己的价，GPT 和不认识的模型按「其他模型」')
+  const noDefault = { relay: { mode: 'custom', currency: 'CNY', prices: { 'claude-sonnet-5-5': { miss: 3, hit: 0.3, write: 3.75, output: 15 } } } }
+  const fallback = computeCosts(daily, '', '2026-11-06', noDefault, '2026-11-06', { table, usdCny: 7 })
+  near(fallback.byProvider.relay.spend, 22.05 + 5 * 7, '没填的 GPT 按官方价（5 美元 × 7），不认识的模型算不了')
+  // 旧写法（四个价直接挂在上面）照样能用
+  const legacy = computeCosts(daily, '', '2026-11-06', { relay: { mode: 'custom', miss: 2, hit: 0.5, write: 2, output: 10 } }, '2026-11-06', { table, usdCny: 7 })
+  near(legacy.byProvider.relay.spend, (2 + 0.5 + 2 + 10) + 2 + 2, '旧写法当作「其他模型」，人民币')
+})
+
+test('billingDraft：按模型的单价行——全空跳过、必填项不全或写入不合法时不能保存', () => {
+  const { billingDraft } = loadClientHelpers({ functions: ['billingDraft', 'billingNumber'], constants: ['PRICE_FIELDS'] })
+  const row = (miss, hit, write, output) => ({ miss, hit, write, output })
+  assert.deepEqual(billingDraft('custom', { currency: 'USD', prices: { '*': row('1', '0.1', '', '2'), 'gpt-5-5': row('', '', '', '') } }), {
+    mode: 'custom',
+    currency: 'USD',
+    prices: { '*': { miss: 1, hit: 0.1, write: 1, output: 2 } },
+  })
+  assert.equal(billingDraft('custom', { prices: { '*': row('1', '', '', '2') } }), null, '缺命中价')
+  assert.equal(billingDraft('custom', { prices: { '*': row('1', '0.1', 'x', '2') } }), null, '写入不合法')
+  assert.equal(billingDraft('custom', { prices: { '*': row('', '', '', '') } }), null, '一行都没填')
+  assert.deepEqual(billingDraft('multiplier', { factor: '0.12' }), { mode: 'multiplier', factor: 0.12 })
+  assert.equal(billingDraft('multiplier', { factor: '200' }), null)
+  assert.deepEqual(billingDraft('plan', { monthly: '199', since: '2026-10-20' }), { mode: 'plan', monthly: 199, since: '2026-10-20' })
+  assert.deepEqual(billingDraft('plan', { monthly: '199', since: '' }), { mode: 'plan', monthly: 199 })
 })

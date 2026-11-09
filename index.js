@@ -161,6 +161,25 @@ function priceNumber(value) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= PRICE_LIMIT ? value : null
 }
 
+const CUSTOM_MAX_MODELS = 50
+/** 美元兑人民币：页面把美元价换算成人民币显示。默认值是中国外汇交易中心 2026-11-06 的中间价（100 美元 = 671.68 元）。 */
+const DEFAULT_USD_CNY = 6.7168
+
+/** 一行自定义单价：未命中 / 命中 / 输出必填，缓存写入不填时按未命中价。 */
+function customPriceRow(row) {
+  if (!row || typeof row !== 'object') return null
+  const miss = priceNumber(row.miss)
+  const hit = priceNumber(row.hit)
+  const output = priceNumber(row.output)
+  if (miss === null || hit === null || output === null) return null
+  const write = priceNumber(row.write)
+  return { miss, hit, write: write === null ? miss : write, output }
+}
+
+function usdRate(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0.1 && value <= 100 ? value : null
+}
+
 /** 单个供应商的计费方式：不认识的 mode 或缺字段时返回 null（等于没设置）。 */
 function sanitizeBillingEntry(raw) {
   if (!raw || typeof raw !== 'object' || !BILLING_MODES.includes(raw.mode)) return null
@@ -170,13 +189,18 @@ function sanitizeBillingEntry(raw) {
     return factor === null || factor > 100 ? null : { mode: 'multiplier', factor }
   }
   if (raw.mode === 'custom') {
-    const entry = { mode: 'custom' }
-    for (const field of ['miss', 'hit', 'write', 'output']) {
-      const value = priceNumber(raw[field])
-      if (value === null && field !== 'write') return null
-      entry[field] = value === null ? priceNumber(raw.miss) : value
+    // 新写法：{ currency, prices: { '*': {...}, '<模型>': {...} } }；旧写法（四个价直接挂在上面）当作 '*'
+    const source = raw.prices && typeof raw.prices === 'object' && !Array.isArray(raw.prices) ? raw.prices : { '*': raw }
+    const prices = {}
+    for (const [model, row] of Object.entries(source)) {
+      if (Object.keys(prices).length >= CUSTOM_MAX_MODELS) break
+      const key = String(model).trim()
+      const clean = customPriceRow(row)
+      if (!key || key.length > ALIAS_MAX_ID || !clean) continue
+      prices[key] = clean
     }
-    return entry
+    if (!Object.keys(prices).length) return null
+    return { mode: 'custom', currency: raw.currency === 'USD' ? 'USD' : 'CNY', prices }
   }
   const monthly = priceNumber(raw.monthly)
   if (monthly === null) return null
@@ -194,7 +218,8 @@ function sanitizeBilling(raw) {
     if (!key || key.length > ALIAS_MAX_ID || !clean) continue
     providers[key] = clean
   }
-  return { providers }
+  const rate = raw && typeof raw === 'object' ? usdRate(raw.usdCny) : null
+  return rate === null ? { providers } : { providers, usdCny: rate }
 }
 
 function readBilling() {
@@ -203,6 +228,25 @@ function readBilling() {
   } catch {
     return { providers: {} }
   }
+}
+
+function saveBilling(next) {
+  const file = billingFile()
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const temporary = `${file}.${process.pid}.tmp`
+  fs.writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`)
+  fs.renameSync(temporary, file)
+}
+
+/** 改美元兑人民币的汇率；null 表示回到默认值。 */
+function writeUsdRate(value) {
+  if (value !== null && usdRate(value) === null) return { ok: false, error: 'invalid-rate' }
+  const current = readBilling()
+  if (value === null) delete current.usdCny
+  else current.usdCny = value
+  const next = sanitizeBilling(current)
+  saveBilling(next)
+  return { ok: true, billing: next }
 }
 
 /** 改一个供应商的计费方式；billing 为 null 表示删掉（回到默认）。写法同 writeAlias：先写临时文件再改名。 */
@@ -218,12 +262,56 @@ function writeBilling(provider, billing) {
   }
   const next = sanitizeBilling(current)
   if (billing && !next.providers[id]) return { ok: false, error: 'too-many' }
-  const file = billingFile()
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  const temporary = `${file}.${process.pid}.tmp`
-  fs.writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`)
-  fs.renameSync(temporary, file)
+  saveBilling(next)
   return { ok: true, billing: next }
+}
+
+/* ---------------------------------------------------------------- 价格表 */
+
+/**
+ * prices.json（tools/update-prices.mjs 从 LiteLLM 的公开价格表生成，MIT）：各厂商直供对话模型的美元价。
+ * 只在第一次用到时读一次；读不到就当没有（页面把这些模型算「未定价」）。
+ */
+let priceTable = null
+function loadPriceTable() {
+  if (priceTable) return priceTable
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(SELF_DIR, 'prices.json'), 'utf8'))
+    const models = parsed && parsed.models && typeof parsed.models === 'object' ? parsed.models : {}
+    priceTable = { fetchedAt: typeof parsed.fetchedAt === 'string' ? parsed.fetchedAt : '', models }
+  } catch {
+    priceTable = { fetchedAt: '', models: {} }
+  }
+  return priceTable
+}
+
+/** 中转站常在模型名后面加这些变体后缀；价格表里没有时退回基础模型的价格。 */
+const MODEL_VARIANTS = /-(thinking|reasoning|non-reasoning|high|medium|low|minimal|fast|online|search|free|nothink|no-think)$/
+
+/** 模型 → 价格表里的一行 [输入, 输出, 缓存读, 缓存写]（美元 / 百万 token）；找不到返回 null。 */
+function priceRowOf(model, table) {
+  const models = (table || loadPriceTable()).models
+  let id = String(model || '')
+  for (let attempt = 0; attempt < 3 && id; attempt += 1) {
+    const row = models[id]
+    if (Array.isArray(row) && row.length >= 2 && row.slice(0, 2).every((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0)) return row
+    if (!MODEL_VARIANTS.test(id)) break
+    id = id.replace(MODEL_VARIANTS, '')
+  }
+  return null
+}
+
+/** 快照里只带上用到的模型的价格，免得每次都发整张表。 */
+function pricesFor(daily, table) {
+  const used = new Set()
+  for (const entry of daily || []) for (const slot of entry.slots || []) used.add(slot[2])
+  const models = {}
+  for (const model of used) {
+    const row = priceRowOf(model, table)
+    if (row) models[model] = row
+  }
+  const source = table || loadPriceTable()
+  return { currency: 'USD', unit: 'per 1M tokens', fetchedAt: source.fetchedAt, defaultUsdCny: DEFAULT_USD_CNY, models }
 }
 
 /** 读 JSON 请求体（宿主给的是 Node 的请求流），超过上限直接拒绝。 */
@@ -1298,6 +1386,7 @@ export function createController(ctx) {
       update: updateInfo(),
       aliases: readAliases(),
       billing: readBilling(),
+      prices: pricesFor(agg.daily),
       totals: agg.totals,
       daily: agg.daily,
       projects: agg.projects || {},
@@ -1371,7 +1460,10 @@ export function apply(ctx) {
           return
         }
         try {
-          const result = writeBilling(body && body.provider, body ? body.billing : undefined)
+          const result =
+            body && Object.prototype.hasOwnProperty.call(body, 'usdCny')
+              ? writeUsdRate(body.usdCny === null ? null : body.usdCny)
+              : writeBilling(body && body.provider, body ? body.billing : undefined)
           sendJson(res, result.ok ? 200 : 400, result)
         } catch (error) {
           sendJson(res, 500, { ok: false, error: 'write-failed', message: error && error.message ? error.message : String(error) })
@@ -1451,6 +1543,8 @@ export {
   emptyFold,
   projectOf,
   slotRows,
+  priceRowOf,
+  pricesFor,
   sanitizeBilling,
   readBilling,
   writeBilling,

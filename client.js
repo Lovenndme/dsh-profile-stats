@@ -78,7 +78,7 @@ window.__ModuleLoader__.load({
       'stat.peakShare': 'peak {value}',
       'cost.hintUnset': '{count} provider(s) without a billing method are not included',
       'cost.hintUnpriced': 'Usage without a known list price is not included',
-      'cost.hintPeak': 'Share of the list-price value used in peak hours (Beijing time, weekdays 9–12 and 14–18)',
+      'cost.hintPeak': 'For models with peak pricing (DeepSeek), the share of the list-price value used in peak hours (Beijing time, weekdays 9–12 and 14–18)',
       'provider.colCost': 'Spend',
       'provider.setBilling': 'Set',
       'billing.official': 'List price',
@@ -90,7 +90,7 @@ window.__ModuleLoader__.load({
       'billing.miss': 'Cache miss',
       'billing.hit': 'Cache hit',
       'billing.output': 'Output',
-      'billing.unit': '¥ / 1M tokens',
+      'billing.unit': 'per 1M tokens',
       'billing.monthly': '¥ per month',
       'billing.since': 'Since',
       'billing.reset': 'Default',
@@ -98,6 +98,14 @@ window.__ModuleLoader__.load({
       'billing.listValue': 'List price {value}',
       'billing.excluded': 'Excluded',
       'billing.planCell': '{value} / month',
+      'billing.write': 'Cache write',
+      'billing.otherModels': 'Other models',
+      'billing.model': 'Model',
+      'billing.tagPlan': 'plan',
+      'billing.tagCustom': 'own price',
+      'billing.unpriced': 'No list price: {models}',
+      'billing.rate': '$1 = ¥{value}',
+      'billing.rateLabel': 'CNY per USD',
       'stat.rangeTokens': '{range} tokens',
       'action.export': 'Export',
       'action.exportCsv': 'CSV (daily)',
@@ -204,7 +212,7 @@ window.__ModuleLoader__.load({
       'stat.peakShare': '高峰 {value}',
       'cost.hintUnset': '另有 {count} 家未设置计费方式，未计入',
       'cost.hintUnpriced': '部分用量没有已知的官方价，未计入',
-      'cost.hintPeak': '按官方价折算，高峰时段（北京时间工作日 9–12、14–18 点）的占比',
+      'cost.hintPeak': '有高峰 / 空闲时段的模型（DeepSeek）按官方价折算，高峰时段（北京时间工作日 9–12、14–18 点）的占比',
       'provider.colCost': '费用',
       'provider.setBilling': '设置',
       'billing.official': '官方价',
@@ -216,7 +224,7 @@ window.__ModuleLoader__.load({
       'billing.miss': '未命中',
       'billing.hit': '命中',
       'billing.output': '输出',
-      'billing.unit': '元 / 百万 token',
+      'billing.unit': '每百万 token',
       'billing.monthly': '月费（元）',
       'billing.since': '开始日期',
       'billing.reset': '恢复默认',
@@ -224,6 +232,14 @@ window.__ModuleLoader__.load({
       'billing.listValue': '官方价 {value}',
       'billing.excluded': '不计入',
       'billing.planCell': '{value} / 月',
+      'billing.write': '缓存写入',
+      'billing.otherModels': '其他模型',
+      'billing.model': '模型',
+      'billing.tagPlan': '包月',
+      'billing.tagCustom': '单价',
+      'billing.unpriced': '没有官方价：{models}',
+      'billing.rate': '$1 = ¥{value}',
+      'billing.rateLabel': '美元兑人民币',
       'stat.rangeTokens': '{range} Token',
       'action.export': '导出',
       'action.exportCsv': 'CSV（按天）',
@@ -766,18 +782,37 @@ window.__ModuleLoader__.load({
       return !holidaySet().has(key)
     }
 
-    /** 某个模型在某个小时的官方单价 { hit, miss, output, peak }；没有已知价格时返回 null。 */
-    function officialRate(model, epochHour) {
+    /**
+     * 某个模型在某个小时的官方单价（每百万 token）：{ currency, miss, hit, write, output, peak, timed }；没有已知价格时返回 null。
+     *   DeepSeek 的 Flash / Pro：内置的人民币价表（按调用时间选调价、分高峰 / 空闲时段，timed = true），
+     *     2026-08-17 之前没有已知价格（不退回价格表，免得用别家转售的旧价）；
+     *   其他模型：宿主随快照发来的价格表（LiteLLM，美元），缓存读 / 写没有单独价格时按未缓存输入价。
+     */
+    function officialRate(model, epochHour, table) {
       const family = priceFamily(model)
-      if (!family) return null
-      const at = toNumber(epochHour) * 3600000
-      let row = null
-      for (const candidate of OFFICIAL_PRICES) {
-        if (candidate.family === family && candidate.from <= at && (!row || candidate.from > row.from)) row = candidate
+      if (family) {
+        const at = toNumber(epochHour) * 3600000
+        let row = null
+        for (const candidate of OFFICIAL_PRICES) {
+          if (candidate.family === family && candidate.from <= at && (!row || candidate.from > row.from)) row = candidate
+        }
+        if (!row) return null
+        const peak = isPeakHour(epochHour)
+        const price = peak ? row.peak : row.offPeak
+        return { currency: 'CNY', miss: price.miss, hit: price.hit, write: price.miss, output: price.output, peak, timed: true }
       }
-      if (!row) return null
-      const peak = isPeakHour(epochHour)
-      return { ...(peak ? row.peak : row.offPeak), peak }
+      const listed = table && Array.isArray(table[model]) ? table[model] : null
+      if (!listed) return null
+      const [input, output, cacheRead, cacheWrite] = listed
+      if (![input, output].every((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0)) return null
+      const or = (value) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : input)
+      return { currency: 'USD', miss: input, hit: or(cacheRead), write: or(cacheWrite), output, peak: false, timed: false }
+    }
+
+    /** 自定义单价的价目：新写法 { prices: { '*' | 模型: {...} } }；旧写法四个价直接挂在上面，当作 '*'。 */
+    function customPrices(bill) {
+      if (bill && bill.prices && typeof bill.prices === 'object') return bill.prices
+      return bill && typeof bill.miss === 'number' ? { '*': { miss: bill.miss, hit: bill.hit, write: bill.write === undefined ? bill.miss : bill.write, output: bill.output } } : {}
     }
 
     /** 某个供应商的计费方式：本机设置的优先；没设置时官方直连按官方价，其余是「未设置」。 */
@@ -792,19 +827,24 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 一段日期内的费用。slots 是宿主按小时记的 [小时序号, 供应商, 模型, 项目键, 未缓存输入, 缓存读, 缓存写, 输出]。
-     *   value     按官方价折算（所有人都有）；peakValue 是其中高峰时段的部分
-     *   spend     按各家计费方式算出来的实际花费：官方 = value，打折 = value × 倍数，单价 = 自己的单价，
-     *             包月 = 月费按天摊到范围内的每一天（从 since 起；没填就从这一家第一次有用量那天起，到今天为止），
-     *             不计入 = 0，未设置 = 不知道（不算进 spend，列在 unset 里）
+     * 一段日期内的费用（人民币）。slots 是宿主按小时记的 [小时序号, 供应商, 模型, 项目键, 未缓存输入, 缓存读, 缓存写, 输出]。
+     * options：{ table（价格表：模型 → [输入, 输出, 缓存读, 缓存写] 美元 / 百万），usdCny（美元兑人民币） }
+     *   value     按官方价折算（所有人都有；美元价按汇率换算）
+     *   peakValue / peakBase  有高峰 / 空闲时段的模型（DeepSeek）里，高峰时段的部分 / 全部——高峰占比只看这些模型
+     *   spend     按各家计费方式：官方 = value，打折 = value × 倍数，单价 = 这家自己的价目（按模型，没填的模型按官方价），
+     *             包月 = 月费按天摊（从 since 起，没填就从这一家第一次有用量那天起，到今天为止），不计入 = 0，
+     *             未设置 = 不知道（不算进 spend，列在 unset 里）
      * 包月费按当天各项目的官方价折算比例摊到项目上（那天没用量就不摊）。
      */
-    function computeCosts(daily, startKey, endKey, settings, todayKey) {
-      const result = { spend: 0, value: 0, peakValue: 0, unpricedTokens: 0, byProvider: {}, byProject: {}, unset: [] }
+    function computeCosts(daily, startKey, endKey, settings, todayKey, options) {
+      const table = (options && options.table) || {}
+      const usdCny = options && typeof options.usdCny === 'number' && options.usdCny > 0 ? options.usdCny : 1
+      const toCny = (amount, currency) => (currency === 'USD' ? amount * usdCny : amount)
+      const result = { spend: 0, value: 0, peakValue: 0, peakBase: 0, usdValue: 0, unpricedTokens: 0, byProvider: {}, byProject: {}, unset: [] }
       const rowOf = (id) => {
         if (!result.byProvider[id]) {
           const bill = billingOf(id, settings)
-          result.byProvider[id] = { spend: bill.mode === 'unset' ? null : 0, value: 0, unpricedTokens: 0, mode: bill.mode, billing: bill }
+          result.byProvider[id] = { spend: bill.mode === 'unset' ? null : 0, value: 0, unpricedTokens: 0, mode: bill.mode, billing: bill, models: [], unpriced: [] }
         }
         return result.byProvider[id]
       }
@@ -827,26 +867,39 @@ window.__ModuleLoader__.load({
           const read = toNumber(slot[5])
           const write = toNumber(slot[6])
           const output = toNumber(slot[7])
+          const tokens = input + read + write + output
           const row = rowOf(id)
+          if (!row.models.includes(model)) row.models.push(model)
           const bill = row.billing
-          const rate = officialRate(model, hour)
-          const value = rate ? (input * rate.miss + read * rate.hit + write * rate.miss + output * rate.output) / 1e6 : null
+          const rate = officialRate(model, hour, table)
+          const value = rate ? toCny((input * rate.miss + read * rate.hit + write * rate.write + output * rate.output) / 1e6, rate.currency) : null
           if (value === null) {
-            row.unpricedTokens += input + read + write + output
-            result.unpricedTokens += input + read + write + output
+            row.unpricedTokens += tokens
+            result.unpricedTokens += tokens
+            if (!row.unpriced.includes(model)) row.unpriced.push(model)
           } else {
             row.value += value
             result.value += value
-            if (rate.peak) result.peakValue += value
+            if (rate.currency === 'USD') result.usdValue += value
+            if (rate.timed) {
+              result.peakBase += value
+              if (rate.peak) result.peakValue += value
+            }
           }
           let spend = 0
           if (bill.mode === 'official') spend = value === null ? 0 : value
           else if (bill.mode === 'multiplier') spend = value === null ? 0 : value * toNumber(bill.factor)
           else if (bill.mode === 'custom') {
-            spend = (input * toNumber(bill.miss) + read * toNumber(bill.hit) + write * toNumber(bill.write === undefined ? bill.miss : bill.write) + output * toNumber(bill.output)) / 1e6
+            const prices = customPrices(bill)
+            const own = prices[model] || prices['*']
+            if (own) {
+              const currency = bill.currency === 'USD' ? 'USD' : 'CNY'
+              spend = toCny((input * toNumber(own.miss) + read * toNumber(own.hit) + write * toNumber(own.write === undefined ? own.miss : own.write) + output * toNumber(own.output)) / 1e6, currency)
+              if (currency === 'USD') result.usdValue += spend
+            } else spend = value === null ? 0 : value
           } else if (bill.mode === 'plan') {
             const day = planShares.get(`${id}|${entry.date}`) || { total: 0, projects: {} }
-            const weight = value === null ? (input + read + write + output) / 1e9 : value
+            const weight = value === null ? tokens / 1e9 : value
             day.total += weight
             day.projects[project] = toNumber(day.projects[project]) + weight
             planShares.set(`${id}|${entry.date}`, day)
@@ -2608,7 +2661,12 @@ window.__ModuleLoader__.load({
       return Number.isFinite(value) && value >= 0 ? value : null
     }
 
-    /** 编辑器里的草稿 → 要保存的计费方式；不完整时返回 null（「确定」不可点）。 */
+    const PRICE_FIELDS = ['miss', 'hit', 'write', 'output']
+
+    /**
+     * 编辑器里的草稿 → 要保存的计费方式；不完整时返回 null（「确定」不可点）。
+     * 自定义单价按行：一行四格全空就跳过；未命中、命中、输出要填全，缓存写入不填时按未命中价；至少要有一行。
+     */
     function billingDraft(mode, fields) {
       if (mode === 'official' || mode === 'free') return { mode }
       if (mode === 'multiplier') {
@@ -2616,10 +2674,17 @@ window.__ModuleLoader__.load({
         return factor === null || factor > 100 ? null : { mode, factor }
       }
       if (mode === 'custom') {
-        const miss = billingNumber(fields.miss)
-        const hit = billingNumber(fields.hit)
-        const output = billingNumber(fields.output)
-        return miss === null || hit === null || output === null ? null : { mode, miss, hit, write: miss, output }
+        const prices = {}
+        for (const [model, row] of Object.entries(fields.prices || {})) {
+          const values = PRICE_FIELDS.map((field) => String((row && row[field]) || '').trim())
+          if (values.every((value) => !value)) continue
+          const [miss, hit, write, output] = PRICE_FIELDS.map((field) => billingNumber(row[field]))
+          if (miss === null || hit === null || output === null) return null
+          if (values[2] && write === null) return null
+          prices[model] = { miss, hit, write: write === null ? miss : write, output }
+        }
+        if (!Object.keys(prices).length) return null
+        return { mode, currency: fields.currency === 'USD' ? 'USD' : 'CNY', prices }
       }
       if (mode === 'plan') {
         const monthly = billingNumber(fields.monthly)
@@ -2631,20 +2696,36 @@ window.__ModuleLoader__.load({
 
     const BILLING_MODES = ['official', 'multiplier', 'custom', 'plan', 'free']
 
-    /** 供应商卡里展开的一行：选计费方式、填数字。只有标签和输入框；按官方价折算的金额写在左下角作参照。 */
+    /**
+     * 供应商卡里展开的一行：选计费方式、填数字。只有标签和输入框；按官方价折算的金额写在左下角作参照。
+     * 「单价」每个用到的模型一行（外加「其他模型」），四格：未命中 / 命中 / 缓存写入 / 输出，币种可选人民币或美元。
+     */
     function BillingEditor(props) {
       const current = props.billing && BILLING_MODES.includes(props.billing.mode) ? props.billing : { mode: 'official' }
       const [mode, setMode] = useState(current.mode)
       const text = (value) => (value === undefined || value === null ? '' : String(value))
+      const models = (props.models || []).slice().sort()
+      const saved = customPrices(current)
+      const initialPrices = {}
+      for (const model of ['*', ...models]) {
+        const row = saved[model] || {}
+        initialPrices[model] = { miss: text(row.miss), hit: text(row.hit), write: text(row.write), output: text(row.output) }
+      }
+      for (const [model, row] of Object.entries(saved)) {
+        if (!initialPrices[model]) initialPrices[model] = { miss: text(row.miss), hit: text(row.hit), write: text(row.write), output: text(row.output) }
+      }
       const [fields, setFields] = useState({
         factor: text(current.factor),
-        miss: text(current.miss),
-        hit: text(current.hit),
-        output: text(current.output),
         monthly: text(current.monthly),
         since: current.since || '',
+        currency: current.currency === 'USD' ? 'USD' : 'CNY',
+        prices: initialPrices,
       })
       const draft = billingDraft(mode, fields)
+      const onKeyDown = (event) => {
+        if (event.key === 'Enter' && draft) props.onSave(draft)
+        else if (event.key === 'Escape') props.onClose()
+      }
       const field = (name, label, attrs) =>
         h(
           'label',
@@ -2656,23 +2737,71 @@ window.__ModuleLoader__.load({
             inputMode: 'decimal',
             value: fields[name],
             onChange: (event) => setFields({ ...fields, [name]: event.target.value }),
-            onKeyDown: (event) => {
-              if (event.key === 'Enter' && draft) props.onSave(draft)
-              else if (event.key === 'Escape') props.onClose()
-            },
+            onKeyDown,
             ...(attrs || {}),
           }),
         )
+      const priceInput = (model, name) =>
+        h('input', {
+          key: name,
+          className: 'dps-date dps-bill-price',
+          'data-dps-field': `billing-price-${name}`,
+          'data-model': model,
+          'aria-label': `${model === '*' ? t('billing.otherModels') : model} ${t(`billing.${name}`)}`,
+          inputMode: 'decimal',
+          value: fields.prices[model][name],
+          onChange: (event) =>
+            setFields({ ...fields, prices: { ...fields.prices, [model]: { ...fields.prices[model], [name]: event.target.value } } }),
+          onKeyDown,
+        })
       let inputs = null
-      if (mode === 'multiplier') inputs = [field('factor', t('billing.factor'), { placeholder: '0.12' })]
-      else if (mode === 'custom') {
-        inputs = [
-          field('miss', `${t('billing.miss')}（${t('billing.unit')}）`),
-          field('hit', `${t('billing.hit')}（${t('billing.unit')}）`),
-          field('output', `${t('billing.output')}（${t('billing.unit')}）`),
-        ]
-      } else if (mode === 'plan') {
-        inputs = [field('monthly', t('billing.monthly')), field('since', t('billing.since'), { type: 'date', inputMode: undefined, className: 'dps-date' })]
+      if (mode === 'multiplier') inputs = h('div', { className: 'dps-bill-fields' }, field('factor', t('billing.factor'), { placeholder: '0.12' }))
+      else if (mode === 'plan') {
+        inputs = h(
+          'div',
+          { className: 'dps-bill-fields' },
+          field('monthly', t('billing.monthly')),
+          field('since', t('billing.since'), { type: 'date', inputMode: undefined, className: 'dps-date' }),
+        )
+      } else if (mode === 'custom') {
+        const rows = [...models.filter((model) => fields.prices[model]), ...Object.keys(fields.prices).filter((model) => model !== '*' && !models.includes(model)), '*']
+        inputs = h(
+          'div',
+          { className: 'dps-bill-custom' },
+          h(
+            'div',
+            { className: 'dps-bill-currency' },
+            h(Segmented, {
+              control: 'billing-currency',
+              label: t('billing.unit'),
+              value: fields.currency,
+              onChange: (currency) => setFields({ ...fields, currency }),
+              options: [
+                { id: 'CNY', label: '¥' },
+                { id: 'USD', label: '$' },
+              ],
+            }),
+            h('span', { className: 'dps-bill-meta' }, t('billing.unit')),
+          ),
+          h(
+            'div',
+            { className: 'dps-bill-grid', role: 'table' },
+            h(
+              'div',
+              { className: 'dps-bill-gridrow dps-bill-gridhead', role: 'row' },
+              h('span', { role: 'columnheader' }, t('billing.model')),
+              PRICE_FIELDS.map((name) => h('span', { key: name, role: 'columnheader' }, t(`billing.${name}`))),
+            ),
+            rows.map((model) =>
+              h(
+                'div',
+                { key: model, className: 'dps-bill-gridrow', role: 'row', 'data-model': model },
+                h('span', { className: 'dps-bill-model', role: 'cell', title: model === '*' ? t('billing.otherModels') : model }, model === '*' ? t('billing.otherModels') : model),
+                PRICE_FIELDS.map((name) => priceInput(model, name)),
+              ),
+            ),
+          ),
+        )
       }
       return h(
         'div',
@@ -2684,7 +2813,7 @@ window.__ModuleLoader__.load({
           onChange: setMode,
           options: BILLING_MODES.map((id) => ({ id, label: t(`billing.${id}`) })),
         }),
-        inputs ? h('div', { className: 'dps-bill-fields' }, inputs) : null,
+        inputs,
         h(
           'div',
           { className: 'dps-bill-foot' },
@@ -2698,6 +2827,95 @@ window.__ModuleLoader__.load({
           ),
         ),
       )
+    }
+
+    /** 美元兑人民币的汇率：供应商卡标题栏的小按钮，点开填数字；只在有美元计价的用量时出现。 */
+    function RateControl(props) {
+      const [open, setOpen] = useState(false)
+      const [draft, setDraft] = useState('')
+      const value = billingNumber(draft)
+      const valid = value !== null && value >= 0.1 && value <= 100
+      const shown = Number(props.rate).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
+      return h(
+        'div',
+        { className: 'dps-menu dps-rate', 'data-dps-control': 'usd-rate' },
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dps-ghost',
+            'data-dps-action': 'usd-rate',
+            'aria-expanded': open ? 'true' : 'false',
+            onClick: () => {
+              setDraft(shown)
+              setOpen(!open)
+            },
+          },
+          t('billing.rate', { value: shown }),
+        ),
+        open
+          ? h(
+              'div',
+              { className: 'dps-menu-pop dps-range-pop', role: 'dialog', 'aria-label': t('billing.rateLabel') },
+              h(
+                'label',
+                { className: 'dps-date-field' },
+                h('span', null, t('billing.rateLabel')),
+                h('input', {
+                  className: 'dps-date dps-bill-input',
+                  'data-dps-field': 'usd-rate',
+                  inputMode: 'decimal',
+                  value: draft,
+                  autoFocus: true,
+                  onChange: (event) => setDraft(event.target.value),
+                  onKeyDown: (event) => {
+                    if (event.key === 'Enter' && valid) {
+                      setOpen(false)
+                      props.onSave(value)
+                    } else if (event.key === 'Escape') setOpen(false)
+                  },
+                }),
+              ),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dps-btn',
+                  'data-dps-action': 'usd-rate-reset',
+                  onClick: () => {
+                    setOpen(false)
+                    props.onSave(null)
+                  },
+                },
+                t('billing.reset'),
+              ),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dps-btn',
+                  'data-primary': 'true',
+                  'data-dps-action': 'usd-rate-save',
+                  disabled: !valid,
+                  onClick: () => {
+                    setOpen(false)
+                    props.onSave(value)
+                  },
+                },
+                t('action.apply'),
+              ),
+            )
+          : null,
+      )
+    }
+
+    /** 费用格前面的小标签：打折写倍数（×0.12），包月、自定义单价各写一个词；官方价不写。 */
+    function billingTag(bill) {
+      if (!bill) return ''
+      if (bill.mode === 'multiplier') return `×${Number(bill.factor)}`
+      if (bill.mode === 'plan') return t('billing.tagPlan')
+      if (bill.mode === 'custom') return t('billing.tagCustom')
+      return ''
     }
 
     /** 供应商这一行的费用格：未设置写「设置」，不计入写「不计入」，包月悬停写月费；点一下展开计费方式。 */
@@ -2729,6 +2947,8 @@ window.__ModuleLoader__.load({
         const bill = cost ? cost.billing : billingOf(row.id, props.billingSettings)
         const titleParts = [t('billing.listValue', { value: formatMoney(cost ? cost.value : 0) })]
         if (bill && bill.mode === 'plan') titleParts.push(t('billing.planCell', { value: formatMoney(bill.monthly) }))
+        if (cost && cost.unpriced.length) titleParts.push(t('billing.unpriced', { models: cost.unpriced.join('、') }))
+        const tag = billingTag(bill)
         return h(
           'span',
           { className: 'dps-prov-costcell', role: 'cell' },
@@ -2745,6 +2965,7 @@ window.__ModuleLoader__.load({
               title: titleParts.join(' · '),
               onClick: () => setBillingOpen(billingOpen === row.id ? null : row.id),
             },
+            tag ? h('span', { className: 'dps-cost-tag', 'data-dps-field': 'billing-tag' }, tag) : null,
             costCellText(cost || { mode: bill.mode, spend: 0 }),
           ),
         )
@@ -2823,6 +3044,10 @@ window.__ModuleLoader__.load({
             h('span', { className: 'dps-panel-meta', 'data-dps-field': 'provider-total', 'data-value': data.total }, t('chart.total', { value: formatTokens(data.total) })),
           ),
           h(
+            'div',
+            { className: 'dps-panel-tools' },
+            costs && costs.usdValue > 0 ? h(RateControl, { rate: props.usdCny, onSave: props.onRate }) : null,
+            h(
             'button',
             {
               type: 'button',
@@ -2832,6 +3057,7 @@ window.__ModuleLoader__.load({
               onClick: () => props.onTodayOnly(!todayOnly),
             },
             t('provider.today'),
+          ),
           ),
         ),
         data.rows.length === 0
@@ -2877,6 +3103,7 @@ window.__ModuleLoader__.load({
                         label: providerLabel(row.id, aliases),
                         billing: (costs && costs.byProvider[row.id] && costs.byProvider[row.id].billing) || billingOf(row.id, props.billingSettings),
                         listValue: costs && costs.byProvider[row.id] ? costs.byProvider[row.id].value : 0,
+                        models: costs && costs.byProvider[row.id] ? costs.byProvider[row.id].models : [],
                         onClose: () => setBillingOpen(null),
                         onSave: (entry) => {
                           setBillingOpen(null)
@@ -3126,11 +3353,11 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-kpi-sub{font-size:12px;color:var(--dps-muted);white-space:nowrap;font-variant-numeric:tabular-nums}
 .dps-kpi-badge{margin-left:auto;flex:0 0 auto;font-size:11.5px;color:var(--dps-muted);white-space:nowrap;font-variant-numeric:tabular-nums}
 .dps-unit.dps-unit-pre{margin:0 2px 0 0}
-.dps-range-menu .dps-range-pop{flex-direction:row;align-items:flex-end;gap:10px;padding:12px}
+.dps-menu .dps-range-pop{flex-direction:row;align-items:flex-end;gap:10px;padding:12px}
 .dps-date-field{display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--dps-muted);white-space:nowrap}
 .dps-date{height:30px;padding:0 8px;border:1px solid var(--dps-line);border-radius:8px;background:var(--dps-card);color:var(--dps-ink);font:inherit;font-size:12.5px;color-scheme:light}
 body[data-ds-dark-theme] .dps-date{color-scheme:dark}
-.dps-range-pop .dps-btn{height:30px;padding:0 14px;border-radius:8px;text-align:center}
+.dps-range-pop .dps-btn{height:30px;padding:0 14px;border-radius:8px;text-align:center;border:1px solid var(--dps-line);background:var(--dps-card)}
 .dps-btn[data-primary="true"]{background:var(--dps-accent);border-color:transparent;color:var(--dps-on-accent);font-weight:600}
 .dps-btn[data-primary="true"]:hover{background:var(--dps-accent);filter:brightness(1.06)}
 .dps-btn:disabled{opacity:.45;cursor:default}
@@ -3290,6 +3517,15 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
 .dps-bill .dps-seg{align-self:flex-start}
 .dps-bill-fields{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px}
 .dps-bill-input{width:104px}
+.dps-bill-custom{display:flex;flex-direction:column;gap:8px}
+.dps-bill-currency{display:flex;align-items:center;gap:10px}
+.dps-bill-grid{display:flex;flex-direction:column;gap:6px}
+.dps-bill-gridrow{display:grid;grid-template-columns:minmax(0,1fr) repeat(4,58px);align-items:center;gap:6px}
+.dps-bill-gridhead{font-size:11px;color:var(--dps-faint)}
+.dps-bill-gridhead span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dps-bill-model{min-width:0;font-size:12px;color:var(--dps-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dps-bill-price{width:100%;height:28px;padding:0 6px;font-size:12px;font-variant-numeric:tabular-nums}
+.dps-cost-tag{display:inline-block;margin-right:5px;padding:0 4px;border-radius:4px;background:var(--dps-track);color:var(--dps-muted);font-size:10.5px;font-weight:600;line-height:16px;vertical-align:1px}
 .dps-bill-foot{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
 .dps-bill-meta{margin-right:auto;font-size:12px;color:var(--dps-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .dps-bill .dps-btn{height:28px;padding:0 12px}
@@ -3851,7 +4087,7 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
       const shownCost = useTween(ready && costs ? costs.spend : 0, 900)
       // 所有有用量的供应商都没设置计费方式时，不知道花了多少：显示「—」
       const costKnown = Boolean(costs) && Object.values(costs.byProvider).some((row) => row.mode !== 'unset')
-      const peakShare = costs && costs.value > 0 ? (costs.peakValue / costs.value) * 100 : null
+      const peakShare = costs && costs.peakBase > 0 ? (costs.peakValue / costs.peakBase) * 100 : null
       const costHints = []
       if (costs && costs.unset.length) costHints.push(t('cost.hintUnset', { count: costs.unset.length }))
       if (costs && costs.unpricedTokens > 0) costHints.push(t('cost.hintUnpriced'))
@@ -4037,11 +4273,33 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
         }
         return merged
       }, [snapshotBilling, billingEdits])
+      // 价格表（宿主只带用到的模型，美元）与汇率：本机设置的优先，其次是这次刚改的，最后是宿主给的默认值
+      const priceTable = (snapshot && snapshot.prices && snapshot.prices.models) || null
+      const [rateEdit, setRateEdit] = useState(undefined)
+      const snapshotRate = snapshot && snapshot.billing && typeof snapshot.billing.usdCny === 'number' ? snapshot.billing.usdCny : null
+      const defaultRate = snapshot && snapshot.prices && typeof snapshot.prices.defaultUsdCny === 'number' ? snapshot.prices.defaultUsdCny : 7
+      const usdCny = rateEdit !== undefined ? (rateEdit === null ? defaultRate : rateEdit) : snapshotRate !== null ? snapshotRate : defaultRate
+      const priceOptions = useMemo(() => ({ table: priceTable, usdCny }), [priceTable, usdCny])
       const costs = useMemo(
-        () => computeCosts(daily, rangeWin.startKey, rangeWin.endKey, billingSettings, todayKey),
-        [daily, rangeWin.startKey, rangeWin.endKey, billingSettings, todayKey],
+        () => computeCosts(daily, rangeWin.startKey, rangeWin.endKey, billingSettings, todayKey, priceOptions),
+        [daily, rangeWin.startKey, rangeWin.endKey, billingSettings, todayKey, priceOptions],
       )
-      const todayCosts = useMemo(() => computeCosts(daily, todayKey, todayKey, billingSettings, todayKey), [daily, billingSettings, todayKey])
+      const todayCosts = useMemo(() => computeCosts(daily, todayKey, todayKey, billingSettings, todayKey, priceOptions), [daily, billingSettings, todayKey, priceOptions])
+      const saveRate = useCallback(
+        async (value) => {
+          setRateEdit(value)
+          try {
+            const response = await fetch(BILLING_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ usdCny: value }) })
+            const result = await response.json().catch(() => null)
+            if (!response.ok || !result || result.ok !== true) throw new Error((result && result.error) || `HTTP ${response.status}`)
+            reload()
+          } catch (error) {
+            console.warn('[dsh-profile-stats] 保存汇率失败：', error && error.message ? error.message : error)
+            if (mounted.current) setRateEdit(undefined)
+          }
+        },
+        [reload, mounted],
+      )
       const saveBilling = useCallback(
         async (id, entry) => {
           setBillingEdits((current) => ({ ...current, [id]: entry }))
@@ -4146,7 +4404,9 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
             currency: 'CNY',
             spend: costs.spend,
             officialValue: costs.value,
-            peakShare: costs.value > 0 ? costs.peakValue / costs.value : null,
+            peakShare: costs.peakBase > 0 ? costs.peakValue / costs.peakBase : null,
+            usdCny,
+            priceTableDate: (snapshot && snapshot.prices && snapshot.prices.fetchedAt) || null,
             unpricedTokens: costs.unpricedTokens,
             unsetProviders: costs.unset,
             byProvider: Object.fromEntries(Object.entries(costs.byProvider).map(([id, row]) => [id, { mode: row.mode, spend: row.spend, officialValue: row.value }])),
@@ -4254,6 +4514,8 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
               todayCosts,
               billingSettings,
               onBilling: saveBilling,
+              usdCny,
+              onRate: saveRate,
             }),
           ),
         ),
