@@ -9,12 +9,13 @@ Back to the [README](../README.md) · [中文 README](../README.zh.md)
 | Cumulative tokens | Per `assistant/message` step: uncached input + cache read + cache write + output, summed over all sessions. DSH logs the four parts disjointly (`inputTokens` is only the uncached part), so nothing is counted twice. `totalTokens` is used only when all four parts are missing; a step whose `totalTokens` disagrees with the sum is counted in `usageMismatchCalls` and never used to adjust a number. Some steps in older DSH logs (Aug–Sep 2026) have no `totalTokens`; the earlier `max(totalTokens, input + output)` dropped their cache. |
 | Today's tokens | The same per-step sum restricted to today's local calendar day. |
 | Longest task | Longest span between a `turn/start` and its `turn/end`. Turns interrupted without a `turn/end` are not counted. |
-| Streaks | An active day has at least one token. The current streak ends today, or yesterday when today has no activity yet. |
+| Streaks | An active day has at least one token. The current streak ends today, or yesterday when today has no activity yet. One card shows the current streak with the longest beside it. |
+| Cache hit today | Today's cache read ÷ (uncached input + cache read + cache write); "—" until today has input. |
 | Token activity | Last 53 weeks (this week plus 52), weeks start on Monday. *Daily* colours each day by the quartile of non-zero days; *Weekly* draws one bar per week total; *Cumulative* is the running total including usage older than the window, so its last point equals the cumulative tokens. |
-| Time range | Header switch: last 7 / 30 / 90 days (today included) or all time. The first number, the model distribution, Token mix and the provider split are summed from daily entries inside the range, so they always agree; today's tokens, longest task and the streaks stay all-time. The first card's trend shows one bar per day (today highlighted) for 7 and 30 days, and the 7-day moving average for 90 days and all time (all time draws the last 90 days); hovering shows the day and its value. The delta chip compares the finished days of the current period (today excluded) with the same number of days at the start of the previous period, and is hidden when the previous period starts before the first day with data. Export writes the selected range as CSV (one row per day: `input`, `output`, `cache_read`, `cache_write`, then a column per provider) or JSON (adds each provider's four parts and `usageMismatchCalls`). |
+| Time range | Header switch: last 7 / 30 / 90 days (today included), this month (the 1st to today), all time, or custom dates (two date fields; reversed dates are swapped, the end is capped at today, and the window may lie entirely in the past, in which case the charts and the delta end at its last day). The first number, the model distribution, Token mix and the provider split are summed from daily entries inside the range, so they always agree; today's tokens, longest task and the streaks stay all-time. The first card's trend shows one bar per day (today highlighted) for 7 and 30 days, and the 7-day moving average for 90 days and all time (all time draws the last 90 days); hovering shows the day and its value. The first card's trend uses bars whenever the window is 31 days or shorter. The delta chip compares the finished days of the current period (today excluded) with the same number of days at the start of the previous period — for this month, the same days of last month, capped at its last day; for a custom window, the window of equal length before it — and is hidden when the previous period starts before the first day with data. Export writes the selected range as CSV (one row per day: `input`, `output`, `cache_read`, `cache_write`, then a column per provider) or JSON (adds each provider's four parts and `usageMismatchCalls`). |
 | Token mix (Cache Lens) | The four parts as logged, nothing inferred: cache hit = `cacheReadTokens`, cache write = `cacheWriteTokens` (a row only when non-zero), uncached input = `inputTokens`, output = `outputTokens`; they add up to the total. **Cache hit rate = cache hit ÷ (uncached input + cache hit + cache write)**: a write is billed and is not a hit, so it is in the denominator only. Without writes this is DeepSeek's hit ÷ (hit + miss). The percentage column is over all input (so the cache-hit row equals the hit rate), output has none; the zoomed view's denominator is everything except hits (uncached input + cache write + output), which its column header says. |
 | Model split | Calendar buckets (days, Monday weeks or months) covering the selected range, including empty ones; a bucket that starts before the range counts only days inside it and is labelled with the dates it really holds. Granularity options are fixed per range: 7 days → day; 30 days → day / week; 90 days → week / month; all time → day / week up to a month of data, week / month up to two years, month beyond. DeepSeek ids are grouped by version and tier (`deepseek-v4-1-flash-261017`, `deepseek-v4.1-flash` → DeepSeek V4.1 Flash; the unversioned official `deepseek-flash` alias → V4.1 Flash). Other vendors keep their own family (`gemini-2-5-pro` → Gemini 2.5 Pro). The top six families get their own colour; the rest are merged into "Other models (N)". |
-| Provider breakdown | Per-step `data.message.source.provider`, e.g. `deepseek-official`, `deepseek-account`. Shares are of the selected range's total; unknown ids are shown as they are. Each row has its own cache hit rate from that provider's four parts (the "Other" row uses their combined parts). The **Today** button shows today only; switching the header range releases it. |
+| Provider breakdown | Per-step `data.message.source.provider`, e.g. `deepseek-official`, `deepseek-account`. Shares are of the selected range's total; unknown ids are shown as they are. Each row has its own cache hit rate from that provider's four parts (the "Other" row uses their combined parts). The **Today** button shows today only; switching the header range releases it. The pencil beside a name renames that provider on this machine only (see *Provider names* below). |
 | Number format | ≥ 1 亿 → 亿, ≥ 1 万 → 万, one decimal; every sum and share is computed on raw integers and formatted only when drawn. Shares below 0.05% read "<0.1%". |
 
 ### Why the provider breakdown exists
@@ -47,6 +48,7 @@ Host half (`index.js`):
   `firstScan: true` marks the first full scan (empty cache, or resuming an interrupted first scan)
 - `POST /api/dsh-profile-stats/refresh` — force an immediate rescan (the refresh button)
 - `POST /api/dsh-profile-stats/update` — request the in-panel update (registry installs only)
+- `POST /api/dsh-profile-stats/alias` — `{ provider, name }` sets a provider's display name; an empty name removes it
 - Reads sessions through `ctx.sessionQuery` (`listSessions`, `readSession`), folds each session and caches
   the fold; only sessions that are still running or were never folded get re-read.
 - Freshness does not depend on the page being open: the host checks every minute and rescans silently once
@@ -68,7 +70,8 @@ leave the machine.
 Snapshot fields:
 
 ```
-top:     ok, generatedAt, scanning, firstScan, progress {done, total}, identity, failedSessions
+top:     ok, generatedAt, scanning, firstScan, progress {done, total}, identity, failedSessions,
+         aliases {providers {id: name}}
 totals:  tokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, calls,
          sessions, activeDays, firstDay, lastDay,
          peakDay {date, tokens}, peakStepTokens, peakSessionTokens, longestTurnMs,
@@ -120,6 +123,13 @@ account name**. Precedence:
 
 The snapshot reports `identity.source` (`file` or `os`) and `identity.file` (the exact path).
 
+## Provider names
+
+The code ships no provider names beyond the host's built-in ids, so other routes show their raw id. Rename one
+with the pencil on the provider card; the name is saved to `$DSH_HOME/dsh-profile-stats/aliases.json`
+(`{ "providers": { "<id>": "<name>" } }`, up to 40 characters each) and is never part of the package or this
+repository. Hovering a renamed row shows the original id. Clear the name to go back to the id.
+
 ## Uninstall
 
 Disable or remove the bundle in **Plugins**. The plugin writes only these, all outside the package:
@@ -127,6 +137,7 @@ Disable or remove the bundle in **Plugins**. The plugin writes only these, all o
 ```
 $DSH_HOME/dsh-profile-stats/cache.json      # default: ~/.dsh/dsh-profile-stats/cache.json
 $DSH_HOME/dsh-profile-stats/profile.json    # optional display-name override
+$DSH_HOME/dsh-profile-stats/aliases.json    # provider names you set on the provider card
 $DSH_HOME/dsh-profile-stats/update.json     # last in-panel update result
 ```
 
