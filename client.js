@@ -65,6 +65,13 @@ window.__ModuleLoader__.load({
       'stat.best': 'best {n}d',
       'stat.todayHit': 'Cache hit today',
       'provider.rename': 'Rename',
+      'section.project': 'Projects',
+      'project.colName': 'Project',
+      'project.colSubagent': 'Subagents',
+      'project.unknown': 'Unknown project',
+      'project.others': 'Other projects ({count})',
+      'model.modeTokens': 'Tokens',
+      'model.modeShare': 'Share',
       'stat.rangeTokens': '{range} tokens',
       'action.export': 'Export',
       'action.exportCsv': 'CSV (daily)',
@@ -125,6 +132,8 @@ window.__ModuleLoader__.load({
       'aria.spark': 'Daily token trend (7-day average)',
       'aria.sparkDaily': 'Tokens per day',
       'aria.range': 'Time range',
+      'aria.hitTrend': 'Daily cache hit rate',
+      'lens.hitTrend': 'Daily cache hit rate',
     }
 
     const ZH = {
@@ -157,6 +166,13 @@ window.__ModuleLoader__.load({
       'stat.best': '最长 {n} 天',
       'stat.todayHit': '今日缓存命中率',
       'provider.rename': '改名',
+      'section.project': '项目',
+      'project.colName': '项目',
+      'project.colSubagent': '子代理',
+      'project.unknown': '未知项目',
+      'project.others': '其他项目（{count}）',
+      'model.modeTokens': '用量',
+      'model.modeShare': '占比',
       'stat.rangeTokens': '{range} Token',
       'action.export': '导出',
       'action.exportCsv': 'CSV（按天）',
@@ -217,6 +233,8 @@ window.__ModuleLoader__.load({
       'aria.spark': '每日用量趋势（7 日均线）',
       'aria.sparkDaily': '每日用量',
       'aria.range': '时间范围',
+      'aria.hitTrend': '每日缓存命中率',
+      'lens.hitTrend': '每日缓存命中率',
     }
 
     const localeBridge = {
@@ -536,6 +554,8 @@ window.__ModuleLoader__.load({
         byProvider: {},
         providerUsage: {},
         byModel: {},
+        byProject: {},
+        byProjectSubagent: {},
         days: 0,
         activeDays: 0,
       }
@@ -566,6 +586,12 @@ window.__ModuleLoader__.load({
         }
         for (const [id, amount] of Object.entries(entry.byModel || {})) {
           summary.byModel[id] = toNumber(summary.byModel[id]) + toNumber(amount)
+        }
+        for (const [id, amount] of Object.entries(entry.byProject || {})) {
+          summary.byProject[id] = toNumber(summary.byProject[id]) + toNumber(amount)
+        }
+        for (const [id, amount] of Object.entries(entry.byProjectSubagent || {})) {
+          summary.byProjectSubagent[id] = toNumber(summary.byProjectSubagent[id]) + toNumber(amount)
         }
       }
       return summary
@@ -1727,6 +1753,9 @@ window.__ModuleLoader__.load({
       const empty = data.total <= 0
       // 悬浮 / 键盘选中的桶只在同一范围、同一粒度下有效，换了就自然失效
       const scope = `${rangeKey}|${granularity}`
+      // 用量（堆叠高度 = token 数）/ 占比（每根柱子铺满 100%，看各模型的比例怎么变）；换范围不重置
+      const [mode, setMode] = useState('tokens')
+      const share = mode === 'share'
       const [activeState, setActiveState] = useState(null)
       const active = activeState && activeState.scope === scope && activeState.index < count ? activeState.index : null
       const setActive = (index) => setActiveState(index === null || index === undefined ? null : { scope, index })
@@ -1761,11 +1790,12 @@ window.__ModuleLoader__.load({
         setActive(next)
       }
 
-      const ticks = data.axis.ticks
-      const axisMax = data.axis.max
+      const ticks = share ? [0, 25, 50, 75, 100] : data.axis.ticks
+      const axisMax = share ? 100 : data.axis.max
+      const tickText = (tick) => (share ? `${tick}%` : formatAxis(tick))
 
       const columns = data.buckets.map((bucket, position) => {
-        const height = axisMax > 0 ? (bucket.total / axisMax) * 100 : 0
+        const height = share ? (bucket.total > 0 ? 100 : 0) : axisMax > 0 ? (bucket.total / axisMax) * 100 : 0
         return h(
           'div',
           {
@@ -1803,7 +1833,7 @@ window.__ModuleLoader__.load({
         const bucket = data.buckets[active]
         const rect = barsRef.current.getBoundingClientRect()
         const columnWidth = rect.width / count
-        const top = rect.top + rect.height * (1 - (axisMax > 0 ? bucket.total / axisMax : 0))
+        const top = share ? rect.top : rect.top + rect.height * (1 - (axisMax > 0 ? bucket.total / axisMax : 0))
         const title = bucketTitle(bucket, granularity)
         const rows = data.series
           .map((item, position) => ({ item, value: bucket.segments[position] ? bucket.segments[position].value : 0 }))
@@ -1824,7 +1854,7 @@ window.__ModuleLoader__.load({
                     { key: row.item.key, className: 'dps-pop-row' },
                     h('i', { style: { background: row.item.color } }),
                     h('span', { className: 'dps-pop-name' }, row.item.name),
-                    h('span', { className: 'dps-pop-num' }, formatTokens(row.value)),
+                    h('span', { className: 'dps-pop-num' }, share ? formatPercent((row.value / bucket.total) * 100) : formatTokens(row.value)),
                   ),
                 ),
                 rows.length > 1
@@ -1863,7 +1893,7 @@ window.__ModuleLoader__.load({
 
       return h(
         'section',
-        { className: 'dps-panel dps-mc', 'data-dps-card': 'model', 'data-grain': granularity, 'data-empty': empty ? 'true' : 'false' },
+        { className: 'dps-panel dps-mc', 'data-dps-card': 'model', 'data-grain': granularity, 'data-mode': mode, 'data-empty': empty ? 'true' : 'false' },
         h(
           'header',
           { className: 'dps-panel-head' },
@@ -1877,18 +1907,35 @@ window.__ModuleLoader__.load({
               t('chart.total', { value: formatTokens(data.total) }),
             ),
           ),
-          available.length > 1
-            ? h(Segmented, {
-                control: 'model-grain',
-                label: t('section.model'),
-                value: granularity,
-                onChange: (next) => {
-                  setPicked({ range: rangeKey, value: next })
-                  setActive(null)
-                },
-                options: available.map((id) => ({ id, label: t(`grain.${id}`) })),
-              })
-            : null,
+          h(
+            'div',
+            { className: 'dps-panel-tools' },
+            h(Segmented, {
+              control: 'model-mode',
+              label: t('section.model'),
+              value: mode,
+              onChange: (next) => {
+                setMode(next)
+                setActive(null)
+              },
+              options: [
+                { id: 'tokens', label: t('model.modeTokens') },
+                { id: 'share', label: t('model.modeShare') },
+              ],
+            }),
+            available.length > 1
+              ? h(Segmented, {
+                  control: 'model-grain',
+                  label: t('section.model'),
+                  value: granularity,
+                  onChange: (next) => {
+                    setPicked({ range: rangeKey, value: next })
+                    setActive(null)
+                  },
+                  options: available.map((id) => ({ id, label: t(`grain.${id}`) })),
+                })
+              : null,
+          ),
         ),
         h(
           'div',
@@ -1897,7 +1944,7 @@ window.__ModuleLoader__.load({
             'div',
             { className: 'dps-mc-axis', 'aria-hidden': true },
             ticks.map((tick) =>
-              h('span', { key: tick, 'data-tick': tick, style: { bottom: `${(tick / axisMax) * 100}%` } }, empty && tick > 0 ? '' : formatAxis(tick)),
+              h('span', { key: tick, 'data-tick': tick, style: { bottom: `${(tick / axisMax) * 100}%` } }, empty && tick > 0 ? '' : tickText(tick)),
             ),
           ),
           h(
@@ -1923,7 +1970,7 @@ window.__ModuleLoader__.load({
               { className: 'dps-mc-grid', 'aria-hidden': true },
               ticks.map((tick) => h('i', { key: tick, style: { bottom: `${(tick / axisMax) * 100}%` } })),
             ),
-            h('div', { ref: barsRef, className: 'dps-mc-bars', 'data-dps-chart': 'model', key: granularity }, columns),
+            h('div', { ref: barsRef, className: 'dps-mc-bars', 'data-dps-chart': 'model', key: `${granularity}|${mode}` }, columns),
             empty ? h('div', { className: 'dps-mc-empty' }, t('chart.empty')) : null,
           ),
           h('span', { className: 'dps-mc-corner', 'aria-hidden': true }),
@@ -1985,6 +2032,104 @@ window.__ModuleLoader__.load({
       write: 'color-mix(in srgb,var(--dps-accent) 42%,transparent)',
       input: 'var(--dsw-alias-state-warn-primary)',
       output: 'var(--dsw-alias-state-success-primary)',
+    }
+
+    /**
+     * 每日缓存命中率（Token 构成卡的底部）：一天一个点，命中 ÷ 全部输入。没有输入的日子没有命中率，
+     * 线直接连到下一个有数的日子（不画成 0）。纵轴从数据最低点往下取整到 5% 起、到 100%，
+     * 左侧写出上下两端的刻度，否则 90% 以上的起伏看不出来。悬停显示日期与当天的命中率。
+     */
+    function HitTrend(props) {
+      const points = props.points || []
+      const count = points.length
+      const hasRate = (point) => point && point.rate !== null && point.rate !== undefined
+      const known = points.filter(hasRate)
+      const [hover, setHover] = useState(null)
+      const wrapRef = useRef(null)
+      const pointer = usePointer()
+      if (known.length < 2) return null
+      let lowest = 100
+      for (const point of known) lowest = Math.min(lowest, point.rate)
+      const floor = Math.max(0, Math.min(95, Math.floor((lowest - 1) / 5) * 5))
+      const width = Math.max(count * 4, 8)
+      const height = 40
+      const xOf = (index) => (count <= 1 ? width / 2 : (index / (count - 1)) * width)
+      const yOf = (rate) => height - ((rate - floor) / (100 - floor)) * (height - 4) - 2
+      const line = points
+        .map((point, index) => (hasRate(point) ? `${xOf(index).toFixed(2)} ${yOf(point.rate).toFixed(2)}` : null))
+        .filter(Boolean)
+        .map((xy, index) => `${index === 0 ? 'M' : 'L'}${xy}`)
+        .join(' ')
+      let lastIndex = count - 1
+      while (lastIndex >= 0 && !hasRate(points[lastIndex])) lastIndex -= 1
+      const marked = hover !== null && hasRate(points[hover]) ? hover : lastIndex
+      const indexAt = (clientX) => {
+        const node = wrapRef.current
+        if (!node || typeof node.getBoundingClientRect !== 'function') return null
+        const rect = node.getBoundingClientRect()
+        if (!(rect.width > 0)) return null
+        return Math.max(0, Math.min(count - 1, Math.round(((clientX - rect.left) / rect.width) * (count - 1))))
+      }
+      let tip = null
+      if (hover !== null && points[hover] && wrapRef.current && typeof wrapRef.current.getBoundingClientRect === 'function') {
+        const rect = wrapRef.current.getBoundingClientRect()
+        const point = points[hover]
+        const date = parseDateKey(point.key)
+        tip = h(
+          Popover,
+          { pointer, anchor: { left: rect.left + (count > 1 ? hover / (count - 1) : 0.5) * rect.width, top: rect.top, width: 0, height: rect.height } },
+          h('div', { className: 'dps-pop-title' }, date ? formatDate(date, { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' }) : point.key),
+          h('div', { className: 'dps-pop-value' }, hasRate(point) ? `${t('lens.cacheHit')} ${formatPercent(point.rate)}` : t('tip.none')),
+        )
+      }
+      return h(
+        'div',
+        { className: 'dps-hit', 'data-dps-field': 'hit-trend', 'data-floor': floor },
+        h('div', { className: 'dps-hit-label' }, t('lens.hitTrend')),
+        h(
+          'div',
+          { className: 'dps-hit-body' },
+          h(
+            'div',
+            { className: 'dps-hit-axis', 'aria-hidden': true },
+            h('span', { style: { top: '0%' } }, '100%'),
+            h('span', { style: { top: '100%' } }, `${floor}%`),
+          ),
+          h(
+            'span',
+            {
+              ref: wrapRef,
+              className: 'dps-spark-wrap dps-hit-plot',
+              onMouseEnter: (event) => {
+                pointer.move(event.clientX, event.clientY)
+                setHover(indexAt(event.clientX))
+              },
+              onMouseMove: (event) => {
+                pointer.move(event.clientX, event.clientY)
+                const index = indexAt(event.clientX)
+                if (index !== hover) setHover(index)
+              },
+              onMouseLeave: () => {
+                pointer.leave()
+                setHover(null)
+              },
+            },
+            h(
+              'svg',
+              { className: 'dps-spark dps-hit-svg', viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: 'none', role: 'img', 'aria-label': t('aria.hitTrend') },
+              h('path', { className: 'dps-spark-line', d: line, 'data-dps-field': 'hit-line' }),
+            ),
+            marked >= 0
+              ? h('span', {
+                  className: 'dps-spark-end',
+                  'aria-hidden': true,
+                  style: { left: `${(xOf(marked) / width) * 100}%`, top: `${(yOf(points[marked].rate) / height) * 100}%` },
+                })
+              : null,
+          ),
+        ),
+        tip,
+      )
     }
 
     function LensCard(props) {
@@ -2161,6 +2306,8 @@ window.__ModuleLoader__.load({
               ),
             ),
         ),
+        // 放大视图里也留着：卡片高度不变，命中率的走势和缓存也相关
+        h(HitTrend, { points: props.hitSeries }),
         tip,
       )
     }
@@ -2341,6 +2488,135 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /* ------------------------------------------------------------ 项目 */
+
+    const PROJECT_ROWS = 8
+
+    /** 路径的最后 n 段（Windows / POSIX 分隔符都认）。 */
+    function pathTail(path, segments) {
+      const parts = String(path || '').split(/[\\/]+/).filter(Boolean)
+      return parts.length ? parts.slice(-segments).join('/') : String(path || '')
+    }
+
+    /**
+     * byProject（各项目 token）+ byProjectSubagent（其中子代理会话的部分）+ paths（项目键 → 完整路径）
+     * → 降序行；前 8 个各一行，其余合成「其他项目（N）」。名字取文件夹名；同名时带上上一级目录区分。
+     */
+    function deriveProjects(byProject, byProjectSubagent, paths) {
+      const sub = byProjectSubagent || {}
+      const pathOf = paths || {}
+      const entries = Object.entries(byProject || {})
+        .map(([id, tokens]) => ({ id, tokens: toNumber(tokens), subagent: Math.min(toNumber(sub[id]), toNumber(tokens)), path: pathOf[id] || id }))
+        .filter((row) => row.tokens > 0)
+        .sort((left, right) => right.tokens - left.tokens || (left.id < right.id ? -1 : 1))
+      const total = entries.reduce((sum, row) => sum + row.tokens, 0)
+      const subagentTotal = entries.reduce((sum, row) => sum + row.subagent, 0)
+      const rows = entries.slice(0, PROJECT_ROWS)
+      const rest = entries.slice(PROJECT_ROWS)
+      // 文件夹名重复时逐级往上加目录，直到能区分（最多 3 级）
+      const names = new Map()
+      for (const row of rows) {
+        if (!row.id) continue
+        let depth = 1
+        const clash = () => rows.some((other) => other !== row && other.id && pathTail(other.path, depth) === pathTail(row.path, depth))
+        while (depth < 3 && clash()) depth += 1
+        names.set(row.id, pathTail(row.path, depth))
+      }
+      const out = rows.map((row) => ({ ...row, name: row.id ? names.get(row.id) : '', other: false }))
+      if (rest.length > 0) {
+        out.push({
+          id: '__other',
+          tokens: rest.reduce((sum, row) => sum + row.tokens, 0),
+          subagent: rest.reduce((sum, row) => sum + row.subagent, 0),
+          path: rest.map((row) => row.path || row.id).join('\n'),
+          name: '',
+          other: true,
+          count: rest.length,
+        })
+      }
+      return {
+        total,
+        subagentTotal,
+        rows: out.map((row) => ({
+          ...row,
+          share: total > 0 ? (row.tokens / total) * 100 : 0,
+          subagentShare: row.tokens > 0 ? (row.subagent / row.tokens) * 100 : 0,
+        })),
+      }
+    }
+
+    function projectLabel(row) {
+      if (row.other) return t('project.others', { count: row.count })
+      return row.id ? row.name : t('project.unknown')
+    }
+
+    /** 项目卡：跟随顶部范围，按工作目录拆 token；进度条里浅色那段是子代理会话的用量。 */
+    function ProjectCard(props) {
+      const summary = props.summary || emptySummary()
+      const data = useMemo(() => deriveProjects(summary.byProject, summary.byProjectSubagent, props.paths), [summary, props.paths])
+      return h(
+        'section',
+        { className: 'dps-panel dps-prov dps-proj', 'data-dps-card': 'project' },
+        h(
+          'header',
+          { className: 'dps-panel-head' },
+          h(
+            'div',
+            { className: 'dps-panel-title' },
+            h('h2', null, t('section.project')),
+            h('span', { className: 'dps-panel-meta', 'data-dps-field': 'project-total', 'data-value': data.total }, t('chart.total', { value: formatTokens(data.total) })),
+          ),
+        ),
+        data.rows.length === 0
+          ? h('div', { className: 'dps-prov-empty' }, t('chart.empty'))
+          : h(
+              'div',
+              { className: 'dps-prov-table', role: 'table' },
+              h(
+                'div',
+                { className: 'dps-prov-row dps-prov-th', role: 'row' },
+                h('span', { role: 'columnheader' }, t('project.colName')),
+                h('span', { role: 'columnheader' }, t('provider.colAmount')),
+                h('span', { role: 'columnheader' }, t('provider.colShare')),
+                h('span', { role: 'columnheader' }, t('project.colSubagent')),
+              ),
+              data.rows.map((row) =>
+                h(
+                  'div',
+                  {
+                    key: row.id || '__unknown',
+                    className: 'dps-prov-row',
+                    role: 'row',
+                    'data-project': row.id,
+                    'data-value': row.tokens,
+                    'data-share': row.share,
+                    'data-subagent': row.subagent,
+                  },
+                  h(
+                    'span',
+                    { className: 'dps-prov-namecell', role: 'cell' },
+                    // 悬停看完整路径（「其他项目」列出被合并的那些）
+                    h('span', { className: 'dps-prov-name', title: row.id ? row.path : projectLabel(row) }, projectLabel(row)),
+                  ),
+                  h('span', { className: 'dps-prov-value', role: 'cell' }, formatTokens(row.tokens)),
+                  h('span', { className: 'dps-prov-share', role: 'cell' }, formatPercent(row.share)),
+                  h('span', { className: 'dps-prov-hit', role: 'cell' }, row.subagent > 0 ? formatPercent(row.subagentShare) : t('unit.none')),
+                  h(
+                    'span',
+                    { className: 'dps-prov-track', 'aria-hidden': true },
+                    h(
+                      'span',
+                      { className: 'dps-proj-bar', style: { width: `${row.share}%`, minWidth: row.tokens > 0 ? '3px' : '0px' } },
+                      h('span', { className: 'dps-proj-main', style: { flexGrow: row.tokens - row.subagent } }),
+                      row.subagent > 0 ? h('span', { className: 'dps-proj-sub', style: { flexGrow: row.subagent } }) : null,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+      )
+    }
+
     /* ------------------------------------------------------------------- 样式 */
 
     const CSS = `
@@ -2449,17 +2725,16 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
 .dps-menu-pop button{appearance:none;border:0;background:transparent;color:var(--dps-ink);font-size:12.5px;line-height:1.4;text-align:left;padding:8px 10px;border-radius:7px;cursor:pointer;white-space:nowrap}
 .dps-menu-pop button:hover{background:var(--dps-hover)}
 .dps-grid{display:grid;grid-template-columns:minmax(0,1.62fr) minmax(0,1fr);gap:16px;align-items:stretch}
-.dps-side{min-width:0;display:flex;flex-direction:column;gap:16px}
 @container dps (max-width:1040px){
 .dps-kpis{grid-template-columns:repeat(4,minmax(0,1fr))}
 .dps-kpi[data-hero="true"]{grid-column:1 / -1}
+.dps-grid[data-row="lists"]{grid-template-columns:repeat(2,minmax(0,1fr))}
 .dps-kpi-aside{flex-basis:260px}
 .dps-grid{grid-template-columns:minmax(0,1fr)}
-.dps-side{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 @container dps (max-width:720px){
 .dps-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
-.dps-side{grid-template-columns:minmax(0,1fr)}
+.dps-grid[data-row="lists"]{grid-template-columns:minmax(0,1fr)}
 .dps-num{font-size:24px}
 .dps-kpi[data-hero="true"] .dps-num{font-size:30px}
 }
@@ -2571,6 +2846,17 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
 .dps-lens-value{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
 .dps-lens-share{color:var(--dps-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .dps-prov{flex:1 1 auto}
+.dps-panel-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dps-proj-bar{display:flex;height:100%;border-radius:inherit;overflow:hidden;transition:width .45s cubic-bezier(.3,.7,.2,1)}
+.dps-proj-main{flex:0 1 0;min-width:0;background:var(--dps-accent)}
+.dps-proj-sub{flex:0 1 0;min-width:2px;background:color-mix(in srgb,var(--dps-accent) 45%,transparent)}
+.dps-hit{margin-top:auto;padding-top:12px;border-top:1px solid var(--dps-hair);display:flex;flex-direction:column;gap:8px}
+.dps-hit-label{font-size:11.5px;color:var(--dps-faint)}
+.dps-hit-body{display:grid;grid-template-columns:34px minmax(0,1fr);column-gap:8px}
+.dps-hit-axis{position:relative;font-size:10.5px;color:var(--dps-faint);font-variant-numeric:tabular-nums}
+.dps-hit-axis span{position:absolute;right:0;transform:translateY(-50%);line-height:1;white-space:nowrap}
+.dps-hit-plot{border-top:1px dashed var(--dps-line);border-bottom:1px solid var(--dps-line)}
+.dps-hit-svg{height:44px;overflow:visible}
 .dps-prov-table{display:flex;flex-direction:column;gap:14px}
 .dps-prov-row{display:grid;grid-template-columns:minmax(0,1fr) 72px 50px 58px;align-items:baseline;column-gap:10px;row-gap:7px;font-size:13px}
 .dps-prov-th{margin-bottom:-6px;font-size:11.5px;color:var(--dps-faint)}
@@ -3281,6 +3567,12 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
       // 一个月以内画每天的实际用量；更长的范围画 7 日均线（柱子会被峰值压扁）
       const sparkMode = range !== 'all' && rangeWin.days > 0 && rangeWin.days <= 31 ? 'bars' : 'average'
       const average = useMemo(() => movingAverage(daily, spark), [daily, spark])
+      // 命中率小趋势：和第一张卡的趋势同一批日期
+      const hitSeries = useMemo(() => {
+        const byDate = indexDaily(daily)
+        return spark.map((point) => ({ key: point.key, rate: byDate.has(point.key) ? cacheHitRate(byDate.get(point.key)) : null }))
+      }, [daily, spark])
+      const projectPaths = (snapshot && snapshot.projects) || null
       const snapshotAliases = snapshot && snapshot.aliases && snapshot.aliases.providers
       const aliases = useMemo(() => ({ ...(snapshotAliases || {}), ...aliasEdits }), [snapshotAliases, aliasEdits])
       const saveAlias = useCallback(
@@ -3429,7 +3721,7 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
           h(ActivityCard, { daily, today, rangeStartKey: rangeWin.startKey, rangeEndKey: rangeWin.endKey }),
           h(
             'div',
-            { className: 'dps-grid' },
+            { className: 'dps-grid', 'data-row': 'charts' },
             h(ModelCard, {
               daily,
               today,
@@ -3439,20 +3731,21 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
               rangeKey: `${range}:${rangeWin.startKey}:${rangeWin.endKey}`,
               spanDays: range === 'custom' ? rangeWin.days : spanDays,
             }),
-            h(
-              'div',
-              { className: 'dps-side' },
-              h(LensCard, { totals: lensTotals }),
-              h(ProviderCard, {
-                summary: rangeSummary,
-                today: todaySummary,
-                scope: range,
-                todayOnly: providerToday,
-                onTodayOnly: setProviderToday,
-                aliases,
-                onRename: saveAlias,
-              }),
-            ),
+            h(LensCard, { totals: lensTotals, hitSeries }),
+          ),
+          h(
+            'div',
+            { className: 'dps-grid', 'data-row': 'lists' },
+            h(ProjectCard, { summary: rangeSummary, paths: projectPaths }),
+            h(ProviderCard, {
+              summary: rangeSummary,
+              today: todaySummary,
+              scope: range,
+              todayOnly: providerToday,
+              onTodayOnly: setProviderToday,
+              aliases,
+              onRename: saveAlias,
+            }),
           ),
         ),
       )

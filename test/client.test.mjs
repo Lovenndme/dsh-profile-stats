@@ -678,3 +678,72 @@ test('rangeText：今年的范围不写年份，跨年写全；只有一天时�
   assert.equal(rangeText({ startKey: '2026-11-03', endKey: '2026-11-03' }, '2026-11-08'), '11/3')
   assert.equal(rangeText({ startKey: '', endKey: '2026-11-08' }, '2026-11-08'), '')
 })
+
+/* ------------------------------------------------------------ 项目 */
+
+const projectHelpers = () =>
+  loadClientHelpers({
+    extraCode: ['const PROJECT_ROWS = 8'],
+    functions: ['deriveProjects', 'pathTail', 'toNumber'],
+  })
+
+test('pathTail：取路径最后几段，Windows / POSIX 分隔符都认', () => {
+  const { pathTail } = projectHelpers()
+  assert.equal(pathTail('C:\\Users\\me\\code\\atlas', 1), 'atlas')
+  assert.equal(pathTail('C:\\Users\\me\\code\\atlas', 2), 'code/atlas')
+  assert.equal(pathTail('/srv/beacon/', 1), 'beacon')
+  assert.equal(pathTail('', 1), '')
+})
+
+test('deriveProjects：按用量降序；同名文件夹带上上一级目录区分；子代理占比；未知项目', () => {
+  const { deriveProjects } = projectHelpers()
+  const data = deriveProjects(
+    { 'c:/a/web': 600, 'c:/b/web': 300, '': 100 },
+    { 'c:/a/web': 150, 'c:/b/web': 999 },
+    { 'c:/a/web': 'C:\\a\\web', 'c:/b/web': 'C:\\b\\web' },
+  )
+  assert.equal(data.total, 1000)
+  assert.deepEqual(data.rows.map((row) => row.id), ['c:/a/web', 'c:/b/web', ''])
+  assert.deepEqual(data.rows.map((row) => row.name), ['a/web', 'b/web', ''], '两个都叫 web：往上加一级目录')
+  assert.equal(data.rows[0].subagentShare, 25)
+  assert.equal(data.rows[1].subagent, 300, '子代理部分不会超过项目本身')
+  assert.equal(data.rows[2].subagentShare, 0)
+  assert.equal(data.rows[0].path, 'C:\\a\\web')
+  assert.equal(data.rows.reduce((sum, row) => sum + row.share, 0), 100)
+})
+
+test('deriveProjects：超过 8 个项目时其余并成「其他项目（N）」，子代理也合并', () => {
+  const { deriveProjects } = projectHelpers()
+  const byProject = {}
+  const sub = {}
+  for (let index = 0; index < 11; index += 1) {
+    byProject[`p${index}`] = (11 - index) * 10
+    sub[`p${index}`] = 1
+  }
+  const data = deriveProjects(byProject, sub, {})
+  assert.equal(data.rows.length, 9)
+  const other = data.rows.at(-1)
+  assert.equal(other.id, '__other')
+  assert.equal(other.other, true)
+  assert.equal(other.count, 3)
+  assert.equal(other.tokens, 30 + 20 + 10)
+  assert.equal(other.subagent, 3)
+  assert.deepEqual(deriveProjects({}, {}, {}), { total: 0, subagentTotal: 0, rows: [] })
+  assert.deepEqual(deriveProjects(undefined, undefined, undefined).rows, [])
+})
+
+test('summarizeDaily：按项目与子代理部分累加', () => {
+  const { summarizeDaily } = loadClientHelpers({
+    functions: ['summarizeDaily', 'emptySummary', 'emptyUsage', 'addUsage', 'indexDaily', 'parseDateKey', 'toNumber'],
+  })
+  const summary = summarizeDaily(
+    [
+      { date: '2026-11-05', tokens: 10, byProject: { a: 6, b: 4 }, byProjectSubagent: { a: 2 } },
+      { date: '2026-11-06', tokens: 5, byProject: { a: 5 }, byProjectSubagent: { a: 1 } },
+    ],
+    '',
+    '',
+  )
+  assert.deepEqual(summary.byProject, { a: 11, b: 4 })
+  assert.deepEqual(summary.byProjectSubagent, { a: 3 })
+})

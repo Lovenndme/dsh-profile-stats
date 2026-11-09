@@ -214,3 +214,53 @@ test('aggregate：单日峰值取严格最大，最早出现的胜出', () => {
   const { totals } = aggregate([first, second], NOW, new Set(['d1', 'd2']))
   assert.deepEqual(totals.peakDay, { date: '2026-11-01', tokens: 1000 })
 })
+
+test('projectOf：工作目录 → 项目键；Windows 路径不分大小写、斜杠统一，末尾分隔符去掉', async () => {
+  const { projectOf } = await import('../index.js')
+  assert.deepEqual(projectOf('C:\\Users\\me\\code\\atlas\\'), { key: 'c:/users/me/code/atlas', path: 'C:\\Users\\me\\code\\atlas' })
+  assert.equal(projectOf('c:/users/me/code/atlas').key, projectOf('C:\\Users\\Me\\Code\\Atlas').key, '同一个目录的不同写法归到同一个项目')
+  assert.deepEqual(projectOf('/home/me/proj/'), { key: '/home/me/proj', path: '/home/me/proj' }, 'POSIX 路径区分大小写，原样当键')
+  assert.deepEqual(projectOf('  '), { key: '', path: '' })
+  assert.deepEqual(projectOf(undefined), { key: '', path: '' })
+  assert.deepEqual(projectOf(42), { key: '', path: '' })
+})
+
+test('aggregate：按项目（工作目录）记每天的 token，子代理会话另记一份；孤儿前缀也记到会话自己的项目', () => {
+  const main = foldSnapshot({
+    session: { id: 'main', cwd: 'C:\\code\\atlas' },
+    events: [
+      assistantEvent({ seq: 0, time: DAY_1, input: 100, output: 0, total: 100 }),
+      assistantEvent({ seq: 1, time: DAY_2, input: 50, output: 0, total: 50 }),
+    ],
+  })
+  const helper = foldSnapshot({
+    session: { id: 'helper', cwd: 'c:/code/atlas/', origin: 'subagent', parentSession: 'main', delegationDepth: 1 },
+    events: [assistantEvent({ seq: 0, time: DAY_2, input: 30, output: 0, total: 30 })],
+  })
+  const other = foldSnapshot({
+    session: { id: 'other', cwd: '/srv/beacon' },
+    inheritedEventCount: 1,
+    events: [
+      // 孤儿前缀（原件不在）：补回时也记到这个会话的项目
+      assistantEvent({ seq: 0, time: DAY_1, input: 7, output: 0, total: 7 }),
+      assistantEvent({ seq: 1, time: DAY_2, input: 9, output: 0, total: 9 }),
+    ],
+  })
+  const unknown = foldSnapshot({ session: { id: 'nocwd' }, events: [assistantEvent({ seq: 0, time: DAY_2, input: 4, output: 0, total: 4 })] })
+  assert.equal(helper.subagent, true)
+  assert.equal(main.subagent, false)
+  assert.equal(main.cwd, 'C:\\code\\atlas')
+
+  const { daily, projects, totals } = aggregate([main, helper, other, unknown], NOW, new Set(['main', 'helper', 'other', 'nocwd']))
+  const [day1, day2] = daily
+  assert.deepEqual(day1.byProject, { 'c:/code/atlas': 100, '/srv/beacon': 7 })
+  assert.deepEqual(day2.byProject, { 'c:/code/atlas': 80, '/srv/beacon': 9, '': 4 })
+  assert.deepEqual(day2.byProjectSubagent, { 'c:/code/atlas': 30 })
+  assert.deepEqual(day1.byProjectSubagent, {})
+  assert.deepEqual(projects, { 'c:/code/atlas': 'C:\\code\\atlas', '/srv/beacon': '/srv/beacon' })
+  // 各项目之和 = 当天总量
+  for (const entry of daily) {
+    assert.equal(Object.values(entry.byProject).reduce((sum, value) => sum + value, 0), entry.tokens, entry.date)
+  }
+  assert.equal(daily.reduce((sum, entry) => sum + entry.tokens, 0), totals.tokens)
+})

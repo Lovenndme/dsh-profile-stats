@@ -41,8 +41,9 @@ const UPDATE_CHECK_TTL_MS = 6 * 60 * 60 * 1000
  * 12：继承前缀补记 provider / 每日 input·output·cache 明细（孤儿前缀补回时用它自己的数）。
  * 13：单步总量改为四项之和（旧日志缺 totalTokens 时不再漏掉缓存）；缓存读 / 写分开记；
  *     每天每个 provider 记四项用量。
+ * 14：会话记下工作目录（cwd）与是否子代理会话，用于按项目统计。
  */
-const CACHE_VERSION = 13
+const CACHE_VERSION = 14
 const DAY_MS = 86400000
 /**
  * 数据保鲜不依赖用户打开页面：宿主运行期间每分钟看一眼，快照超过 5 分钟就在后台静默补扫；
@@ -209,6 +210,17 @@ function yieldToLoop() {
 
 /* -------------------------------------------------------------- 单个会话折叠 */
 
+/**
+ * 工作目录 → 项目键与显示路径。去掉首尾空白与末尾的分隔符；Windows 路径（盘符或反斜杠）不区分大小写，
+ * 键统一成小写、正斜杠，显示路径保留第一次见到的写法。没有工作目录的会话归到空键（页面写「未知项目」）。
+ */
+function projectOf(cwd) {
+  const display = typeof cwd === 'string' ? cwd.trim().replace(/(.)[\\/]+$/, '$1') : ''
+  if (!display) return { key: '', path: '' }
+  const windows = /^[A-Za-z]:/.test(display) || display.includes('\\')
+  return { key: windows ? display.replace(/\\/g, '/').toLowerCase() : display, path: display }
+}
+
 function emptyFold(sessionId, createdAt, parentSession) {
   return {
     sessionId,
@@ -216,6 +228,9 @@ function emptyFold(sessionId, createdAt, parentSession) {
     createdAt: toNumber(createdAt),
     /** 头部记下的来源会话（fork/seed 时存在），用来判断继承前缀有没有「原件」。 */
     parentSession: parentSession ? String(parentSession) : '',
+    /** 会话的工作目录（项目）与是否子代理会话（头部 origin = subagent 或 delegationDepth > 0）。 */
+    cwd: '',
+    subagent: false,
     calls: 0,
     tokens: 0,
     inputTokens: 0,
@@ -477,6 +492,8 @@ function foldSnapshot(snapshot) {
   const sessionId = header.id === undefined ? '' : String(header.id)
   const inherited = toNumber(snapshot && snapshot.inheritedEventCount)
   const fold = emptyFold(sessionId, header.createdAt, header.parentSession)
+  fold.cwd = typeof header.cwd === 'string' ? header.cwd : ''
+  fold.subagent = header.origin === 'subagent' || toNumber(header.delegationDepth) > 0
   const events = (snapshot && snapshot.events) || []
   for (const event of events) {
     const seq = toNumber(event.seq)
@@ -574,10 +591,12 @@ function aggregate(sessions, now, knownIds) {
 
   /**
    * 每天一份 { tokens, calls, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens,
-   * byProvider, providerUsage, byModel }。`maps` 来自 dayMapsOf，每张表都出自同一份来源（会话自身 或 它的继承前缀）：
+   * byProvider, providerUsage, byModel, byProject, byProjectSubagent }。`maps` 来自 dayMapsOf，每张表都出自同一份来源（会话自身 或 它的继承前缀）：
    * 旧实现补回孤儿前缀时拿的是会话自身的每日明细，同一天会把自身用量算两次、前缀明细一笔不进。
    */
-  const mergeDay = (maps) => {
+  /** 项目键 → 显示路径（第一次见到的写法）。 */
+  const projects = {}
+  const mergeDay = (maps, project) => {
     for (const [key, value] of Object.entries(maps.tokens)) {
       const tokens = toNumber(value)
       if (tokens <= 0) continue
@@ -591,8 +610,13 @@ function aggregate(sessions, now, knownIds) {
         byProvider: {},
         providerUsage: {},
         byModel: {},
+        byProject: {},
+        byProjectSubagent: {},
       }
       entry.tokens += tokens
+      // 一个会话只有一个工作目录：这一天这份来源的 token 全部记到它的项目上
+      entry.byProject[project.key] = toNumber(entry.byProject[project.key]) + tokens
+      if (project.subagent) entry.byProjectSubagent[project.key] = toNumber(entry.byProjectSubagent[project.key]) + tokens
       entry.calls += toNumber(maps.calls[key])
       entry.inputTokens += toNumber(maps.input[key])
       entry.outputTokens += toNumber(maps.output[key])
@@ -612,6 +636,9 @@ function aggregate(sessions, now, knownIds) {
   }
 
   for (const fold of sessions) {
+    const place = projectOf(fold.cwd)
+    const project = { key: place.key, subagent: Boolean(fold.subagent) }
+    if (place.key && !projects[place.key]) projects[place.key] = place.path
     totals.tokens += fold.tokens
     totals.inputTokens += fold.inputTokens
     totals.outputTokens += fold.outputTokens
@@ -650,7 +677,7 @@ function aggregate(sessions, now, knownIds) {
         for (const [provider, value] of Object.entries(fold.inheritedPerProvider || {})) {
           totals.byProvider[provider] = toNumber(totals.byProvider[provider]) + toNumber(value)
         }
-        mergeDay(dayMapsOf(fold, true))
+        mergeDay(dayMapsOf(fold, true), project)
       }
     }
 
@@ -667,7 +694,7 @@ function aggregate(sessions, now, knownIds) {
       longestTurnSession = fold.sessionId
     }
 
-    mergeDay(dayMapsOf(fold, false))
+    mergeDay(dayMapsOf(fold, false), project)
   }
 
   const dailyList = Array.from(daily.entries())
@@ -704,6 +731,7 @@ function aggregate(sessions, now, knownIds) {
       ...streak,
     },
     daily: dailyList,
+    projects,
   }
 }
 
@@ -1154,6 +1182,7 @@ export function createController(ctx) {
       aliases: readAliases(),
       totals: agg.totals,
       daily: agg.daily,
+      projects: agg.projects || {},
       failedSessions: Object.keys(state.errors).length,
     }
   }
@@ -1276,6 +1305,7 @@ export {
   shiftDayKey,
   nextDayKey,
   emptyFold,
+  projectOf,
   sanitizeAliases,
   readAliases,
   writeAlias,

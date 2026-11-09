@@ -97,6 +97,17 @@
    * 各家供应商的缓存命中率不同（供应商卡片的「命中率」列才有区别）。
    * write 只在「含缓存写入」视图里生效：relay-lab 演示一家会报缓存写入的供应商（Token 构成多出一行）。
    */
+  /**
+   * 演示用的项目（工作目录）：虚构的公开路径。键和宿主一样（Windows 路径小写、正斜杠），
+   * weight 是用量权重，subagent 是其中子代理会话的比例。
+   */
+  var PROJECTS = [
+    { key: 'c:/users/mike/code/atlas-web', path: 'C:\\Users\\mike\\code\\atlas-web', weight: 52, subagent: 0.28 },
+    { key: 'c:/users/mike/code/ledger-api', path: 'C:\\Users\\mike\\code\\ledger-api', weight: 31, subagent: 0.12 },
+    { key: 'c:/users/mike/notes', path: 'C:\\Users\\mike\\notes', weight: 11, subagent: 0 },
+    { key: 'd:/sandbox/demo', path: 'D:\\sandbox\\demo', weight: 6, subagent: 0.45 },
+  ]
+
   var PROVIDER_PROFILES = {
     'deepseek-official': { hit: 0.955, write: 0 },
     'deepseek-account': { hit: 0.988, write: 0 },
@@ -179,6 +190,17 @@
         sums.write += write
         sums.output += output
       })
+      // 按项目拆（各项目之和 = 当天总量）；子代理部分按各项目的比例取整（不消耗随机数，其余数字不变）
+      var projectWeights = {}
+      PROJECTS.forEach(function (project) {
+        projectWeights[project.key] = project.weight
+      })
+      var byProject = split(tokens, projectWeights)
+      var byProjectSubagent = {}
+      PROJECTS.forEach(function (project) {
+        var part = Math.floor(byProject[project.key] * project.subagent)
+        if (part > 0) byProjectSubagent[project.key] = part
+      })
       return {
         date: key,
         tokens: tokens,
@@ -190,6 +212,8 @@
         byProvider: byProvider,
         providerUsage: providerUsage,
         byModel: split(tokens, models),
+        byProject: byProject,
+        byProjectSubagent: byProjectSubagent,
       }
     })
 
@@ -229,6 +253,10 @@
         generatedAt: Date.now(),
         failedSessions: 0,
         daily: daily,
+        projects: PROJECTS.reduce(function (map, project) {
+          map[project.key] = project.path
+          return map
+        }, {}),
       },
       {
         totals: Object.assign(totals, {
