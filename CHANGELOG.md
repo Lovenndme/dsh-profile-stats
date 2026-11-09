@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.4.16 — 2026-11-09
+
+- docs: projects card, daily cache hit rate and the model share view
+- feat: project (working directory) split, daily cache hit rate trend, model share view
+- docs: this month and custom ranges, local provider names, the merged streak card
+- feat: This-month and custom date ranges, local provider names, one streak card plus today's cache hit rate
+
+
 ## 2.4.15 — 2026-11-06
 
 - ci: find the open market PR through the API, since gh pr list --head returned nothing
