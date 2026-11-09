@@ -14,6 +14,7 @@
   var REFRESH_URL = '/api/dsh-profile-stats/refresh'
   var UPDATE_URL = '/api/dsh-profile-stats/update'
   var ALIAS_URL = '/api/dsh-profile-stats/alias'
+  var BILLING_URL = '/api/dsh-profile-stats/billing'
 
   /* ------------------------------------------------------------ 模块加载器 */
 
@@ -107,6 +108,46 @@
     { key: 'c:/users/mike/notes', path: 'C:\\Users\\mike\\notes', weight: 11, subagent: 0 },
     { key: 'd:/sandbox/demo', path: 'D:\\sandbox\\demo', weight: 6, subagent: 0.45 },
   ]
+
+  /**
+   * 每小时用量（slots）怎么摊：一天按这几个本地钟点分配（上午、下午是 DeepSeek 的高峰时段，晚上是空闲时段），
+   * 每家供应商用一个模型。和宿主一样：[UTC 小时序号, 供应商, 模型, 项目键, 未缓存输入, 缓存读, 缓存写, 输出]。
+   */
+  var SLOT_HOURS = { 10: 0.4, 15: 0.4, 21: 0.2 }
+  var PROVIDER_MODELS = {
+    'deepseek-official': 'deepseek-flash',
+    'deepseek-account': 'deepseek-v4-1-flash',
+    'deepseek-modlens': 'deepseek-v4-pro',
+    'relay-lab': 'deepseek-v4-1-flash',
+  }
+
+  function buildSlots(date, providerUsage) {
+    var slots = []
+    var parts = ['inputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'outputTokens']
+    Object.keys(providerUsage).forEach(function (id) {
+      var usage = providerUsage[id]
+      var byHour = parts.map(function (field) {
+        return split(usage[field], SLOT_HOURS)
+      })
+      Object.keys(SLOT_HOURS).forEach(function (hour) {
+        var epochHour = Math.floor(new Date(date.getFullYear(), date.getMonth(), date.getDate(), Number(hour)).getTime() / 3600000)
+        var projectParts = parts.map(function (field, index) {
+          var weights = {}
+          PROJECTS.forEach(function (project) {
+            weights[project.key] = project.weight
+          })
+          return split(byHour[index][hour], weights)
+        })
+        PROJECTS.forEach(function (project) {
+          var values = projectParts.map(function (map) {
+            return map[project.key]
+          })
+          if (values[0] + values[1] + values[2] + values[3] > 0) slots.push([epochHour, id, PROVIDER_MODELS[id], project.key].concat(values))
+        })
+      })
+    })
+    return slots
+  }
 
   var PROVIDER_PROFILES = {
     'deepseek-official': { hit: 0.955, write: 0 },
@@ -214,6 +255,7 @@
         byModel: split(tokens, models),
         byProject: byProject,
         byProjectSubagent: byProjectSubagent,
+        slots: buildSlots(entry.date, providerUsage),
       }
     })
 
@@ -329,6 +371,7 @@
     }
     var body = JSON.parse(JSON.stringify(state.view === 'cache-write' ? writeSnapshot : fullSnapshot))
     body.aliases = { providers: readAliases() }
+    body.billing = { providers: billingMemory || readBillingStore() }
     body.generatedAt = Date.now()
     body.update = updateBlock()
     if (hostState.scanLeft > 0) {
@@ -343,7 +386,34 @@
 
   /* ------------------------------------------------------------- fetch 拦截 */
 
-  var requestLog = { snapshot: 0, refresh: 0, update: 0, alias: 0, blocked: 0 }
+  var requestLog = { snapshot: 0, refresh: 0, update: 0, alias: 0, billing: 0, blocked: 0 }
+
+  /** 计费方式：宿主存在本机 billing.json 里，预览存在这个浏览器的 localStorage 里。 */
+  var BILLING_STORE = 'dps-preview-billing'
+  var DEFAULT_BILLING = { 'relay-lab': { mode: 'multiplier', factor: 0.12 } }
+  function readBillingStore() {
+    try {
+      var raw = window.localStorage.getItem(BILLING_STORE)
+      if (raw === null) return JSON.parse(JSON.stringify(DEFAULT_BILLING))
+      var parsed = JSON.parse(raw)
+      return parsed && typeof parsed === 'object' ? parsed : {}
+    } catch (error) {
+      return JSON.parse(JSON.stringify(DEFAULT_BILLING))
+    }
+  }
+  var billingMemory = null
+  function writeBillingStore(provider, billing) {
+    var current = billingMemory || readBillingStore()
+    if (billing) current[provider] = billing
+    else delete current[provider]
+    billingMemory = current
+    try {
+      window.localStorage.setItem(BILLING_STORE, JSON.stringify(current))
+    } catch (error) {
+      /* 拿不到 localStorage：只在这次页面里生效 */
+    }
+    return current
+  }
 
   /** 供应商显示名：宿主存在本机文件里，预览存在这个浏览器的 localStorage 里（刷新后还在）。 */
   var ALIAS_STORE = 'dps-preview-aliases'
@@ -374,6 +444,7 @@
     node.textContent =
       'GET snapshot ×' + requestLog.snapshot + ' · POST refresh ×' + requestLog.refresh + ' · POST update ×' + requestLog.update +
       (requestLog.alias ? ' · POST alias ×' + requestLog.alias : '') +
+      (requestLog.billing ? ' · POST billing ×' + requestLog.billing : '') +
       (requestLog.blocked ? ' · 拦截外部请求 ×' + requestLog.blocked : '')
   }
 
@@ -400,6 +471,17 @@
       requestLog.refresh += 1
       if (state.view !== 'empty' && state.view !== 'scanning' && state.view !== 'error') hostState.scanLeft = 3
       result = json(200, { ok: true, accepted: true })
+    } else if (url === BILLING_URL && method === 'POST') {
+      requestLog.billing += 1
+      var billingBody = {}
+      try {
+        billingBody = JSON.parse((init && init.body) || '{}')
+      } catch (error) {
+        billingBody = {}
+      }
+      result = billingBody && typeof billingBody.provider === 'string' && billingBody.provider
+        ? json(200, { ok: true, billing: { providers: writeBillingStore(billingBody.provider, billingBody.billing || null) } })
+        : json(400, { ok: false, error: 'invalid-provider' })
     } else if (url === ALIAS_URL && method === 'POST') {
       requestLog.alias += 1
       var payload = {}

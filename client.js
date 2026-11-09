@@ -26,6 +26,7 @@ window.__ModuleLoader__.load({
     const REFRESH_URL = '/api/dsh-profile-stats/refresh'
     const UPDATE_URL = '/api/dsh-profile-stats/update'
     const ALIAS_URL = '/api/dsh-profile-stats/alias'
+    const BILLING_URL = '/api/dsh-profile-stats/billing'
     const PANEL_ID = 'profile'
     const STYLE_ID = 'dsh-profile-stats-style'
     /** 指标卡里的迷你柱：最近多少天。 */
@@ -72,6 +73,31 @@ window.__ModuleLoader__.load({
       'project.others': 'Other projects ({count})',
       'model.modeTokens': 'Tokens',
       'model.modeShare': 'Share',
+      'stat.cost': '{range} spend',
+      'stat.totalCost': 'Total spend',
+      'stat.peakShare': 'peak {value}',
+      'cost.hintUnset': '{count} provider(s) without a billing method are not included',
+      'cost.hintUnpriced': 'Usage without a known list price is not included',
+      'cost.hintPeak': 'Share of the list-price value used in peak hours (Beijing time, weekdays 9–12 and 14–18)',
+      'provider.colCost': 'Spend',
+      'provider.setBilling': 'Set',
+      'billing.official': 'List price',
+      'billing.multiplier': 'Discount',
+      'billing.custom': 'Unit price',
+      'billing.plan': 'Monthly',
+      'billing.free': 'Not mine',
+      'billing.factor': 'Multiplier',
+      'billing.miss': 'Cache miss',
+      'billing.hit': 'Cache hit',
+      'billing.output': 'Output',
+      'billing.unit': '¥ / 1M tokens',
+      'billing.monthly': '¥ per month',
+      'billing.since': 'Since',
+      'billing.reset': 'Default',
+      'billing.cancel': 'Cancel',
+      'billing.listValue': 'List price {value}',
+      'billing.excluded': 'Excluded',
+      'billing.planCell': '{value} / month',
       'stat.rangeTokens': '{range} tokens',
       'action.export': 'Export',
       'action.exportCsv': 'CSV (daily)',
@@ -173,6 +199,31 @@ window.__ModuleLoader__.load({
       'project.others': '其他项目（{count}）',
       'model.modeTokens': '用量',
       'model.modeShare': '占比',
+      'stat.cost': '{range}花费',
+      'stat.totalCost': '累计花费',
+      'stat.peakShare': '高峰 {value}',
+      'cost.hintUnset': '另有 {count} 家未设置计费方式，未计入',
+      'cost.hintUnpriced': '部分用量没有已知的官方价，未计入',
+      'cost.hintPeak': '按官方价折算，高峰时段（北京时间工作日 9–12、14–18 点）的占比',
+      'provider.colCost': '费用',
+      'provider.setBilling': '设置',
+      'billing.official': '官方价',
+      'billing.multiplier': '打折',
+      'billing.custom': '单价',
+      'billing.plan': '包月',
+      'billing.free': '不计入',
+      'billing.factor': '倍数',
+      'billing.miss': '未命中',
+      'billing.hit': '命中',
+      'billing.output': '输出',
+      'billing.unit': '元 / 百万 token',
+      'billing.monthly': '月费（元）',
+      'billing.since': '开始日期',
+      'billing.reset': '恢复默认',
+      'billing.cancel': '取消',
+      'billing.listValue': '官方价 {value}',
+      'billing.excluded': '不计入',
+      'billing.planCell': '{value} / 月',
       'stat.rangeTokens': '{range} Token',
       'action.export': '导出',
       'action.exportCsv': 'CSV（按天）',
@@ -656,6 +707,197 @@ window.__ModuleLoader__.load({
       return `${sign}${number.toFixed(1)}%`
     }
 
+    /* ------------------------------------------------------------ 费用 */
+
+    /**
+     * DeepSeek 官方价（元 / 百万 token），按生效时间（UTC 毫秒）排列。出处：api-docs.deepseek.com 的价格页，
+     * 以及 2026-08-13、2026-09-10 两份调价公告里的价格表。空闲时段是高峰价的一半（见 isPeakHour）。
+     * 2026-08-17 00:00（北京时间）之前的价格官方文档里查不到，那段用量算「未定价」，不硬编。
+     * 旧模型名 deepseek-v4-flash / -vision 已由 V4.1 Flash 提供、按 Flash 价计费；中转站的 deepseek-v4-1-flash* 同属 Flash。
+     */
+    const OFFICIAL_PRICES = [
+      { family: 'flash', from: Date.UTC(2026, 7, 16, 16), peak: { hit: 0.1, miss: 3, output: 9 }, offPeak: { hit: 0.05, miss: 1.5, output: 4.5 } },
+      { family: 'flash', from: Date.UTC(2026, 8, 10, 4), peak: { hit: 0.04, miss: 2, output: 8 }, offPeak: { hit: 0.02, miss: 1, output: 4 } },
+      { family: 'pro', from: Date.UTC(2026, 7, 16, 16), peak: { hit: 0.3, miss: 9, output: 27 }, offPeak: { hit: 0.15, miss: 4.5, output: 13.5 } },
+    ]
+
+    /** 2026 年法定节假日（国务院办公厅 2025-11-04 通知）：这些天全天按空闲时段计价。周末本来就是空闲时段。 */
+    const CN_HOLIDAYS = [
+      ['2026-01-01', '2026-01-03'],
+      ['2026-02-15', '2026-02-23'],
+      ['2026-04-04', '2026-04-06'],
+      ['2026-05-01', '2026-05-05'],
+      ['2026-06-19', '2026-06-21'],
+      ['2026-09-25', '2026-09-27'],
+      ['2026-10-01', '2026-10-07'],
+    ]
+
+    /** 直连 DeepSeek 官方 API 的供应商 id：没设置计费方式时按官方价算花费；其余没设置的只显示官方价折算。 */
+    const OFFICIAL_PROVIDERS = ['deepseek-official', 'deepseek-account']
+
+    let holidayKeys = null
+    function holidaySet() {
+      if (holidayKeys) return holidayKeys
+      holidayKeys = new Set()
+      for (const [first, last] of CN_HOLIDAYS) {
+        const end = parseDateKey(last)
+        for (let date = parseDateKey(first); date && end && date.getTime() <= end.getTime(); date = addDays(date, 1)) holidayKeys.add(localDateKey(date))
+      }
+      return holidayKeys
+    }
+
+    /** 模型 → 价格系列（flash / pro）；不是 DeepSeek 模型时返回 ''（没有内置官方价）。 */
+    function priceFamily(model) {
+      const id = String(model || '').toLowerCase()
+      if (!id.startsWith('deepseek-')) return ''
+      if (/(^|-)pro(-|$)/.test(id)) return 'pro'
+      if (/(^|-)flash(-|$)/.test(id)) return 'flash'
+      return ''
+    }
+
+    /** UTC 小时序号 → 是否 DeepSeek 高峰时段：北京时间周一至周五 9–12、14–18 点，法定节假日除外。 */
+    function isPeakHour(epochHour) {
+      const beijing = new Date((toNumber(epochHour) + 8) * 3600000)
+      const weekday = beijing.getUTCDay()
+      if (weekday === 0 || weekday === 6) return false
+      const hour = beijing.getUTCHours()
+      if (!((hour >= 9 && hour < 12) || (hour >= 14 && hour < 18))) return false
+      const key = `${beijing.getUTCFullYear()}-${String(beijing.getUTCMonth() + 1).padStart(2, '0')}-${String(beijing.getUTCDate()).padStart(2, '0')}`
+      return !holidaySet().has(key)
+    }
+
+    /** 某个模型在某个小时的官方单价 { hit, miss, output, peak }；没有已知价格时返回 null。 */
+    function officialRate(model, epochHour) {
+      const family = priceFamily(model)
+      if (!family) return null
+      const at = toNumber(epochHour) * 3600000
+      let row = null
+      for (const candidate of OFFICIAL_PRICES) {
+        if (candidate.family === family && candidate.from <= at && (!row || candidate.from > row.from)) row = candidate
+      }
+      if (!row) return null
+      const peak = isPeakHour(epochHour)
+      return { ...(peak ? row.peak : row.offPeak), peak }
+    }
+
+    /** 某个供应商的计费方式：本机设置的优先；没设置时官方直连按官方价，其余是「未设置」。 */
+    function billingOf(provider, settings) {
+      const entry = settings && settings[provider]
+      if (entry && entry.mode) return entry
+      return OFFICIAL_PROVIDERS.includes(provider) ? { mode: 'official', auto: true } : { mode: 'unset' }
+    }
+
+    function daysInMonth(date) {
+      return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate()
+    }
+
+    /**
+     * 一段日期内的费用。slots 是宿主按小时记的 [小时序号, 供应商, 模型, 项目键, 未缓存输入, 缓存读, 缓存写, 输出]。
+     *   value     按官方价折算（所有人都有）；peakValue 是其中高峰时段的部分
+     *   spend     按各家计费方式算出来的实际花费：官方 = value，打折 = value × 倍数，单价 = 自己的单价，
+     *             包月 = 月费按天摊到范围内的每一天（从 since 起；没填就从这一家第一次有用量那天起，到今天为止），
+     *             不计入 = 0，未设置 = 不知道（不算进 spend，列在 unset 里）
+     * 包月费按当天各项目的官方价折算比例摊到项目上（那天没用量就不摊）。
+     */
+    function computeCosts(daily, startKey, endKey, settings, todayKey) {
+      const result = { spend: 0, value: 0, peakValue: 0, unpricedTokens: 0, byProvider: {}, byProject: {}, unset: [] }
+      const rowOf = (id) => {
+        if (!result.byProvider[id]) {
+          const bill = billingOf(id, settings)
+          result.byProvider[id] = { spend: bill.mode === 'unset' ? null : 0, value: 0, unpricedTokens: 0, mode: bill.mode, billing: bill }
+        }
+        return result.byProvider[id]
+      }
+      const addProject = (key, amount) => {
+        result.byProject[key] = toNumber(result.byProject[key]) + amount
+      }
+      const entries = indexDaily(daily)
+      const firstUse = {}
+      // 包月要知道每天各项目的官方价折算，才能把月费摊下去
+      const planShares = new Map()
+      for (const entry of entries.values()) {
+        for (const slot of entry.slots || []) {
+          const id = slot[1]
+          if (!firstUse[id] || entry.date < firstUse[id]) firstUse[id] = entry.date
+        }
+        if ((startKey && entry.date < startKey) || (endKey && entry.date > endKey)) continue
+        for (const slot of entry.slots || []) {
+          const [hour, id, model, project] = slot
+          const input = toNumber(slot[4])
+          const read = toNumber(slot[5])
+          const write = toNumber(slot[6])
+          const output = toNumber(slot[7])
+          const row = rowOf(id)
+          const bill = row.billing
+          const rate = officialRate(model, hour)
+          const value = rate ? (input * rate.miss + read * rate.hit + write * rate.miss + output * rate.output) / 1e6 : null
+          if (value === null) {
+            row.unpricedTokens += input + read + write + output
+            result.unpricedTokens += input + read + write + output
+          } else {
+            row.value += value
+            result.value += value
+            if (rate.peak) result.peakValue += value
+          }
+          let spend = 0
+          if (bill.mode === 'official') spend = value === null ? 0 : value
+          else if (bill.mode === 'multiplier') spend = value === null ? 0 : value * toNumber(bill.factor)
+          else if (bill.mode === 'custom') {
+            spend = (input * toNumber(bill.miss) + read * toNumber(bill.hit) + write * toNumber(bill.write === undefined ? bill.miss : bill.write) + output * toNumber(bill.output)) / 1e6
+          } else if (bill.mode === 'plan') {
+            const day = planShares.get(`${id}|${entry.date}`) || { total: 0, projects: {} }
+            const weight = value === null ? (input + read + write + output) / 1e9 : value
+            day.total += weight
+            day.projects[project] = toNumber(day.projects[project]) + weight
+            planShares.set(`${id}|${entry.date}`, day)
+          }
+          if (bill.mode === 'unset' || bill.mode === 'plan' || bill.mode === 'free') continue
+          row.spend += spend
+          result.spend += spend
+          addProject(project, spend)
+        }
+      }
+      // 包月：范围内每一天摊 月费 ÷ 当月天数
+      for (const [id, entry] of Object.entries(settings || {})) {
+        if (!entry || entry.mode !== 'plan') continue
+        const from = [entry.since || firstUse[id] || '', startKey || ''].filter(Boolean).sort().pop()
+        const to = [endKey || todayKey, todayKey].filter(Boolean).sort()[0]
+        const first = parseDateKey(from)
+        const last = parseDateKey(to)
+        if (!first || !last) continue
+        const row = rowOf(id)
+        for (let date = first; date.getTime() <= last.getTime(); date = addDays(date, 1)) {
+          const fee = toNumber(entry.monthly) / daysInMonth(date)
+          row.spend += fee
+          result.spend += fee
+          const share = planShares.get(`${id}|${localDateKey(date)}`)
+          if (share && share.total > 0) {
+            for (const [project, weight] of Object.entries(share.projects)) addProject(project, (fee * weight) / share.total)
+          }
+        }
+      }
+      for (const [id, row] of Object.entries(result.byProvider)) if (row.mode === 'unset') result.unset.push(id)
+      result.unset.sort()
+      return result
+    }
+
+    /** 金额 → 显示片段：100 元以下两位小数（¥5.50），以上一位（¥1,234.5）；一万起写「¥1.2 万」；极小的非零值写「<¥0.01」。 */
+    function moneyParts(value) {
+      const number = toNumber(value)
+      if (number <= 0) return [{ prefix: '¥', value: '0', unit: '' }]
+      if (number < 0.005) return [{ prefix: '<¥', value: '0.01', unit: '' }]
+      if (number >= 1e4) return [{ prefix: '¥', value: (number / 1e4).toFixed(1), unit: '万' }]
+      const digits = number < 100 ? 2 : 1
+      const text = number.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })
+      // 100 元以上的整数（月费 199）不写「.0」
+      return [{ prefix: '¥', value: digits === 1 ? text.replace(/\.0$/, '') : text, unit: '' }]
+    }
+
+    function formatMoney(value) {
+      const part = moneyParts(value)[0]
+      return `${part.prefix}${part.value}${part.unit ? ` ${part.unit}` : ''}`
+    }
+
     /* -------------------------------------------------------- 导出（CSV / JSON） */
 
     function downloadFile(name, type, text) {
@@ -932,6 +1174,7 @@ window.__ModuleLoader__.load({
       download: 'M12 4v10m-4.5-4l4.5 4.5 4.5-4.5M5 20h14',
       alert: 'M12 8v5m0 3.5v.01M10.3 3.9L2.6 17.5A2 2 0 004.3 20.5h15.4a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z',
       edit: 'M4 20h4L19 9l-4-4L4 16v4zM13 7l4 4',
+      wallet: 'M4 7.5A1.5 1.5 0 015.5 6H18a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2V7.5zM4 8l12-3.5V6M16 13h2',
       target: 'M12 21a9 9 0 100-18 9 9 0 000 18zM12 16.5a4.5 4.5 0 100-9 4.5 4.5 0 000 9zM12 12.6a.6.6 0 100-1.2.6.6 0 000 1.2z',
     }
 
@@ -2357,12 +2600,155 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** 文本 → 非负数；空或不合法返回 null。 */
+    function billingNumber(text) {
+      const trimmed = String(text === undefined || text === null ? '' : text).trim()
+      if (!trimmed) return null
+      const value = Number(trimmed)
+      return Number.isFinite(value) && value >= 0 ? value : null
+    }
+
+    /** 编辑器里的草稿 → 要保存的计费方式；不完整时返回 null（「确定」不可点）。 */
+    function billingDraft(mode, fields) {
+      if (mode === 'official' || mode === 'free') return { mode }
+      if (mode === 'multiplier') {
+        const factor = billingNumber(fields.factor)
+        return factor === null || factor > 100 ? null : { mode, factor }
+      }
+      if (mode === 'custom') {
+        const miss = billingNumber(fields.miss)
+        const hit = billingNumber(fields.hit)
+        const output = billingNumber(fields.output)
+        return miss === null || hit === null || output === null ? null : { mode, miss, hit, write: miss, output }
+      }
+      if (mode === 'plan') {
+        const monthly = billingNumber(fields.monthly)
+        if (monthly === null) return null
+        return /^\d{4}-\d{2}-\d{2}$/.test(fields.since || '') ? { mode, monthly, since: fields.since } : { mode, monthly }
+      }
+      return null
+    }
+
+    const BILLING_MODES = ['official', 'multiplier', 'custom', 'plan', 'free']
+
+    /** 供应商卡里展开的一行：选计费方式、填数字。只有标签和输入框；按官方价折算的金额写在左下角作参照。 */
+    function BillingEditor(props) {
+      const current = props.billing && BILLING_MODES.includes(props.billing.mode) ? props.billing : { mode: 'official' }
+      const [mode, setMode] = useState(current.mode)
+      const text = (value) => (value === undefined || value === null ? '' : String(value))
+      const [fields, setFields] = useState({
+        factor: text(current.factor),
+        miss: text(current.miss),
+        hit: text(current.hit),
+        output: text(current.output),
+        monthly: text(current.monthly),
+        since: current.since || '',
+      })
+      const draft = billingDraft(mode, fields)
+      const field = (name, label, attrs) =>
+        h(
+          'label',
+          { key: name, className: 'dps-date-field' },
+          h('span', null, label),
+          h('input', {
+            className: 'dps-date dps-bill-input',
+            'data-dps-field': `billing-${name}`,
+            inputMode: 'decimal',
+            value: fields[name],
+            onChange: (event) => setFields({ ...fields, [name]: event.target.value }),
+            onKeyDown: (event) => {
+              if (event.key === 'Enter' && draft) props.onSave(draft)
+              else if (event.key === 'Escape') props.onClose()
+            },
+            ...(attrs || {}),
+          }),
+        )
+      let inputs = null
+      if (mode === 'multiplier') inputs = [field('factor', t('billing.factor'), { placeholder: '0.12' })]
+      else if (mode === 'custom') {
+        inputs = [
+          field('miss', `${t('billing.miss')}（${t('billing.unit')}）`),
+          field('hit', `${t('billing.hit')}（${t('billing.unit')}）`),
+          field('output', `${t('billing.output')}（${t('billing.unit')}）`),
+        ]
+      } else if (mode === 'plan') {
+        inputs = [field('monthly', t('billing.monthly')), field('since', t('billing.since'), { type: 'date', inputMode: undefined, className: 'dps-date' })]
+      }
+      return h(
+        'div',
+        { className: 'dps-bill', 'data-dps-control': 'billing-editor', 'data-provider': props.provider, role: 'group', 'aria-label': props.label },
+        h(Segmented, {
+          control: 'billing-mode',
+          label: props.label,
+          value: mode,
+          onChange: setMode,
+          options: BILLING_MODES.map((id) => ({ id, label: t(`billing.${id}`) })),
+        }),
+        inputs ? h('div', { className: 'dps-bill-fields' }, inputs) : null,
+        h(
+          'div',
+          { className: 'dps-bill-foot' },
+          h('span', { className: 'dps-bill-meta', 'data-dps-field': 'billing-list-value' }, t('billing.listValue', { value: formatMoney(props.listValue) })),
+          h('button', { type: 'button', className: 'dps-btn', 'data-dps-action': 'billing-reset', onClick: () => props.onSave(null) }, t('billing.reset')),
+          h('button', { type: 'button', className: 'dps-btn', 'data-dps-action': 'billing-cancel', onClick: props.onClose }, t('billing.cancel')),
+          h(
+            'button',
+            { type: 'button', className: 'dps-btn', 'data-primary': 'true', 'data-dps-action': 'billing-save', disabled: !draft, onClick: () => draft && props.onSave(draft) },
+            t('action.apply'),
+          ),
+        ),
+      )
+    }
+
+    /** 供应商这一行的费用格：未设置写「设置」，不计入写「不计入」，包月悬停写月费；点一下展开计费方式。 */
+    function costCellText(row) {
+      if (!row) return t('unit.none')
+      if (row.mode === 'unset') return t('provider.setBilling')
+      if (row.mode === 'free') return t('billing.excluded')
+      return formatMoney(row.spend)
+    }
+
     function ProviderCard(props) {
       // 默认跟随页面顶部的时间范围；「今日」按钮按下时只看今天（切换顶部范围会自动弹起）。
       const todayOnly = Boolean(props.todayOnly)
       const summary = (todayOnly ? props.today : props.summary) || emptySummary()
       const data = useMemo(() => deriveProviders(summary.byProvider, summary.providerUsage), [summary])
       const aliases = props.aliases || {}
+      const costs = (todayOnly ? props.todayCosts : props.costs) || null
+      // 正在设置计费方式的那一行
+      const [billingOpen, setBillingOpen] = useState(null)
+      const shownIds = new Set(data.rows.map((row) => row.id))
+      // 「其他」那一行：没单独列出来的供应商的花费合计（未设置的不计入）
+      const otherSpend = costs
+        ? Object.entries(costs.byProvider).reduce((sum, [id, row]) => (shownIds.has(id) || row.spend === null ? sum : sum + row.spend), 0)
+        : 0
+      const costCell = (row) => {
+        if (!costs) return h('span', { className: 'dps-prov-cost', role: 'cell' }, t('unit.none'))
+        if (row.id === '__other') return h('span', { className: 'dps-prov-cost', role: 'cell', 'data-value': otherSpend }, formatMoney(otherSpend))
+        const cost = costs.byProvider[row.id] || null
+        const bill = cost ? cost.billing : billingOf(row.id, props.billingSettings)
+        const titleParts = [t('billing.listValue', { value: formatMoney(cost ? cost.value : 0) })]
+        if (bill && bill.mode === 'plan') titleParts.push(t('billing.planCell', { value: formatMoney(bill.monthly) }))
+        return h(
+          'span',
+          { className: 'dps-prov-costcell', role: 'cell' },
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dps-prov-cost',
+              'data-dps-action': 'billing',
+              'data-mode': cost ? cost.mode : bill.mode,
+              'data-spend': cost && cost.spend !== null ? cost.spend : '',
+              'data-list-value': cost ? cost.value : 0,
+              'aria-expanded': billingOpen === row.id ? 'true' : 'false',
+              title: titleParts.join(' · '),
+              onClick: () => setBillingOpen(billingOpen === row.id ? null : row.id),
+            },
+            costCellText(cost || { mode: bill.mode, spend: 0 }),
+          ),
+        )
+      }
       // 正在改名的那一行：{ id, draft }。回车 / 失焦保存，Esc 放弃；ref 防止回车后失焦再存一次
       const [editing, setEditing] = useState(null)
       const editingRef = useRef(null)
@@ -2460,6 +2846,7 @@ window.__ModuleLoader__.load({
                 h('span', { role: 'columnheader' }, t('provider.colAmount')),
                 h('span', { role: 'columnheader' }, t('provider.colShare')),
                 h('span', { role: 'columnheader' }, t('provider.colHit')),
+                h('span', { role: 'columnheader' }, t('provider.colCost')),
               ),
               data.rows.map((row) =>
                 h(
@@ -2477,11 +2864,26 @@ window.__ModuleLoader__.load({
                   h('span', { className: 'dps-prov-value', role: 'cell' }, formatTokens(row.tokens)),
                   h('span', { className: 'dps-prov-share', role: 'cell' }, formatPercent(row.share)),
                   h('span', { className: 'dps-prov-hit', role: 'cell' }, row.hitRate === null ? t('unit.none') : formatPercent(row.hitRate)),
+                  costCell(row),
                   h(
                     'span',
                     { className: 'dps-prov-track', 'aria-hidden': true },
                     h('span', { className: 'dps-prov-fill', style: { width: `${row.share}%`, minWidth: row.tokens > 0 ? '3px' : '0px' } }),
                   ),
+                  billingOpen === row.id && row.id !== '__other'
+                    ? h(BillingEditor, {
+                        key: `billing-${row.id}`,
+                        provider: row.id,
+                        label: providerLabel(row.id, aliases),
+                        billing: (costs && costs.byProvider[row.id] && costs.byProvider[row.id].billing) || billingOf(row.id, props.billingSettings),
+                        listValue: costs && costs.byProvider[row.id] ? costs.byProvider[row.id].value : 0,
+                        onClose: () => setBillingOpen(null),
+                        onSave: (entry) => {
+                          setBillingOpen(null)
+                          if (props.onBilling) props.onBilling(row.id, entry)
+                        },
+                      })
+                    : null,
                 ),
               ),
             ),
@@ -2554,6 +2956,13 @@ window.__ModuleLoader__.load({
     function ProjectCard(props) {
       const summary = props.summary || emptySummary()
       const data = useMemo(() => deriveProjects(summary.byProject, summary.byProjectSubagent, props.paths), [summary, props.paths])
+      const costs = props.costs || null
+      const shownIds = new Set(data.rows.map((row) => row.id))
+      const projectSpend = (row) => {
+        if (!costs) return null
+        if (row.other) return Object.entries(costs.byProject).reduce((sum, [id, amount]) => (shownIds.has(id) ? sum : sum + amount), 0)
+        return toNumber(costs.byProject[row.id])
+      }
       return h(
         'section',
         { className: 'dps-panel dps-prov dps-proj', 'data-dps-card': 'project' },
@@ -2579,6 +2988,7 @@ window.__ModuleLoader__.load({
                 h('span', { role: 'columnheader' }, t('provider.colAmount')),
                 h('span', { role: 'columnheader' }, t('provider.colShare')),
                 h('span', { role: 'columnheader' }, t('project.colSubagent')),
+                h('span', { role: 'columnheader' }, t('provider.colCost')),
               ),
               data.rows.map((row) =>
                 h(
@@ -2601,6 +3011,11 @@ window.__ModuleLoader__.load({
                   h('span', { className: 'dps-prov-value', role: 'cell' }, formatTokens(row.tokens)),
                   h('span', { className: 'dps-prov-share', role: 'cell' }, formatPercent(row.share)),
                   h('span', { className: 'dps-prov-hit', role: 'cell' }, row.subagent > 0 ? formatPercent(row.subagentShare) : t('unit.none')),
+                  h(
+                    'span',
+                    { className: 'dps-prov-cost dps-proj-cost', role: 'cell', 'data-value': projectSpend(row) === null ? '' : projectSpend(row) },
+                    projectSpend(row) === null ? t('unit.none') : formatMoney(projectSpend(row)),
+                  ),
                   h(
                     'span',
                     { className: 'dps-prov-track', 'aria-hidden': true },
@@ -2681,7 +3096,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-seg button{appearance:none;position:relative;border:0;background:transparent;color:var(--dps-muted);font-size:12px;line-height:1;padding:7px 12px;border-radius:7px;cursor:pointer;white-space:nowrap;transition:color .15s ease}
 .dps-seg button:hover{color:var(--dps-ink)}
 .dps-seg button[aria-pressed="true"]{color:var(--dps-ink);font-weight:600}
-.dps-kpis{display:grid;grid-template-columns:minmax(0,1.6fr) repeat(4,minmax(0,1fr));gap:12px}
+.dps-kpis{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1.25fr) repeat(4,minmax(0,1fr));gap:12px}
 .dps-kpi{min-width:0;display:flex;flex-direction:column;justify-content:space-between;gap:16px;padding:16px 18px 18px;border:1px solid var(--dps-line);border-radius:var(--dps-radius);background:var(--dps-card)}
 .dps-kpi[data-hero="true"]{border-color:color-mix(in srgb,var(--dps-accent) 30%,var(--dps-line));background:color-mix(in srgb,var(--dps-accent) 5%,var(--dps-card))}
 .dps-kpi-label{display:flex;align-items:center;gap:7px;min-width:0;font-size:12.5px;color:var(--dps-muted)}
@@ -2709,6 +3124,8 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-spark-bar[data-today="true"],.dps-spark-bar[data-active="true"]{background:var(--dps-accent)}
 .dps-spark-bars[data-hovering="true"] .dps-spark-bar[data-today="true"]:not([data-active="true"]){background:color-mix(in srgb,var(--dps-accent) 42%,transparent)}
 .dps-kpi-sub{font-size:12px;color:var(--dps-muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.dps-kpi-badge{margin-left:auto;flex:0 0 auto;font-size:11.5px;color:var(--dps-muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.dps-unit.dps-unit-pre{margin:0 2px 0 0}
 .dps-range-menu .dps-range-pop{flex-direction:row;align-items:flex-end;gap:10px;padding:12px}
 .dps-date-field{display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--dps-muted);white-space:nowrap}
 .dps-date{height:30px;padding:0 8px;border:1px solid var(--dps-line);border-radius:8px;background:var(--dps-card);color:var(--dps-ink);font:inherit;font-size:12.5px;color-scheme:light}
@@ -2726,14 +3143,16 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
 .dps-menu-pop button:hover{background:var(--dps-hover)}
 .dps-grid{display:grid;grid-template-columns:minmax(0,1.62fr) minmax(0,1fr);gap:16px;align-items:stretch}
 @container dps (max-width:1040px){
-.dps-kpis{grid-template-columns:repeat(4,minmax(0,1fr))}
+.dps-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
 .dps-kpi[data-hero="true"]{grid-column:1 / -1}
-.dps-grid[data-row="lists"]{grid-template-columns:repeat(2,minmax(0,1fr))}
+.dps-kpi[data-dps-kpi="cost"]{grid-column:span 2}
+.dps-grid[data-row="lists"]{grid-template-columns:minmax(0,1fr)}
 .dps-kpi-aside{flex-basis:260px}
 .dps-grid{grid-template-columns:minmax(0,1fr)}
 }
 @container dps (max-width:720px){
 .dps-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+.dps-kpi[data-dps-kpi="cost"]{grid-column:1 / -1}
 .dps-grid[data-row="lists"]{grid-template-columns:minmax(0,1fr)}
 .dps-num{font-size:24px}
 .dps-kpi[data-hero="true"] .dps-num{font-size:30px}
@@ -2858,16 +3277,28 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
 .dps-hit-plot{border-top:1px dashed var(--dps-line);border-bottom:1px solid var(--dps-line)}
 .dps-hit-svg{height:44px;overflow:visible}
 .dps-prov-table{display:flex;flex-direction:column;gap:14px}
-.dps-prov-row{display:grid;grid-template-columns:minmax(0,1fr) 72px 50px 58px;align-items:baseline;column-gap:10px;row-gap:7px;font-size:13px}
+.dps-prov-row{display:grid;grid-template-columns:minmax(0,1fr) 60px 44px 52px 68px;align-items:baseline;column-gap:10px;row-gap:7px;font-size:13px}
 .dps-prov-th{margin-bottom:-6px;font-size:11.5px;color:var(--dps-faint)}
 .dps-prov-th span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dps-prov-th span:nth-child(n+2),.dps-prov-value,.dps-prov-share,.dps-prov-hit{text-align:right}
-.dps-prov-namecell{display:flex;align-items:center;gap:4px;min-width:0}
+.dps-prov-th span:nth-child(n+2),.dps-prov-value,.dps-prov-share,.dps-prov-hit,.dps-prov-costcell,.dps-prov-cost{text-align:right}
+.dps-prov-cost{appearance:none;border:0;background:transparent;padding:0;font:inherit;font-size:13px;color:var(--dps-ink);font-variant-numeric:tabular-nums;white-space:nowrap}
+button.dps-prov-cost{cursor:pointer;border-bottom:1px dashed transparent}
+button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
+.dps-prov-cost[data-mode="unset"]{color:var(--dps-accent);font-weight:600}
+.dps-prov-cost[data-mode="free"]{color:var(--dps-muted)}
+.dps-bill{grid-column:1 / -1;display:flex;flex-direction:column;gap:10px;margin-top:2px;padding:12px;border:1px solid var(--dps-line);border-radius:10px;background:var(--dps-hover)}
+.dps-bill .dps-seg{align-self:flex-start}
+.dps-bill-fields{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px}
+.dps-bill-input{width:104px}
+.dps-bill-foot{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.dps-bill-meta{margin-right:auto;font-size:12px;color:var(--dps-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.dps-bill .dps-btn{height:28px;padding:0 12px}
+.dps-prov-namecell{position:relative;display:flex;align-items:center;min-width:0}
 .dps-prov-name{min-width:0;color:var(--dps-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dps-prov-edit{appearance:none;flex:0 0 auto;display:grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--dps-muted);cursor:pointer;opacity:0;transition:opacity .15s ease,background-color .15s ease}
+.dps-prov-edit{appearance:none;position:absolute;right:0;top:50%;transform:translateY(-50%);box-shadow:-8px 0 8px var(--dps-card);display:grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:var(--dps-card);color:var(--dps-muted);cursor:pointer;opacity:0;transition:opacity .15s ease,background-color .15s ease}
 .dps-prov-edit svg{width:13px;height:13px}
 .dps-prov-row:hover .dps-prov-edit,.dps-prov-edit:focus-visible{opacity:1}
-.dps-prov-edit:hover{background:var(--dps-hover);color:var(--dps-ink)}
+.dps-prov-edit:hover{background:color-mix(in srgb,var(--dps-ink) 7%,var(--dps-card));color:var(--dps-ink)}
 .dps-prov-input{width:100%;min-width:0;height:24px;margin:-3px 0;padding:0 7px;border:1px solid var(--dps-accent);border-radius:6px;background:var(--dps-card);color:var(--dps-ink);font:inherit;font-size:13px;outline:none}
 .dps-root .dps-prov-input:focus-visible{outline:none}
 .dps-prov-value{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -2956,6 +3387,7 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
         h(
           React.Fragment,
           { key: index },
+          part.prefix ? h('span', { className: 'dps-unit dps-unit-pre' }, part.prefix) : null,
           h('span', { className: 'dps-num' }, part.value),
           part.unit ? h('span', { className: 'dps-unit' }, part.unit) : null,
         ),
@@ -3383,8 +3815,9 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
           'data-dps-kpi': props.id,
           'data-value': props.raw === undefined ? '' : String(props.raw),
           'data-hero': props.hero ? 'true' : 'false',
+          title: props.title || undefined,
         },
-        h('div', { className: 'dps-kpi-label' }, h(Icon, { name: props.icon }), h('span', null, props.label)),
+        h('div', { className: 'dps-kpi-label' }, h(Icon, { name: props.icon }), h('span', null, props.label), props.badge || null),
         // 趋势线放在数字右边而不是下面：整排卡片同高，五个数字落在同一条底线上，小卡中间不留空
         h(
           'div',
@@ -3414,13 +3847,20 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
       const shownCurrent = useTween(ready ? k.currentStreak : 0, 700)
       const todayHit = props.todayHit === undefined ? null : props.todayHit
       const shownHit = useTween(ready && todayHit !== null ? todayHit : 0, 900)
+      const costs = props.costs || null
+      const shownCost = useTween(ready && costs ? costs.spend : 0, 900)
+      // 所有有用量的供应商都没设置计费方式时，不知道花了多少：显示「—」
+      const costKnown = Boolean(costs) && Object.values(costs.byProvider).some((row) => row.mode !== 'unset')
+      const peakShare = costs && costs.value > 0 ? (costs.peakValue / costs.value) * 100 : null
+      const costHints = []
+      if (costs && costs.unset.length) costHints.push(t('cost.hintUnset', { count: costs.unset.length }))
+      if (costs && costs.unpricedTokens > 0) costHints.push(t('cost.hintUnpriced'))
       const tokenValue = (value) => [tokenParts(Math.round(value))]
       const dayValue = (value) => [{ value: String(Math.max(0, Math.round(toNumber(value)))), unit: t('unit.day') }]
       const percentValue = (value) => [{ value: formatPercent(value).replace('%', ''), unit: '%' }]
-      const rangeLabel =
-        range === 'all'
-          ? t('stat.tokens')
-          : t('stat.rangeTokens', { range: range === 'custom' ? rangeText(props.rangeWin, props.todayKey) : t(`range.${range}`) })
+      const rangeName = range === 'custom' ? rangeText(props.rangeWin, props.todayKey) : t(`range.${range}`)
+      const rangeLabel = range === 'all' ? t('stat.tokens') : t('stat.rangeTokens', { range: rangeName })
+      const costLabel = range === 'all' ? t('stat.totalCost') : t('stat.cost', { range: rangeName })
       const deltaChip =
         delta === null
           ? null
@@ -3453,6 +3893,19 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
             points: ready ? props.spark || [] : [],
             average: ready ? props.average || [] : [],
           }),
+        }),
+        // 所选范围的花费（按各家计费方式；未设置的不计入，悬停写出来）；标签行右侧是高峰时段占比
+        h(Kpi, {
+          id: 'cost',
+          icon: 'wallet',
+          label: costLabel,
+          raw: ready && costKnown ? costs.spend : undefined,
+          parts: ready && costKnown ? moneyParts(shownCost) : null,
+          title: costHints.join('\n'),
+          badge:
+            ready && peakShare !== null
+              ? h('span', { className: 'dps-kpi-badge', 'data-dps-field': 'peak-share', 'data-value': peakShare, title: t('cost.hintPeak') }, t('stat.peakShare', { value: `${Math.round(peakShare)}%` }))
+              : null,
         }),
         h(Kpi, { id: 'today', icon: 'today', label: t('stat.today'), raw: ready ? k.today : undefined, parts: ready ? tokenValue(shownToday) : null }),
         h(Kpi, {
@@ -3509,6 +3962,8 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
       }, [])
       // 供应商的本机显示名：快照里的 + 这次会话里刚改的（保存成功前先显示，失败就撤回）
       const [aliasEdits, setAliasEdits] = useState({})
+      // 计费方式同理：id → 设置；null 表示刚恢复成默认
+      const [billingEdits, setBillingEdits] = useState({})
 
       // 打开页面不再强制重扫：宿主在后台定时保鲜，读快照时数据旧了也会自己静默补扫。
       const runRefresh = useCallback(async () => {
@@ -3573,6 +4028,45 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
         return spark.map((point) => ({ key: point.key, rate: byDate.has(point.key) ? cacheHitRate(byDate.get(point.key)) : null }))
       }, [daily, spark])
       const projectPaths = (snapshot && snapshot.projects) || null
+      const snapshotBilling = snapshot && snapshot.billing && snapshot.billing.providers
+      const billingSettings = useMemo(() => {
+        const merged = { ...(snapshotBilling || {}) }
+        for (const [id, entry] of Object.entries(billingEdits)) {
+          if (entry) merged[id] = entry
+          else delete merged[id]
+        }
+        return merged
+      }, [snapshotBilling, billingEdits])
+      const costs = useMemo(
+        () => computeCosts(daily, rangeWin.startKey, rangeWin.endKey, billingSettings, todayKey),
+        [daily, rangeWin.startKey, rangeWin.endKey, billingSettings, todayKey],
+      )
+      const todayCosts = useMemo(() => computeCosts(daily, todayKey, todayKey, billingSettings, todayKey), [daily, billingSettings, todayKey])
+      const saveBilling = useCallback(
+        async (id, entry) => {
+          setBillingEdits((current) => ({ ...current, [id]: entry }))
+          try {
+            const response = await fetch(BILLING_URL, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ provider: id, billing: entry }),
+            })
+            const result = await response.json().catch(() => null)
+            if (!response.ok || !result || result.ok !== true) throw new Error((result && result.error) || `HTTP ${response.status}`)
+            reload()
+          } catch (error) {
+            console.warn('[dsh-profile-stats] 保存计费方式失败：', error && error.message ? error.message : error)
+            if (mounted.current) {
+              setBillingEdits((current) => {
+                const next = { ...current }
+                delete next[id]
+                return next
+              })
+            }
+          }
+        },
+        [reload, mounted],
+      )
       const snapshotAliases = snapshot && snapshot.aliases && snapshot.aliases.providers
       const aliases = useMemo(() => ({ ...(snapshotAliases || {}), ...aliasEdits }), [snapshotAliases, aliasEdits])
       const saveAlias = useCallback(
@@ -3647,6 +4141,17 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
           byModel: rangeSummary.byModel,
           // 上游 totalTokens 和四项之和对不上的步数（全部时间，正常应为 0）
           diagnostics: { usageMismatchCalls: toNumber(totals.usageMismatchCalls) },
+          // 费用（人民币）：spend 按各家计费方式，officialValue 按官方价折算；未设置计费方式的供应商不计入 spend
+          cost: {
+            currency: 'CNY',
+            spend: costs.spend,
+            officialValue: costs.value,
+            peakShare: costs.value > 0 ? costs.peakValue / costs.value : null,
+            unpricedTokens: costs.unpricedTokens,
+            unsetProviders: costs.unset,
+            byProvider: Object.fromEntries(Object.entries(costs.byProvider).map(([id, row]) => [id, { mode: row.mode, spend: row.spend, officialValue: row.value }])),
+            byProject: costs.byProject,
+          },
           daily: entries,
         }
         downloadFile(`${exportName}.json`, 'application/json', JSON.stringify(payload, null, 2))
@@ -3717,7 +4222,7 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
             onExport: handleExport,
           }),
           h(StatusBar, { snapshot, error, hasData, onRetry: reload }),
-          h(KpiStrip, { kpis, ready, range, rangeWin, todayKey, summary: rangeSummary, delta, spark, average, sparkMode, todayHit }),
+          h(KpiStrip, { kpis, ready, range, rangeWin, todayKey, summary: rangeSummary, delta, spark, average, sparkMode, todayHit, costs }),
           h(ActivityCard, { daily, today, rangeStartKey: rangeWin.startKey, rangeEndKey: rangeWin.endKey }),
           h(
             'div',
@@ -3736,7 +4241,7 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
           h(
             'div',
             { className: 'dps-grid', 'data-row': 'lists' },
-            h(ProjectCard, { summary: rangeSummary, paths: projectPaths }),
+            h(ProjectCard, { summary: rangeSummary, paths: projectPaths, costs }),
             h(ProviderCard, {
               summary: rangeSummary,
               today: todaySummary,
@@ -3745,6 +4250,10 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
               onTodayOnly: setProviderToday,
               aliases,
               onRename: saveAlias,
+              costs,
+              todayCosts,
+              billingSettings,
+              onBilling: saveBilling,
             }),
           ),
         ),

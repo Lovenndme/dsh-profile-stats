@@ -18,6 +18,7 @@ const SNAPSHOT = '/api/dsh-profile-stats/snapshot'
 const REFRESH = '/api/dsh-profile-stats/refresh'
 const UPDATE = '/api/dsh-profile-stats/update'
 const ALIAS = '/api/dsh-profile-stats/alias'
+const BILLING = '/api/dsh-profile-stats/billing'
 
 const at = (month, day, hour = 12) => new Date(2026, month - 1, day, hour, 0, 0, 0).getTime()
 
@@ -320,13 +321,14 @@ test('createController：继承前缀的会话在扫描后按「原件是否还�
   assert.equal(orphanTotals.orphanedSessions, 1)
 })
 
-test('apply：注册四条同源路由，方法不对返回 405', async (t) => {
+test('apply：注册五条同源路由，方法不对返回 405', async (t) => {
   withTemporaryHome(t)
   const host = createFakeHost({ sessions: makeSessions() })
   apply(host.ctx)
   t.after(() => host.dispose())
 
-  assert.deepEqual([...host.routes.keys()].sort(), [ALIAS, REFRESH, SNAPSHOT, UPDATE].sort())
+  assert.deepEqual([...host.routes.keys()].sort(), [ALIAS, BILLING, REFRESH, SNAPSHOT, UPDATE].sort())
+  assert.equal((await host.request(BILLING, 'GET')).json.error, 'method-not-allowed')
   assert.equal((await host.request(SNAPSHOT, 'POST')).json.error, 'method-not-allowed')
   assert.equal((await host.request(REFRESH, 'GET')).json.error, 'method-not-allowed')
   assert.equal((await host.request(UPDATE, 'GET')).json.error, 'method-not-allowed')
@@ -569,4 +571,53 @@ test('aliases.json 被手改坏也不影响快照：非对象、非字符串、�
   assert.deepEqual((await host.request(SNAPSHOT, 'GET')).json.aliases, { providers: { a: 'A' } })
   fs.writeFileSync(path.join(home, 'dsh-profile-stats', 'aliases.json'), '{broken')
   assert.deepEqual((await host.request(SNAPSHOT, 'GET')).json.aliases, { providers: {} })
+})
+
+test('计费接口：每家的计费方式存在本机 billing.json，快照带出来；null 删掉；不认识的写法被拒', async (t) => {
+  const home = withTemporaryHome(t)
+  const host = createFakeHost({ sessions: makeSessions() })
+  apply(host.ctx)
+  t.after(() => host.dispose())
+  const file = path.join(home, 'dsh-profile-stats', 'billing.json')
+
+  const multiplier = await host.request(BILLING, 'POST', { provider: 'relay-x', billing: { mode: 'multiplier', factor: 0.12, extra: 'ignored' } })
+  assert.equal(multiplier.status, 200)
+  assert.deepEqual(multiplier.json.billing.providers, { 'relay-x': { mode: 'multiplier', factor: 0.12 } })
+  await host.request(BILLING, 'POST', { provider: 'plan-x', billing: { mode: 'plan', monthly: 199, since: '2026-10-20' } })
+  await host.request(BILLING, 'POST', { provider: 'work', billing: { mode: 'free' } })
+  // 自定义单价没填缓存写入时按未命中价
+  const custom = await host.request(BILLING, 'POST', { provider: 'own', billing: { mode: 'custom', miss: 2, hit: 0.2, output: 8 } })
+  assert.deepEqual(custom.json.billing.providers.own, { mode: 'custom', miss: 2, hit: 0.2, write: 2, output: 8 })
+  assert.deepEqual((await host.request(SNAPSHOT, 'GET')).json.billing.providers, {
+    'relay-x': { mode: 'multiplier', factor: 0.12 },
+    'plan-x': { mode: 'plan', monthly: 199, since: '2026-10-20' },
+    work: { mode: 'free' },
+    own: { mode: 'custom', miss: 2, hit: 0.2, write: 2, output: 8 },
+  })
+
+  // null = 回到默认
+  const cleared = await host.request(BILLING, 'POST', { provider: 'work', billing: null })
+  assert.equal(cleared.json.billing.providers.work, undefined)
+
+  // 坏请求不写文件
+  const before = fs.readFileSync(file, 'utf8')
+  assert.equal((await host.request(BILLING, 'POST', { provider: 'a', billing: { mode: 'magic' } })).json.error, 'invalid-billing')
+  assert.equal((await host.request(BILLING, 'POST', { provider: 'a', billing: { mode: 'multiplier', factor: -1 } })).json.error, 'invalid-billing')
+  assert.equal((await host.request(BILLING, 'POST', { provider: 'a', billing: { mode: 'plan', monthly: 'x' } })).json.error, 'invalid-billing')
+  assert.equal((await host.request(BILLING, 'POST', { billing: { mode: 'free' } })).json.error, 'invalid-provider')
+  assert.equal((await host.request(BILLING, 'POST', '{oops')).status, 400)
+  assert.equal(fs.readFileSync(file, 'utf8'), before)
+})
+
+test('billing.json 被手改坏也不影响快照：只留合法条目', async (t) => {
+  const home = withTemporaryHome(t)
+  fs.mkdirSync(path.join(home, 'dsh-profile-stats'), { recursive: true })
+  fs.writeFileSync(
+    path.join(home, 'dsh-profile-stats', 'billing.json'),
+    JSON.stringify({ providers: { a: { mode: 'free' }, b: { mode: 'multiplier' }, c: 'x', d: { mode: 'plan', monthly: 10, since: 'yesterday' } } }),
+  )
+  const host = createFakeHost({ sessions: makeSessions() })
+  apply(host.ctx)
+  t.after(() => host.dispose())
+  assert.deepEqual((await host.request(SNAPSHOT, 'GET')).json.billing.providers, { a: { mode: 'free' }, d: { mode: 'plan', monthly: 10 } })
 })

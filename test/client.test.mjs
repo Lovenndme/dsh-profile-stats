@@ -747,3 +747,120 @@ test('summarizeDaily：按项目与子代理部分累加', () => {
   assert.deepEqual(summary.byProject, { a: 11, b: 4 })
   assert.deepEqual(summary.byProjectSubagent, { a: 3 })
 })
+
+/* ------------------------------------------------------------ 费用 */
+
+const costHelpers = () =>
+  loadClientHelpers({
+    constants: ['OFFICIAL_PRICES', 'CN_HOLIDAYS', 'OFFICIAL_PROVIDERS', 'holidayKeys'],
+    functions: [
+      'computeCosts', 'officialRate', 'isPeakHour', 'priceFamily', 'holidaySet', 'billingOf', 'daysInMonth',
+      'moneyParts', 'formatMoney', 'indexDaily', 'parseDateKey', 'localDateKey', 'addDays', 'toNumber',
+    ],
+  })
+// 北京时间 → UTC 小时序号
+const bjHour = (year, month, day, hour) => Date.UTC(year, month - 1, day, hour - 8) / 3600000
+const near = (actual, expected, label) => assert.ok(Math.abs(actual - expected) < 1e-9, `${label}: ${actual} ≠ ${expected}`)
+
+test('priceFamily：DeepSeek 的 Flash / Pro 各种写法归到两个价格系列；其他厂商没有内置价', () => {
+  const { priceFamily } = costHelpers()
+  for (const id of ['deepseek-flash', 'deepseek-v4-1-flash', 'deepseek-v4-1-flash-economy', 'deepseek-v4-flash', 'deepseek-v4-flash-vision']) assert.equal(priceFamily(id), 'flash', id)
+  assert.equal(priceFamily('deepseek-v4-pro'), 'pro')
+  assert.equal(priceFamily('deepseek-chat'), '')
+  assert.equal(priceFamily('claude-sonnet-5-5'), '')
+  assert.equal(priceFamily(undefined), '')
+})
+
+test('isPeakHour：北京时间工作日 9–12、14–18 点；周末、法定节假日全天空闲', () => {
+  const { isPeakHour } = costHelpers()
+  assert.equal(isPeakHour(bjHour(2026, 11, 6, 9)), true, '周五 9 点')
+  assert.equal(isPeakHour(bjHour(2026, 11, 6, 11)), true, '周五 11 点')
+  assert.equal(isPeakHour(bjHour(2026, 11, 6, 12)), false, '12 点起午休')
+  assert.equal(isPeakHour(bjHour(2026, 11, 6, 14)), true)
+  assert.equal(isPeakHour(bjHour(2026, 11, 6, 17)), true)
+  assert.equal(isPeakHour(bjHour(2026, 11, 6, 18)), false)
+  assert.equal(isPeakHour(bjHour(2026, 11, 6, 8)), false)
+  assert.equal(isPeakHour(bjHour(2026, 11, 7, 10)), false, '周六')
+  assert.equal(isPeakHour(bjHour(2026, 10, 5, 10)), false, '国庆假期里的周一')
+  assert.equal(isPeakHour(bjHour(2026, 9, 25, 10)), false, '中秋（周五）')
+  assert.equal(isPeakHour(bjHour(2026, 10, 9, 10)), true, '国庆后的周五')
+  assert.equal(isPeakHour(bjHour(2026, 10, 10, 10)), false, '调休上班的周六：价格页写的是周一至周五，按空闲算')
+})
+
+test('officialRate：按调用时间选价格行；8 月 17 日前没有已知价格', () => {
+  const { officialRate } = costHelpers()
+  assert.deepEqual(officialRate('deepseek-v4-flash', bjHour(2026, 8, 20, 10)), { hit: 0.1, miss: 3, output: 9, peak: true })
+  assert.deepEqual(officialRate('deepseek-v4-flash', bjHour(2026, 8, 20, 20)), { hit: 0.05, miss: 1.5, output: 4.5, peak: false })
+  // 9 月 10 日北京时间 12:00 起 Flash 降价：11 点还是旧价，12 点是新价（12 点本身是空闲时段）
+  assert.deepEqual(officialRate('deepseek-flash', bjHour(2026, 9, 10, 11)), { hit: 0.1, miss: 3, output: 9, peak: true })
+  assert.deepEqual(officialRate('deepseek-flash', bjHour(2026, 9, 10, 12)), { hit: 0.02, miss: 1, output: 4, peak: false })
+  assert.deepEqual(officialRate('deepseek-flash', bjHour(2026, 9, 10, 14)), { hit: 0.04, miss: 2, output: 8, peak: true })
+  assert.deepEqual(officialRate('deepseek-v4-pro', bjHour(2026, 11, 6, 10)), { hit: 0.3, miss: 9, output: 27, peak: true })
+  assert.equal(officialRate('deepseek-v4-pro', bjHour(2026, 8, 16, 23)), null, '8 月 17 日 0 点之前')
+  assert.deepEqual(officialRate('deepseek-v4-pro', bjHour(2026, 8, 17, 0)), { hit: 0.15, miss: 4.5, output: 13.5, peak: false })
+  assert.equal(officialRate('claude-sonnet-5-5', bjHour(2026, 11, 6, 10)), null)
+})
+
+test('computeCosts：官方价折算与五种计费方式；包月按天摊；未设置的不算进花费', () => {
+  const { computeCosts } = costHelpers()
+  const peak = bjHour(2026, 11, 6, 10)
+  const off = bjHour(2026, 11, 6, 21)
+  const M = 1e6
+  const daily = [
+    {
+      date: '2026-11-06',
+      slots: [
+        [peak, 'deepseek-official', 'deepseek-flash', 'p1', M, M, 0, M],
+        [off, 'relay', 'deepseek-v4-1-flash', 'p2', M, 0, 0, 0],
+        [off, 'relay', 'claude-x', 'p2', M, 0, 0, 0],
+        [off, 'mystery', 'deepseek-v4-1-flash', 'p1', M, 0, 0, 0],
+        [off, 'plan', 'deepseek-v4-1-flash', 'p1', M, 0, 0, 0],
+        [off, 'work', 'deepseek-v4-1-flash', 'p2', M, 0, 0, 0],
+        [off, 'own', 'x-model', 'p2', M, M, 0, M],
+      ],
+    },
+  ]
+  const settings = {
+    relay: { mode: 'multiplier', factor: 0.1 },
+    plan: { mode: 'plan', monthly: 300, since: '2026-11-01' },
+    work: { mode: 'free' },
+    own: { mode: 'custom', miss: 2, hit: 0.5, write: 2, output: 10 },
+  }
+  const day = computeCosts(daily, '2026-11-06', '2026-11-06', settings, '2026-11-06')
+  near(day.byProvider['deepseek-official'].spend, 2 + 0.04 + 8, '官方直连（自动识别）：高峰价')
+  near(day.byProvider.relay.spend, 0.1, '打折：官方价 1 元 × 0.1；没有官方价的 claude 那条不算')
+  near(day.byProvider.plan.spend, 10, '包月：300 ÷ 11 月 30 天')
+  near(day.byProvider.work.spend, 0, '不计入')
+  near(day.byProvider.own.spend, 2 + 0.5 + 10, '自定义单价，不看官方价')
+  assert.equal(day.byProvider.mystery.spend, null, '未设置：不知道花了多少')
+  assert.deepEqual(day.unset, ['mystery'])
+  near(day.spend, 10.04 + 0.1 + 10 + 12.5, '花费合计不含未设置的')
+  near(day.value, 10.04 + 1 + 1 + 1 + 1, '官方价折算：所有有官方价的用量')
+  near(day.peakValue, 10.04, '高峰部分')
+  assert.equal(day.unpricedTokens, M + 3 * M, 'claude 与 x-model 没有官方价')
+  near(day.byProject.p1, 10.04 + 10, '包月费摊到当天有用量的项目')
+  near(day.byProject.p2, 0.1 + 12.5, 'p2')
+
+  // 累计：包月从 11-01 摊到今天（6 天）
+  const all = computeCosts(daily, '', '2026-11-06', settings, '2026-11-06')
+  near(all.byProvider.plan.spend, 60, '包月 6 天')
+  // 没填 since 时从第一次有用量那天起
+  const fromFirstUse = computeCosts(daily, '', '2026-11-06', { plan: { mode: 'plan', monthly: 300 } }, '2026-11-06')
+  near(fromFirstUse.byProvider.plan.spend, 10, '只有 11-06 一天')
+  // 空数据不出 NaN
+  const empty = computeCosts([], '', '2026-11-06', {}, '2026-11-06')
+  assert.equal(empty.spend, 0)
+  assert.equal(empty.value, 0)
+})
+
+test('moneyParts / formatMoney：100 元以下两位小数、以上一位，千分位；一万起写万；极小值写 <¥0.01', () => {
+  const { moneyParts, formatMoney } = costHelpers()
+  assert.equal(formatMoney(46.123), '¥46.12')
+  assert.equal(formatMoney(446.123), '¥446.1')
+  assert.equal(formatMoney(1234.56), '¥1,234.6')
+  assert.equal(formatMoney(199), '¥199', '整数不写 .0')
+  assert.equal(formatMoney(12345), '¥1.2 万')
+  assert.equal(formatMoney(0.001), '<¥0.01')
+  assert.equal(formatMoney(0), '¥0')
+  assert.deepEqual(moneyParts(5.5), [{ prefix: '¥', value: '5.50', unit: '' }])
+})

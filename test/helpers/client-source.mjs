@@ -18,9 +18,11 @@ export function readClientSource() {
   return fs.readFileSync(CLIENT_PATH, 'utf8')
 }
 
-/** 从 `{` 开始找到配对的 `}`，跳过字符串、模板字符串、注释里的花括号。 */
+/** 从 `{`（或 `[`）开始找到配对的 `}`（或 `]`），跳过字符串、模板字符串、注释里的括号。 */
 function matchBrace(source, openIndex) {
-  if (source[openIndex] !== '{') throw new Error(`matchBrace: 起点不是花括号（index=${openIndex}）`)
+  const open = source[openIndex]
+  if (open !== '{' && open !== '[') throw new Error(`matchBrace: 起点不是花括号 / 方括号（index=${openIndex}）`)
+  const close = open === '{' ? '}' : ']'
   let depth = 0
   let index = openIndex
   while (index < source.length) {
@@ -60,12 +62,12 @@ function matchBrace(source, openIndex) {
       index += 1
       continue
     }
-    if (char === '{') {
+    if (char === open) {
       depth += 1
       index += 1
       continue
     }
-    if (char === '}') {
+    if (char === close) {
       depth -= 1
       index += 1
       if (depth === 0) return index - 1
@@ -92,15 +94,32 @@ export function hasFunction(source, name) {
 }
 
 /**
+ * 取出顶层常量 / 变量声明：`const NAME = [ … ]`、`const NAME = { … }` 按括号配对整段取；
+ * 其他写法（`let NAME = null`、`const NAME = 8`）取到行尾。用来测价格表这类数据时直接用 client.js 里的那一份，不在测试里抄一遍。
+ */
+export function extractConstant(source, name) {
+  const match = new RegExp(`\\n\\s*(const|let) ${name} = `).exec(source)
+  if (!match) throw new Error(`client.js 里找不到常量 ${name}：改名后请同步测试`)
+  const start = match.index + 1
+  const valueStart = match.index + match[0].length
+  const first = source[valueStart]
+  if (first === '[' || first === '{') return source.slice(start, matchBrace(source, valueStart) + 1)
+  const lineEnd = source.indexOf('\n', valueStart)
+  return source.slice(start, lineEnd < 0 ? source.length : lineEnd)
+}
+
+/**
  * 把若干纯函数求值出来。
  *   functions 函数名列表（互相引用没关系，function 声明会提升）
+ *   constants 直接从 client.js 取的常量名列表（价格表、节假日这类数据）
  *   extraCode 需要补的常量/桩，例如 `const ACTIVITY_WEEKS = 53`
  * 返回 { 函数名: Function }
  */
-export function loadClientHelpers({ functions, extraCode = [] }) {
+export function loadClientHelpers({ functions, constants = [], extraCode = [] }) {
   const source = readClientSource()
   const parts = [
     ...extraCode,
+    ...constants.map((name) => extractConstant(source, name)),
     ...functions.map((name) => extractFunction(source, name)),
     `return { ${functions.join(', ')} }`,
   ]

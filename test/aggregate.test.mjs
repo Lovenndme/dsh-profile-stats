@@ -264,3 +264,26 @@ test('aggregate：按项目（工作目录）记每天的 token，子代理会�
   }
   assert.equal(daily.reduce((sum, entry) => sum + entry.tokens, 0), totals.tokens)
 })
+
+test('aggregate：每天按「UTC 小时 × 供应商 × 模型 × 项目」记四项用量（slots），合计与当天总量一致', () => {
+  const hourStart = Date.UTC(2026, 10, 6, 4)
+  const hour = hourStart / 3600000
+  const fold = foldSnapshot({
+    session: { id: 'a', cwd: '/srv/atlas' },
+    events: [
+      assistantEvent({ seq: 0, time: hourStart + 60000, input: 10, cacheRead: 90, output: 5, provider: 'p1', model: 'deepseek-v4-1-flash' }),
+      assistantEvent({ seq: 1, time: hourStart + 120000, input: 1, cacheRead: 9, cacheWrite: 2, output: 1, provider: 'p1', model: 'deepseek-v4-1-flash' }),
+      assistantEvent({ seq: 2, time: hourStart + 3600000 + 5, input: 7, output: 3, provider: 'p2', model: 'deepseek-v4-pro' }),
+    ],
+  })
+  const { daily } = aggregate([fold], NOW, new Set(['a']))
+  const rows = daily.flatMap((entry) => entry.slots)
+  assert.deepEqual(rows, [
+    [hour, 'p1', 'deepseek-v4-1-flash', '/srv/atlas', 11, 99, 2, 6],
+    [hour + 1, 'p2', 'deepseek-v4-pro', '/srv/atlas', 7, 0, 0, 3],
+  ])
+  for (const entry of daily) {
+    const sum = entry.slots.reduce((total, row) => total + row[4] + row[5] + row[6] + row[7], 0)
+    assert.equal(sum, entry.tokens, entry.date)
+  }
+})

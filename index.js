@@ -29,6 +29,7 @@ const SNAPSHOT_PATH = '/api/dsh-profile-stats/snapshot'
 const REFRESH_PATH = '/api/dsh-profile-stats/refresh'
 const UPDATE_PATH = '/api/dsh-profile-stats/update'
 const ALIAS_PATH = '/api/dsh-profile-stats/alias'
+const BILLING_PATH = '/api/dsh-profile-stats/billing'
 
 /** 本插件自己的包名 / 目录（用于读自身版本、给 pluginManager 传 spec）。 */
 const SELF_NAME = 'dsh-profile-stats'
@@ -42,8 +43,9 @@ const UPDATE_CHECK_TTL_MS = 6 * 60 * 60 * 1000
  * 13：单步总量改为四项之和（旧日志缺 totalTokens 时不再漏掉缓存）；缓存读 / 写分开记；
  *     每天每个 provider 记四项用量。
  * 14：会话记下工作目录（cwd）与是否子代理会话，用于按项目统计。
+ * 15：每天按「小时 × 供应商 × 模型」记四项用量（slots），用于按调用时间折算费用。
  */
-const CACHE_VERSION = 14
+const CACHE_VERSION = 15
 const DAY_MS = 86400000
 /**
  * 数据保鲜不依赖用户打开页面：宿主运行期间每分钟看一眼，快照超过 5 分钟就在后台静默补扫；
@@ -136,6 +138,92 @@ function writeAlias(provider, name) {
   fs.writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`)
   fs.renameSync(temporary, file)
   return { ok: true, aliases: next }
+}
+
+/**
+ * 每个供应商的计费方式（只存在本机，不进仓库、不进 npm 包）：{ "providers": { "<provider id>": { mode, ... } } }。
+ *   official   官方直连：花费 = 按官方价折算
+ *   multiplier 按官方价打折：花费 = 官方价折算 × factor
+ *   custom     自定义单价：miss / hit / write / output，元 / 百万 token
+ *   plan       包月：monthly 元 / 月，since 起（YYYY-MM-DD，可空）
+ *   free       不计入（公司付费、免费额度）
+ * 没设置的供应商由页面决定默认值（官方直连的 id 自动当作 official，其余只显示官方价折算）。
+ */
+function billingFile() {
+  return path.join(dshHome(), 'dsh-profile-stats', 'billing.json')
+}
+
+const BILLING_MODES = ['official', 'multiplier', 'custom', 'plan', 'free']
+const PRICE_LIMIT = 100000
+
+/** 非负、有限、不超过上限的数；否则返回 null。 */
+function priceNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= PRICE_LIMIT ? value : null
+}
+
+/** 单个供应商的计费方式：不认识的 mode 或缺字段时返回 null（等于没设置）。 */
+function sanitizeBillingEntry(raw) {
+  if (!raw || typeof raw !== 'object' || !BILLING_MODES.includes(raw.mode)) return null
+  if (raw.mode === 'official' || raw.mode === 'free') return { mode: raw.mode }
+  if (raw.mode === 'multiplier') {
+    const factor = priceNumber(raw.factor)
+    return factor === null || factor > 100 ? null : { mode: 'multiplier', factor }
+  }
+  if (raw.mode === 'custom') {
+    const entry = { mode: 'custom' }
+    for (const field of ['miss', 'hit', 'write', 'output']) {
+      const value = priceNumber(raw[field])
+      if (value === null && field !== 'write') return null
+      entry[field] = value === null ? priceNumber(raw.miss) : value
+    }
+    return entry
+  }
+  const monthly = priceNumber(raw.monthly)
+  if (monthly === null) return null
+  const since = typeof raw.since === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.since) ? raw.since : ''
+  return since ? { mode: 'plan', monthly, since } : { mode: 'plan', monthly }
+}
+
+function sanitizeBilling(raw) {
+  const providers = {}
+  const source = raw && typeof raw === 'object' && raw.providers && typeof raw.providers === 'object' && !Array.isArray(raw.providers) ? raw.providers : {}
+  for (const [id, entry] of Object.entries(source)) {
+    if (Object.keys(providers).length >= ALIAS_MAX_COUNT) break
+    const key = String(id).trim()
+    const clean = sanitizeBillingEntry(entry)
+    if (!key || key.length > ALIAS_MAX_ID || !clean) continue
+    providers[key] = clean
+  }
+  return { providers }
+}
+
+function readBilling() {
+  try {
+    return sanitizeBilling(JSON.parse(fs.readFileSync(billingFile(), 'utf8')))
+  } catch {
+    return { providers: {} }
+  }
+}
+
+/** 改一个供应商的计费方式；billing 为 null 表示删掉（回到默认）。写法同 writeAlias：先写临时文件再改名。 */
+function writeBilling(provider, billing) {
+  const id = typeof provider === 'string' ? provider.trim() : ''
+  if (!id || id.length > ALIAS_MAX_ID) return { ok: false, error: 'invalid-provider' }
+  const current = readBilling()
+  if (billing === null || billing === undefined) delete current.providers[id]
+  else {
+    const clean = sanitizeBillingEntry(billing)
+    if (!clean) return { ok: false, error: 'invalid-billing' }
+    current.providers[id] = clean
+  }
+  const next = sanitizeBilling(current)
+  if (billing && !next.providers[id]) return { ok: false, error: 'too-many' }
+  const file = billingFile()
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const temporary = `${file}.${process.pid}.tmp`
+  fs.writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`)
+  fs.renameSync(temporary, file)
+  return { ok: true, billing: next }
 }
 
 /** 读 JSON 请求体（宿主给的是 Node 的请求流），超过上限直接拒绝。 */
@@ -350,6 +438,7 @@ function dayMapsOf(fold, inherited) {
       cacheWrite: map('inheritedPerDayCacheWrite'),
       providers: map('inheritedPerDayProvider'),
       providerUsage: map('inheritedPerDayProviderUsage'),
+      slots: map('inheritedPerDaySlots'),
       models: map('inheritedPerDayModel'),
     }
   }
@@ -362,12 +451,16 @@ function dayMapsOf(fold, inherited) {
     cacheWrite: map('perDayCacheWrite'),
     providers: map('perDayProvider'),
     providerUsage: map('perDayProviderUsage'),
+    slots: map('perDaySlots'),
     models: map('perDayModel'),
   }
 }
 
-/** 一步记进某一天。 */
-function addStepToDay(maps, key, parts, tokens, provider, modelFamily) {
+/**
+ * 一步记进某一天。slots 再按「UTC 小时序号 × 供应商 × 模型」记四项用量：价格按调用时间选
+ * （DeepSeek 分高峰 / 空闲时段、会调价），时段边界都在整点，存到小时就够，页面现算费用、改价不用重扫。
+ */
+function addStepToDay(maps, key, parts, tokens, provider, modelFamily, time) {
   maps.tokens[key] = toNumber(maps.tokens[key]) + tokens
   maps.calls[key] = toNumber(maps.calls[key]) + 1
   maps.input[key] = toNumber(maps.input[key]) + parts.inputTokens
@@ -380,6 +473,13 @@ function addStepToDay(maps, key, parts, tokens, provider, modelFamily) {
   providerUsage[provider] = addUsage(providerUsage[provider], parts)
   const models = maps.models[key] || (maps.models[key] = {})
   models[modelFamily] = toNumber(models[modelFamily]) + tokens
+  const slots = maps.slots[key] || (maps.slots[key] = {})
+  const slotKey = `${Math.floor(toNumber(time) / 3600000)}|${provider}|${modelFamily}`
+  const slot = slots[slotKey] || (slots[slotKey] = [0, 0, 0, 0])
+  slot[0] += parts.inputTokens
+  slot[1] += parts.cacheReadTokens
+  slot[2] += parts.cacheWriteTokens
+  slot[3] += parts.outputTokens
 }
 
 /** 这一步是谁服务的（deepseek-official / deepseek-account …），用于和网关账单对账。 */
@@ -451,7 +551,7 @@ function applyEvent(fold, event) {
       fold.perProvider[provider] = toNumber(fold.perProvider[provider]) + tokens
       if (time > 0) {
         const key = localDayKey(time)
-        if (key) addStepToDay(dayMapsOf(fold, false), key, parts, tokens, provider, modelFamily)
+        if (key) addStepToDay(dayMapsOf(fold, false), key, parts, tokens, provider, modelFamily, time)
       }
       break
     }
@@ -518,7 +618,7 @@ function foldSnapshot(snapshot) {
           toNumber(fold.inheritedPerProvider[inheritedProvider]) + tokens
         if (time > 0) {
           const key = localDayKey(time)
-          if (key) addStepToDay(dayMapsOf(fold, true), key, parts, tokens, inheritedProvider, inheritedModelFamily)
+          if (key) addStepToDay(dayMapsOf(fold, true), key, parts, tokens, inheritedProvider, inheritedModelFamily, time)
         }
       }
       if (seq > fold.seq) fold.seq = seq
@@ -558,6 +658,16 @@ function computeStreaks(activeDays, now) {
     cursor = active.has(previous) ? previous : null
   }
   return { longestStreak: longest, currentStreak: current }
+}
+
+/** slots 表 → 按时间排好的元组：[小时序号, 供应商, 模型, 项目键, 未缓存输入, 缓存读, 缓存写, 输出]。 */
+function slotRows(slots) {
+  const rows = []
+  for (const [key, parts] of Object.entries(slots || {})) {
+    const [hour, provider, model, ...project] = key.split('|')
+    rows.push([Number(hour), provider, model, project.join('|'), ...parts])
+  }
+  return rows.sort((left, right) => left[0] - right[0] || (left[1] < right[1] ? -1 : left[1] > right[1] ? 1 : 0))
 }
 
 function aggregate(sessions, now, knownIds) {
@@ -612,8 +722,15 @@ function aggregate(sessions, now, knownIds) {
         byModel: {},
         byProject: {},
         byProjectSubagent: {},
+        slots: {},
       }
       entry.tokens += tokens
+      // 每小时用量再带上项目：[UTC 小时序号, 供应商, 模型, 项目键, 未缓存输入, 缓存读, 缓存写, 输出]
+      for (const [slotKey, parts] of Object.entries(maps.slots[key] || {})) {
+        const fullKey = `${slotKey}|${project.key}`
+        const sum = entry.slots[fullKey] || (entry.slots[fullKey] = [0, 0, 0, 0])
+        for (let index = 0; index < 4; index += 1) sum[index] += toNumber(parts && parts[index])
+      }
       // 一个会话只有一个工作目录：这一天这份来源的 token 全部记到它的项目上
       entry.byProject[project.key] = toNumber(entry.byProject[project.key]) + tokens
       if (project.subagent) entry.byProjectSubagent[project.key] = toNumber(entry.byProjectSubagent[project.key]) + tokens
@@ -698,7 +815,7 @@ function aggregate(sessions, now, knownIds) {
   }
 
   const dailyList = Array.from(daily.entries())
-    .map(([date, entry]) => ({ date, ...entry }))
+    .map(([date, entry]) => ({ date, ...entry, slots: slotRows(entry.slots) }))
     .sort((left, right) => (left.date < right.date ? -1 : 1))
 
   for (const entry of dailyList) {
@@ -1180,6 +1297,7 @@ export function createController(ctx) {
       identity: identity(),
       update: updateInfo(),
       aliases: readAliases(),
+      billing: readBilling(),
       totals: agg.totals,
       daily: agg.daily,
       projects: agg.projects || {},
@@ -1232,6 +1350,32 @@ export function apply(ctx) {
         }
         kick('forced')
         sendJson(res, 200, { ok: true, accepted: true, scanning: state.scanning })
+      },
+    }),
+  )
+
+  ctx.effect(() =>
+    ctx.webServer.register({
+      kind: 'exact',
+      path: BILLING_PATH,
+      handler: async (req, res) => {
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { ok: false, error: 'method-not-allowed' })
+          return
+        }
+        let body
+        try {
+          body = await readJsonBody(req, ALIAS_BODY_LIMIT)
+        } catch (error) {
+          sendJson(res, error && error.code === 'too-large' ? 413 : 400, { ok: false, error: error && error.code === 'too-large' ? 'too-large' : 'invalid-json' })
+          return
+        }
+        try {
+          const result = writeBilling(body && body.provider, body ? body.billing : undefined)
+          sendJson(res, result.ok ? 200 : 400, result)
+        } catch (error) {
+          sendJson(res, 500, { ok: false, error: 'write-failed', message: error && error.message ? error.message : String(error) })
+        }
       },
     }),
   )
@@ -1306,6 +1450,10 @@ export {
   nextDayKey,
   emptyFold,
   projectOf,
+  slotRows,
+  sanitizeBilling,
+  readBilling,
+  writeBilling,
   sanitizeAliases,
   readAliases,
   writeAlias,
