@@ -25,6 +25,7 @@ window.__ModuleLoader__.load({
     const SNAPSHOT_URL = '/api/dsh-profile-stats/snapshot'
     const REFRESH_URL = '/api/dsh-profile-stats/refresh'
     const UPDATE_URL = '/api/dsh-profile-stats/update'
+    const ALIAS_URL = '/api/dsh-profile-stats/alias'
     const PANEL_ID = 'profile'
     const STYLE_ID = 'dsh-profile-stats-style'
     /** 指标卡里的迷你柱：最近多少天。 */
@@ -55,6 +56,15 @@ window.__ModuleLoader__.load({
       'range.30d': '30 days',
       'range.90d': '90 days',
       'range.all': 'All time',
+      'range.month': 'This month',
+      'range.custom': 'Custom',
+      'range.from': 'From',
+      'range.to': 'To',
+      'action.apply': 'Apply',
+      'stat.streak': 'Active streak',
+      'stat.best': 'best {n}d',
+      'stat.todayHit': 'Cache hit today',
+      'provider.rename': 'Rename',
       'stat.rangeTokens': '{range} tokens',
       'action.export': 'Export',
       'action.exportCsv': 'CSV (daily)',
@@ -138,6 +148,15 @@ window.__ModuleLoader__.load({
       'range.30d': '近 30 天',
       'range.90d': '近 90 天',
       'range.all': '累计',
+      'range.month': '本月',
+      'range.custom': '自定义',
+      'range.from': '开始',
+      'range.to': '结束',
+      'action.apply': '确定',
+      'stat.streak': '连续天数',
+      'stat.best': '最长 {n} 天',
+      'stat.todayHit': '今日缓存命中率',
+      'provider.rename': '改名',
       'stat.rangeTokens': '{range} Token',
       'action.export': '导出',
       'action.exportCsv': 'CSV（按天）',
@@ -416,14 +435,35 @@ window.__ModuleLoader__.load({
 
     /* ------------------------------------------------------------ 时间范围 */
 
-    /** 顶部范围：数值是窗口天数，0 表示不限制（累计）。 */
+    /** 顶部范围：数值是窗口天数，0 表示不限制（累计）。本月 / 自定义的天数按日历算。 */
     const RANGE_DAYS = { '7d': 7, '30d': 30, '90d': 90, all: 0 }
-    const RANGE_IDS = ['7d', '30d', '90d', 'all']
+    const RANGE_IDS = ['7d', '30d', '90d', 'month', 'all', 'custom']
 
-    /** 范围 → 起止日期键。累计范围没有起点（用今天作终点）。 */
-    function rangeWindow(range, todayKey) {
-      const days = RANGE_DAYS[range] || 0
+    function daysBetween(start, end) {
+      return Math.round((startOfDay(end).getTime() - startOfDay(start).getTime()) / 86400000) + 1
+    }
+
+    /**
+     * 范围 → 起止日期键。累计范围没有起点（用今天作终点）。
+     *   本月：1 号到今天（kind = 'month'，环比按自然月对齐）；
+     *   自定义：custom = { startKey, endKey }，终点不晚于今天、起止颠倒时自动对调。
+     */
+    function rangeWindow(range, todayKey, custom) {
       const end = parseDateKey(todayKey)
+      if (range === 'month' && end) {
+        return { range, kind: 'month', days: end.getDate(), startKey: localDateKey(new Date(end.getFullYear(), end.getMonth(), 1)), endKey: todayKey }
+      }
+      if (range === 'custom' && end && custom) {
+        let first = parseDateKey(custom.startKey)
+        let last = parseDateKey(custom.endKey)
+        if (first && last) {
+          if (first.getTime() > last.getTime()) [first, last] = [last, first]
+          if (last.getTime() > end.getTime()) last = end
+          if (first.getTime() > last.getTime()) first = last
+          return { range, kind: 'custom', days: daysBetween(first, last), startKey: localDateKey(first), endKey: localDateKey(last) }
+        }
+      }
+      const days = RANGE_DAYS[range] || 0
       if (!days || !end) return { range, days: 0, startKey: '', endKey: todayKey }
       return { range, days, startKey: localDateKey(addDays(end, -(days - 1))), endKey: todayKey }
     }
@@ -433,14 +473,27 @@ window.__ModuleLoader__.load({
      * 直接拿「含今天的 N 天」去比「完整的上一个 N 天」会偏低——今天还没过完，越早看越低。
      * 累计范围没有「上一期」，返回 null（页面据此不显示环比）。
      */
-    function deltaWindows(rangeWin) {
-      if (!rangeWin || !(rangeWin.days >= 2)) return null
+    function deltaWindows(rangeWin, todayKey) {
+      if (!rangeWin || !rangeWin.startKey || !(rangeWin.days >= 1)) return null
       const start = parseDateKey(rangeWin.startKey)
       const end = parseDateKey(rangeWin.endKey)
       if (!start || !end) return null
-      const lastFull = addDays(end, -1)
+      // 终点是今天时今天还没过完，不算；自定义范围整段都在过去时每一天都已过完
+      const endsToday = !todayKey || rangeWin.endKey >= todayKey
+      const lastFull = endsToday ? addDays(end, -1) : end
+      if (lastFull.getTime() < start.getTime()) return null
+      const current = { startKey: rangeWin.startKey, endKey: localDateKey(lastFull) }
+      if (rangeWin.kind === 'month') {
+        // 本月：对上个月从 1 号起的同样天数（11 月 1–7 日对 10 月 1–7 日），不超过上个月的最后一天
+        const finished = daysBetween(start, lastFull)
+        const previousStart = new Date(start.getFullYear(), start.getMonth() - 1, 1)
+        const previousMonthEnd = new Date(start.getFullYear(), start.getMonth(), 0)
+        let previousEnd = addDays(previousStart, finished - 1)
+        if (previousEnd.getTime() > previousMonthEnd.getTime()) previousEnd = previousMonthEnd
+        return { current, previous: { startKey: localDateKey(previousStart), endKey: localDateKey(previousEnd) } }
+      }
       return {
-        current: { startKey: rangeWin.startKey, endKey: localDateKey(lastFull) },
+        current,
         previous: { startKey: localDateKey(addDays(start, -rangeWin.days)), endKey: localDateKey(addDays(lastFull, -rangeWin.days)) },
       }
     }
@@ -636,6 +689,17 @@ window.__ModuleLoader__.load({
       } catch {
         return localDateKey(date)
       }
+    }
+
+    /** 自定义范围的简写：今年的写「10/1–10/31」，跨年或往年带上年份。 */
+    function rangeText(rangeWin, todayKey) {
+      const start = parseDateKey(rangeWin && rangeWin.startKey)
+      const end = parseDateKey(rangeWin && rangeWin.endKey)
+      if (!start || !end) return ''
+      const thisYear = (parseDateKey(todayKey) || new Date()).getFullYear()
+      const options = start.getFullYear() === thisYear && end.getFullYear() === thisYear ? { month: 'numeric', day: 'numeric' } : { year: 'numeric', month: 'numeric', day: 'numeric' }
+      const first = formatDate(start, options)
+      return start.getTime() === end.getTime() ? first : `${first}–${formatDate(end, options)}`
     }
 
     function monthLabel(date) {
@@ -841,6 +905,8 @@ window.__ModuleLoader__.load({
       update: 'M12 16V4m-5 5l5-5 5 5M5 20h14',
       download: 'M12 4v10m-4.5-4l4.5 4.5 4.5-4.5M5 20h14',
       alert: 'M12 8v5m0 3.5v.01M10.3 3.9L2.6 17.5A2 2 0 004.3 20.5h15.4a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z',
+      edit: 'M4 20h4L19 9l-4-4L4 16v4zM13 7l4 4',
+      target: 'M12 21a9 9 0 100-18 9 9 0 000 18zM12 16.5a4.5 4.5 0 100-9 4.5 4.5 0 000 9zM12 12.6a.6.6 0 100-1.2.6.6 0 000 1.2z',
     }
 
     function Icon(props) {
@@ -1522,9 +1588,11 @@ window.__ModuleLoader__.load({
      */
     function granularitiesFor(range, spanDays) {
       if (range === '7d') return ['day']
-      if (range === '30d') return ['day', 'week']
+      if (range === '30d' || range === 'month') return ['day', 'week']
       if (range === '90d') return ['week', 'month']
       const span = toNumber(spanDays)
+      // 自定义范围按所选天数分档，一周以内只看日
+      if (range === 'custom' && span > 0 && span <= 7) return ['day']
       if (span > 0 && span <= 31) return ['day', 'week']
       if (span > 730) return ['month']
       return ['week', 'month']
@@ -1637,27 +1705,28 @@ window.__ModuleLoader__.load({
       const spanStartKey =
         rangeWin && rangeWin.startKey ? rangeWin.startKey : spanDays > 0 ? localDateKey(addDays(today, -(spanDays - 1))) : ''
       const startDate = parseDateKey(spanStartKey)
-      const endDate = startOfDay(today)
+      const endDate = (rangeWin && parseDateKey(rangeWin.endKey)) || startOfDay(today)
       const endKey = localDateKey(endDate)
+      const rangeKey = props.rangeKey || range
       const available = granularitiesFor(range, spanDays)
       // 用户在当前范围里点过的粒度。换了范围就清掉（在渲染中直接重置，React 支持的「上一次渲染的信息」写法），
       // 点过的那档不再可选（跨过午夜、累计跨度变长）也回到默认——都不靠 effect 事后纠正，
       // 否则会先用旧粒度画一帧，开关高亮的那档也可能和图对不上。
-      const [picked, setPicked] = useState({ range, value: null })
-      if (picked.range !== range) setPicked({ range, value: null })
-      const granularity = picked.range === range && picked.value && available.includes(picked.value) ? picked.value : available[0]
+      const [picked, setPicked] = useState({ range: rangeKey, value: null })
+      if (picked.range !== rangeKey) setPicked({ range: rangeKey, value: null })
+      const granularity = picked.range === rangeKey && picked.value && available.includes(picked.value) ? picked.value : available[0]
       const barsRef = useRef(null)
       const pointer = usePointer()
       // 没有数据的累计范围也画 12 个空桶，卡片形状不变
       const bucketCount = startDate ? calendarBucketCount(granularity, startDate, endDate) : MODEL_WINDOW
       const data = useMemo(
-        () => buildModelSeries(props.daily, granularity, today, bucketCount, rangeWin),
+        () => buildModelSeries(props.daily, granularity, endDate, bucketCount, rangeWin),
         [props.daily, granularity, bucketCount, rangeWin ? rangeWin.startKey : '', rangeWin ? rangeWin.endKey : '', endKey],
       )
       const count = data.buckets.length
       const empty = data.total <= 0
       // 悬浮 / 键盘选中的桶只在同一范围、同一粒度下有效，换了就自然失效
-      const scope = `${range}|${granularity}`
+      const scope = `${rangeKey}|${granularity}`
       const [activeState, setActiveState] = useState(null)
       const active = activeState && activeState.scope === scope && activeState.index < count ? activeState.index : null
       const setActive = (index) => setActiveState(index === null || index === undefined ? null : { scope, index })
@@ -1814,7 +1883,7 @@ window.__ModuleLoader__.load({
                 label: t('section.model'),
                 value: granularity,
                 onChange: (next) => {
-                  setPicked({ range, value: next })
+                  setPicked({ range: rangeKey, value: next })
                   setActive(null)
                 },
                 options: available.map((id) => ({ id, label: t(`grain.${id}`) })),
@@ -2098,8 +2167,11 @@ window.__ModuleLoader__.load({
 
     /* ------------------------------------------------------------ 供应商分类 */
 
-    function providerLabel(id) {
+    /** 显示名：本机起的名字（aliases，只存在本机）→ 内置文案 → 原始 id。 */
+    function providerLabel(id, aliases) {
       if (id === '__other') return t('provider.other')
+      const alias = aliases && typeof aliases[id] === 'string' ? aliases[id].trim() : ''
+      if (alias) return alias
       const key = `provider.${id}`
       const text = t(key)
       return text === key ? String(id) : text
@@ -2143,6 +2215,68 @@ window.__ModuleLoader__.load({
       const todayOnly = Boolean(props.todayOnly)
       const summary = (todayOnly ? props.today : props.summary) || emptySummary()
       const data = useMemo(() => deriveProviders(summary.byProvider, summary.providerUsage), [summary])
+      const aliases = props.aliases || {}
+      // 正在改名的那一行：{ id, draft }。回车 / 失焦保存，Esc 放弃；ref 防止回车后失焦再存一次
+      const [editing, setEditing] = useState(null)
+      const editingRef = useRef(null)
+      editingRef.current = editing
+      const commit = () => {
+        const current = editingRef.current
+        if (!current) return
+        editingRef.current = null
+        setEditing(null)
+        const before = typeof aliases[current.id] === 'string' ? aliases[current.id].trim() : ''
+        const after = current.draft.trim()
+        if (after !== before && props.onRename) props.onRename(current.id, after)
+      }
+      const nameCell = (row) => {
+        if (editing && editing.id === row.id) {
+          return h(
+            'span',
+            { className: 'dps-prov-namecell', role: 'cell' },
+            h('input', {
+              className: 'dps-prov-input',
+              'data-dps-field': 'provider-name-input',
+              value: editing.draft,
+              placeholder: row.id,
+              maxLength: 40,
+              autoFocus: true,
+              'aria-label': t('provider.rename'),
+              onChange: (event) => setEditing({ id: row.id, draft: event.target.value }),
+              onKeyDown: (event) => {
+                if (event.key === 'Enter') commit()
+                else if (event.key === 'Escape') {
+                  editingRef.current = null
+                  setEditing(null)
+                }
+              },
+              onBlur: commit,
+            }),
+          )
+        }
+        const label = providerLabel(row.id, aliases)
+        const renamed = row.id !== '__other' && label !== providerLabel(row.id)
+        return h(
+          'span',
+          { className: 'dps-prov-namecell', role: 'cell' },
+          // 改过名的悬停时带上原始 id，对账时还能认出是哪个渠道
+          h('span', { className: 'dps-prov-name', title: renamed ? `${label} · ${row.id}` : label }, label),
+          row.id === '__other'
+            ? null
+            : h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dps-prov-edit',
+                  'data-dps-action': 'rename',
+                  'aria-label': `${t('provider.rename')} ${label}`,
+                  title: t('provider.rename'),
+                  onClick: () => setEditing({ id: row.id, draft: typeof aliases[row.id] === 'string' ? aliases[row.id] : '' }),
+                },
+                h(Icon, { name: 'edit' }),
+              ),
+        )
+      }
       return h(
         'section',
         { className: 'dps-panel dps-prov', 'data-dps-card': 'provider', 'data-scope': todayOnly ? 'today' : props.scope || 'all' },
@@ -2192,7 +2326,7 @@ window.__ModuleLoader__.load({
                     'data-share': row.share,
                     'data-hit': row.hitRate === null ? '' : row.hitRate,
                   },
-                  h('span', { className: 'dps-prov-name', role: 'cell', title: providerLabel(row.id) }, providerLabel(row.id)),
+                  nameCell(row),
                   h('span', { className: 'dps-prov-value', role: 'cell' }, formatTokens(row.tokens)),
                   h('span', { className: 'dps-prov-share', role: 'cell' }, formatPercent(row.share)),
                   h('span', { className: 'dps-prov-hit', role: 'cell' }, row.hitRate === null ? t('unit.none') : formatPercent(row.hitRate)),
@@ -2298,6 +2432,15 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-spark-bar{flex:1 1 0;min-width:0;max-width:24px;border-radius:2px 2px 0 0;background:color-mix(in srgb,var(--dps-accent) 42%,transparent);transition:background-color .12s ease}
 .dps-spark-bar[data-today="true"],.dps-spark-bar[data-active="true"]{background:var(--dps-accent)}
 .dps-spark-bars[data-hovering="true"] .dps-spark-bar[data-today="true"]:not([data-active="true"]){background:color-mix(in srgb,var(--dps-accent) 42%,transparent)}
+.dps-kpi-sub{font-size:12px;color:var(--dps-muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.dps-range-menu .dps-range-pop{flex-direction:row;align-items:flex-end;gap:10px;padding:12px}
+.dps-date-field{display:flex;flex-direction:column;gap:5px;font-size:11.5px;color:var(--dps-muted);white-space:nowrap}
+.dps-date{height:30px;padding:0 8px;border:1px solid var(--dps-line);border-radius:8px;background:var(--dps-card);color:var(--dps-ink);font:inherit;font-size:12.5px;color-scheme:light}
+body[data-ds-dark-theme] .dps-date{color-scheme:dark}
+.dps-range-pop .dps-btn{height:30px;padding:0 14px;border-radius:8px;text-align:center}
+.dps-btn[data-primary="true"]{background:var(--dps-accent);border-color:transparent;color:var(--dps-on-accent);font-weight:600}
+.dps-btn[data-primary="true"]:hover{background:var(--dps-accent);filter:brightness(1.06)}
+.dps-btn:disabled{opacity:.45;cursor:default}
 .dps-delta{display:inline-flex;align-items:center;gap:3px;font-size:11.5px;font-weight:600;line-height:1;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--dps-muted)}
 .dps-delta[data-dir="up"]{color:var(--dsw-alias-state-error-primary)}
 .dps-delta[data-dir="down"]{color:var(--dsw-alias-state-success-primary)}
@@ -2433,7 +2576,14 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-prov-th{margin-bottom:-6px;font-size:11.5px;color:var(--dps-faint)}
 .dps-prov-th span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dps-prov-th span:nth-child(n+2),.dps-prov-value,.dps-prov-share,.dps-prov-hit{text-align:right}
+.dps-prov-namecell{display:flex;align-items:center;gap:4px;min-width:0}
 .dps-prov-name{min-width:0;color:var(--dps-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dps-prov-edit{appearance:none;flex:0 0 auto;display:grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--dps-muted);cursor:pointer;opacity:0;transition:opacity .15s ease,background-color .15s ease}
+.dps-prov-edit svg{width:13px;height:13px}
+.dps-prov-row:hover .dps-prov-edit,.dps-prov-edit:focus-visible{opacity:1}
+.dps-prov-edit:hover{background:var(--dps-hover);color:var(--dps-ink)}
+.dps-prov-input{width:100%;min-width:0;height:24px;margin:-3px 0;padding:0 7px;border:1px solid var(--dps-accent);border-radius:6px;background:var(--dps-card);color:var(--dps-ink);font:inherit;font-size:13px;outline:none}
+.dps-root .dps-prov-input:focus-visible{outline:none}
 .dps-prov-value{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
 .dps-prov-share{color:var(--dps-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .dps-prov-hit{color:var(--dps-ink);font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -2503,6 +2653,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
               'aria-pressed': option.id === props.value ? 'true' : 'false',
               onClick: () => {
                 if (option.id !== props.value) props.onChange(option.id)
+                else if (props.onReselect) props.onReselect(option.id)
               },
             },
             option.label,
@@ -2580,6 +2731,104 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
       )
     }
 
+    /** 自定义范围：两个原生日期框 + 确定。日期不早于有数据的第一天、不晚于今天；起止颠倒时自动对调。 */
+    function RangePicker(props) {
+      const [startKey, setStartKey] = useState(props.startKey || '')
+      const [endKey, setEndKey] = useState(props.endKey || '')
+      const valid = Boolean(parseDateKey(startKey) && parseDateKey(endKey))
+      const apply = () => {
+        if (!valid) return
+        if (startKey <= endKey) props.onApply(startKey, endKey)
+        else props.onApply(endKey, startKey)
+      }
+      const field = (label, value, setValue, name) =>
+        h(
+          'label',
+          { className: 'dps-date-field' },
+          h('span', null, label),
+          h('input', {
+            type: 'date',
+            className: 'dps-date',
+            'data-dps-field': name,
+            value,
+            min: props.minKey || undefined,
+            max: props.maxKey || undefined,
+            onChange: (event) => setValue(event.target.value),
+          }),
+        )
+      return h(
+        'div',
+        {
+          className: 'dps-menu-pop dps-range-pop',
+          role: 'dialog',
+          'aria-label': t('range.custom'),
+          'data-dps-control': 'range-picker',
+          onKeyDown: (event) => {
+            if (event.key === 'Enter') apply()
+          },
+        },
+        field(t('range.from'), startKey, setStartKey, 'range-start'),
+        field(t('range.to'), endKey, setEndKey, 'range-end'),
+        h('button', { type: 'button', className: 'dps-btn', 'data-primary': 'true', 'data-dps-action': 'range-apply', disabled: !valid, onClick: apply }, t('action.apply')),
+      )
+    }
+
+    /** 顶部范围开关 + 自定义日期浮层。点「自定义」先打开浮层，点「确定」才切过去；点外面或 Esc 关闭。 */
+    function RangeControl(props) {
+      const [picking, setPicking] = useState(false)
+      const wrapRef = useRef(null)
+      useEffect(() => {
+        if (!picking) return undefined
+        const close = (event) => {
+          if (wrapRef.current && typeof wrapRef.current.contains === 'function' && !wrapRef.current.contains(event.target)) setPicking(false)
+        }
+        const onKey = (event) => {
+          if (event.key === 'Escape') setPicking(false)
+        }
+        document.addEventListener('mousedown', close)
+        document.addEventListener('keydown', onKey)
+        return () => {
+          document.removeEventListener('mousedown', close)
+          document.removeEventListener('keydown', onKey)
+        }
+      }, [picking])
+      const rangeWin = props.rangeWin || {}
+      const isCustom = props.range === 'custom'
+      return h(
+        'div',
+        { ref: wrapRef, className: 'dps-menu dps-range-menu' },
+        h(Segmented, {
+          control: 'range',
+          label: t('aria.range'),
+          value: props.range,
+          onChange: (id) => {
+            if (id === 'custom') {
+              setPicking(true)
+              return
+            }
+            setPicking(false)
+            props.onRange(id)
+          },
+          onReselect: (id) => {
+            if (id === 'custom') setPicking((open) => !open)
+          },
+          options: RANGE_IDS.map((id) => ({ id, label: id === 'custom' && isCustom ? rangeText(rangeWin, props.todayKey) : t(`range.${id}`) })),
+        }),
+        picking
+          ? h(RangePicker, {
+              startKey: rangeWin.startKey || props.firstKey || props.todayKey,
+              endKey: rangeWin.endKey || props.todayKey,
+              minKey: props.firstKey,
+              maxKey: props.todayKey,
+              onApply: (startKey, endKey) => {
+                setPicking(false)
+                props.onCustom(startKey, endKey)
+              },
+            })
+          : null,
+      )
+    }
+
     function Header(props) {
       const identity = props.identity
       const update = props.update
@@ -2598,12 +2847,13 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
         h(
           'div',
           { className: 'dps-actions' },
-          h(Segmented, {
-            control: 'range',
-            label: t('aria.range'),
-            value: props.range,
-            onChange: props.onRange,
-            options: RANGE_IDS.map((id) => ({ id, label: t(`range.${id}`) })),
+          h(RangeControl, {
+            range: props.range,
+            rangeWin: props.rangeWin,
+            firstKey: props.firstKey,
+            todayKey: props.todayKey,
+            onRange: props.onRange,
+            onCustom: props.onCustom,
           }),
           h(ExportMenu, { onExport: props.onExport }),
           props.updating
@@ -2876,9 +3126,15 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
       const shownTurn = useTween(ready ? k.longestTurnMs : 0, 900)
       const shownLongest = useTween(ready ? k.longestStreak : 0, 700)
       const shownCurrent = useTween(ready ? k.currentStreak : 0, 700)
+      const todayHit = props.todayHit === undefined ? null : props.todayHit
+      const shownHit = useTween(ready && todayHit !== null ? todayHit : 0, 900)
       const tokenValue = (value) => [tokenParts(Math.round(value))]
       const dayValue = (value) => [{ value: String(Math.max(0, Math.round(toNumber(value)))), unit: t('unit.day') }]
-      const rangeLabel = range === 'all' ? t('stat.tokens') : t('stat.rangeTokens', { range: t(`range.${range}`) })
+      const percentValue = (value) => [{ value: formatPercent(value).replace('%', ''), unit: '%' }]
+      const rangeLabel =
+        range === 'all'
+          ? t('stat.tokens')
+          : t('stat.rangeTokens', { range: range === 'custom' ? rangeText(props.rangeWin, props.todayKey) : t(`range.${range}`) })
       const deltaChip =
         delta === null
           ? null
@@ -2907,7 +3163,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
           extra: deltaChip,
           // 近 7 / 30 天画每天的实际用量；近 90 天 / 累计画 7 日均线（天数多时柱子会被峰值压扁）
           aside: h(Sparkline, {
-            mode: range === '7d' || range === '30d' ? 'bars' : 'average',
+            mode: props.sparkMode || 'average',
             points: ready ? props.spark || [] : [],
             average: ready ? props.average || [] : [],
           }),
@@ -2920,19 +3176,23 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
           raw: ready ? k.longestTurnMs : undefined,
           parts: ready ? durationParts(k.longestTurnMs > 0 ? Math.max(60000, shownTurn) : 0) : null,
         }),
+        // 最长 / 当前连续天数合成一张：两个数经常相同，各占一张卡太浪费
         h(Kpi, {
-          id: 'longestStreak',
-          icon: 'calendar',
-          label: t('stat.longestStreak'),
-          raw: ready ? k.longestStreak : undefined,
-          parts: ready ? dayValue(shownLongest) : null,
-        }),
-        h(Kpi, {
-          id: 'currentStreak',
+          id: 'streak',
           icon: 'flame',
-          label: t('stat.currentStreak'),
+          label: t('stat.streak'),
           raw: ready ? k.currentStreak : undefined,
           parts: ready ? dayValue(shownCurrent) : null,
+          extra: ready
+            ? h('span', { className: 'dps-kpi-sub', 'data-dps-field': 'longest', 'data-value': k.longestStreak }, t('stat.best', { n: Math.round(shownLongest) }))
+            : null,
+        }),
+        h(Kpi, {
+          id: 'todayHit',
+          icon: 'target',
+          label: t('stat.todayHit'),
+          raw: ready && todayHit !== null ? todayHit : undefined,
+          parts: ready && todayHit !== null ? percentValue(shownHit) : null,
         }),
       )
     }
@@ -2947,14 +3207,22 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
       // 用户亲手点的刷新：图标一直转到这次重扫结束；宿主后台的保鲜补扫不转
       const [manualScan, setManualScan] = useState(false)
       const [updating, setUpdating] = useState(false)
-      // 顶部时间范围：累计 / 近 90 / 近 30 / 近 7 天
+      // 顶部时间范围：近 7 / 30 / 90 天、本月、累计、自定义（custom 记自定义的起止日期）
       const [range, setRange] = useState('all')
+      const [custom, setCustom] = useState(null)
       // 供应商卡片的「今日」按钮；换顶部范围时弹起，卡片回到跟随范围
       const [providerToday, setProviderToday] = useState(false)
       const changeRange = useCallback((next) => {
         setRange(next)
         setProviderToday(false)
       }, [])
+      const applyCustom = useCallback((startKey, endKey) => {
+        setCustom({ startKey, endKey })
+        setRange('custom')
+        setProviderToday(false)
+      }, [])
+      // 供应商的本机显示名：快照里的 + 这次会话里刚改的（保存成功前先显示，失败就撤回）
+      const [aliasEdits, setAliasEdits] = useState({})
 
       // 打开页面不再强制重扫：宿主在后台定时保鲜，读快照时数据旧了也会自己静默补扫。
       const runRefresh = useCallback(async () => {
@@ -2981,7 +3249,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
       const kpis = useMemo(() => deriveKpis(snapshot, today), [snapshot, todayKey])
 
       // —— 时间范围：汇总卡都从日明细重算，宿主算好的全局 totals 只留给连续天数等全局指标 ——
-      const rangeWin = useMemo(() => rangeWindow(range, todayKey), [range, todayKey])
+      const rangeWin = useMemo(() => rangeWindow(range, todayKey, custom), [range, todayKey, custom])
       const rangeSummary = useMemo(
         () => summarizeDaily(daily, rangeWin.startKey, rangeWin.endKey),
         [daily, rangeWin.startKey, rangeWin.endKey],
@@ -2994,23 +3262,53 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
       }, [daily])
       // 上一期必须完全落在有数据的日子里才比：只覆盖一部分时，环比会被放大成几百个百分点
       const delta = useMemo(() => {
-        const windows = deltaWindows(rangeWin)
+        const windows = deltaWindows(rangeWin, todayKey)
         if (!windows || !firstKey || windows.previous.startKey < firstKey) return null
         const current = summarizeDaily(daily, windows.current.startKey, windows.current.endKey).tokens
         const previous = summarizeDaily(daily, windows.previous.startKey, windows.previous.endKey).tokens
         return deltaPercent(current, previous)
-      }, [daily, rangeWin.startKey, rangeWin.endKey, firstKey])
+      }, [daily, rangeWin, firstKey, todayKey])
       const lensTotals = useMemo(() => lensTotalsOf(rangeSummary), [rangeSummary])
       const todaySummary = useMemo(() => summarizeDaily(daily, todayKey, todayKey), [daily, todayKey])
+      const todayHit = useMemo(() => cacheHitRate(todaySummary), [todaySummary])
       const spark = useMemo(() => {
-        // 累计范围下迷你趋势只画最近 90 天，避免几百根柱子挤成一团
-        const days = range === 'all' ? 90 : RANGE_DAYS[range]
-        const end = parseDateKey(todayKey)
-        const startKey = end ? localDateKey(addDays(end, -(days - 1))) : todayKey
-        const points = dailySeries(daily, startKey, todayKey)
-        return points.map((point, index) => ({ ...point, today: index === points.length - 1 }))
-      }, [daily, range, todayKey])
+        // 趋势画范围内的每一天；累计范围只画最近 90 天，避免几百个点挤成一团
+        const end = parseDateKey(rangeWin.endKey)
+        const startKey = rangeWin.startKey || (end ? localDateKey(addDays(end, -89)) : rangeWin.endKey)
+        const points = dailySeries(daily, startKey, rangeWin.endKey)
+        return points.map((point) => ({ ...point, today: point.key === todayKey }))
+      }, [daily, rangeWin.startKey, rangeWin.endKey, todayKey])
+      // 一个月以内画每天的实际用量；更长的范围画 7 日均线（柱子会被峰值压扁）
+      const sparkMode = range !== 'all' && rangeWin.days > 0 && rangeWin.days <= 31 ? 'bars' : 'average'
       const average = useMemo(() => movingAverage(daily, spark), [daily, spark])
+      const snapshotAliases = snapshot && snapshot.aliases && snapshot.aliases.providers
+      const aliases = useMemo(() => ({ ...(snapshotAliases || {}), ...aliasEdits }), [snapshotAliases, aliasEdits])
+      const saveAlias = useCallback(
+        async (id, name) => {
+          const clean = String(name || '').trim().slice(0, 40)
+          setAliasEdits((current) => ({ ...current, [id]: clean }))
+          try {
+            const response = await fetch(ALIAS_URL, {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ provider: id, name: clean }),
+            })
+            const result = await response.json().catch(() => null)
+            if (!response.ok || !result || result.ok !== true) throw new Error((result && result.error) || `HTTP ${response.status}`)
+            reload()
+          } catch (error) {
+            console.warn('[dsh-profile-stats] 保存供应商名称失败：', error && error.message ? error.message : error)
+            if (mounted.current) {
+              setAliasEdits((current) => {
+                const next = { ...current }
+                delete next[id]
+                return next
+              })
+            }
+          }
+        },
+        [reload, mounted],
+      )
       // 累计范围的模型图没固定天数：用「首日 → 今天」的跨度决定桶数
       const spanDays = useMemo(() => {
         const start = parseDateKey(firstKey)
@@ -3019,9 +3317,16 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
         return Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1)
       }, [firstKey, todayKey])
 
+      // 导出文件名带上范围：自定义写起止日期，本月写年月
+      const exportName =
+        range === 'custom'
+          ? `dsh-profile-stats-${rangeWin.startKey}_${rangeWin.endKey}`
+          : range === 'month'
+            ? `dsh-profile-stats-month-${rangeWin.startKey.slice(0, 7)}-${todayKey}`
+            : `dsh-profile-stats-${range}-${todayKey}`
       const handleExport = (format) => {
         if (format === 'csv') {
-          downloadFile(`dsh-profile-stats-${range}-${todayKey}.csv`, 'text/csv;charset=utf-8', buildCsv(daily, rangeSummary, rangeWin.startKey, rangeWin.endKey))
+          downloadFile(`${exportName}.csv`, 'text/csv;charset=utf-8', buildCsv(daily, rangeSummary, rangeWin.startKey, rangeWin.endKey))
           return
         }
         const rows = indexDaily(daily)
@@ -3052,7 +3357,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
           diagnostics: { usageMismatchCalls: toNumber(totals.usageMismatchCalls) },
           daily: entries,
         }
-        downloadFile(`dsh-profile-stats-${range}-${todayKey}.json`, 'application/json', JSON.stringify(payload, null, 2))
+        downloadFile(`${exportName}.json`, 'application/json', JSON.stringify(payload, null, 2))
       }
 
       useEffect(() => {
@@ -3112,16 +3417,28 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
             busy: refreshing || (manualScan && scanning),
             onRefresh: runRefresh,
             range,
+            rangeWin,
+            firstKey,
+            todayKey,
             onRange: changeRange,
+            onCustom: applyCustom,
             onExport: handleExport,
           }),
           h(StatusBar, { snapshot, error, hasData, onRetry: reload }),
-          h(KpiStrip, { kpis, ready, range, summary: rangeSummary, delta, spark, average }),
+          h(KpiStrip, { kpis, ready, range, rangeWin, todayKey, summary: rangeSummary, delta, spark, average, sparkMode, todayHit }),
           h(ActivityCard, { daily, today, rangeStartKey: rangeWin.startKey, rangeEndKey: rangeWin.endKey }),
           h(
             'div',
             { className: 'dps-grid' },
-            h(ModelCard, { daily, today, range, rangeWin, spanDays }),
+            h(ModelCard, {
+              daily,
+              today,
+              range,
+              rangeWin,
+              // 换范围（含改自定义日期）时模型图的粒度回到默认
+              rangeKey: `${range}:${rangeWin.startKey}:${rangeWin.endKey}`,
+              spanDays: range === 'custom' ? rangeWin.days : spanDays,
+            }),
             h(
               'div',
               { className: 'dps-side' },
@@ -3132,6 +3449,8 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
                 scope: range,
                 todayOnly: providerToday,
                 onTodayOnly: setProviderToday,
+                aliases,
+                onRename: saveAlias,
               }),
             ),
           ),

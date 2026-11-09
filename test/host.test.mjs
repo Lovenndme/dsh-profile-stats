@@ -17,6 +17,7 @@ import {
 const SNAPSHOT = '/api/dsh-profile-stats/snapshot'
 const REFRESH = '/api/dsh-profile-stats/refresh'
 const UPDATE = '/api/dsh-profile-stats/update'
+const ALIAS = '/api/dsh-profile-stats/alias'
 
 const at = (month, day, hour = 12) => new Date(2026, month - 1, day, hour, 0, 0, 0).getTime()
 
@@ -319,16 +320,17 @@ test('createController：继承前缀的会话在扫描后按「原件是否还�
   assert.equal(orphanTotals.orphanedSessions, 1)
 })
 
-test('apply：注册三条同源路由，方法不对返回 405', async (t) => {
+test('apply：注册四条同源路由，方法不对返回 405', async (t) => {
   withTemporaryHome(t)
   const host = createFakeHost({ sessions: makeSessions() })
   apply(host.ctx)
   t.after(() => host.dispose())
 
-  assert.deepEqual([...host.routes.keys()].sort(), [REFRESH, SNAPSHOT, UPDATE].sort())
+  assert.deepEqual([...host.routes.keys()].sort(), [ALIAS, REFRESH, SNAPSHOT, UPDATE].sort())
   assert.equal((await host.request(SNAPSHOT, 'POST')).json.error, 'method-not-allowed')
   assert.equal((await host.request(REFRESH, 'GET')).json.error, 'method-not-allowed')
   assert.equal((await host.request(UPDATE, 'GET')).json.error, 'method-not-allowed')
+  assert.equal((await host.request(ALIAS, 'GET')).json.error, 'method-not-allowed')
   // HEAD 与 GET 同权（浏览器 / 探活脚本会发 HEAD）
   assert.equal((await host.request(SNAPSHOT, 'HEAD')).status, 200)
 })
@@ -526,4 +528,45 @@ test('update：6 小时内不重复问 registry（打开面板不该每次都联
   await controller.refreshUpdateInfo(true)
   assert.equal(calls, 2, 'force 才再问一次')
   assert.equal(controller.updateInfo().latest, '9.9.9')
+})
+
+test('改名接口：名字存在本机 aliases.json，快照带出来；名字留空就删掉，坏请求不写文件', async (t) => {
+  const home = withTemporaryHome(t)
+  const host = createFakeHost({ sessions: makeSessions() })
+  apply(host.ctx)
+  t.after(() => host.dispose())
+  const file = path.join(home, 'dsh-profile-stats', 'aliases.json')
+
+  const saved = await host.request(ALIAS, 'POST', { provider: 'relay-x', name: '  实验中转  ' })
+  assert.equal(saved.status, 200)
+  assert.deepEqual(saved.json, { ok: true, aliases: { providers: { 'relay-x': '实验中转' } } })
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { providers: { 'relay-x': '实验中转' } })
+  assert.deepEqual((await host.request(SNAPSHOT, 'GET')).json.aliases, { providers: { 'relay-x': '实验中转' } })
+
+  // 超过 40 个字截断
+  const long = await host.request(ALIAS, 'POST', { provider: 'beta', name: 'x'.repeat(60) })
+  assert.equal(long.json.aliases.providers.beta.length, 40)
+
+  // 名字留空 = 删掉，回到原始 id
+  const cleared = await host.request(ALIAS, 'POST', { provider: 'relay-x', name: '' })
+  assert.deepEqual(cleared.json.aliases.providers, { beta: 'x'.repeat(40) })
+
+  // 坏请求：不是 JSON / 没有 provider / 名字不是字符串 / 请求体太大
+  assert.equal((await host.request(ALIAS, 'POST', '{not json')).status, 400)
+  assert.equal((await host.request(ALIAS, 'POST', { name: 'x' })).json.error, 'invalid-provider')
+  assert.equal((await host.request(ALIAS, 'POST', { provider: 'a', name: 42 })).json.error, 'invalid-name')
+  assert.equal((await host.request(ALIAS, 'POST', { provider: 'a', name: 'y'.repeat(20000) })).status, 413)
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { providers: { beta: 'x'.repeat(40) } })
+})
+
+test('aliases.json 被手改坏也不影响快照：非对象、非字符串、空名字都被丢掉', async (t) => {
+  const home = withTemporaryHome(t)
+  fs.mkdirSync(path.join(home, 'dsh-profile-stats'), { recursive: true })
+  fs.writeFileSync(path.join(home, 'dsh-profile-stats', 'aliases.json'), JSON.stringify({ providers: { a: 'A', b: 7, c: '   ', '': 'x' } }))
+  const host = createFakeHost({ sessions: makeSessions() })
+  apply(host.ctx)
+  t.after(() => host.dispose())
+  assert.deepEqual((await host.request(SNAPSHOT, 'GET')).json.aliases, { providers: { a: 'A' } })
+  fs.writeFileSync(path.join(home, 'dsh-profile-stats', 'aliases.json'), '{broken')
+  assert.deepEqual((await host.request(SNAPSHOT, 'GET')).json.aliases, { providers: {} })
 })

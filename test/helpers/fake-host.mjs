@@ -84,12 +84,13 @@ export function createFakeHost({ sessions = [], services = {} } = {}) {
     },
   }
 
-  const request = async (path, method = 'GET') => {
+  /** body：字符串（原样作为请求体）或对象（转成 JSON）；请求对象和 Node 的一样可以 for await 读取。 */
+  const request = async (path, method = 'GET', body) => {
     const handler = routes.get(path)
     if (!handler) throw new Error(`route not registered: ${path}`)
     const headers = {}
     let statusCode = 200
-    let body = ''
+    let responseBody = ''
     await new Promise((resolve, reject) => {
       const res = {
         set statusCode(value) {
@@ -102,23 +103,33 @@ export function createFakeHost({ sessions = [], services = {} } = {}) {
           headers[String(name).toLowerCase()] = value
         },
         end(chunk = '') {
-          body = chunk
+          responseBody = chunk
           resolve()
         },
       }
       try {
-        handler({ method, url: path, headers: {} }, res)
+        const raw = body === undefined ? '' : typeof body === 'string' ? body : JSON.stringify(body)
+        const req = {
+          method,
+          url: path,
+          headers: raw ? { 'content-type': 'application/json' } : {},
+          async *[Symbol.asyncIterator]() {
+            if (raw) yield Buffer.from(raw, 'utf8')
+          },
+        }
+        const pending = handler(req, res)
+        if (pending && typeof pending.catch === 'function') pending.catch(reject)
       } catch (error) {
         reject(error)
       }
     })
     let parsed = null
     try {
-      parsed = body ? JSON.parse(body) : null
+      parsed = responseBody ? JSON.parse(responseBody) : null
     } catch {
       parsed = null
     }
-    return { status: statusCode, headers, body, json: parsed }
+    return { status: statusCode, headers, body: responseBody, json: parsed }
   }
 
   const releaseReads = () => {

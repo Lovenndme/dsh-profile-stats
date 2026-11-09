@@ -447,6 +447,11 @@ test('providerLabel：已知供应商走文案字典，未知原样显示', () =
   assert.equal(providerLabel('alpha'), 'Alpha')
   assert.equal(providerLabel('__other'), '其他')
   assert.equal(providerLabel('bravo'), 'bravo')
+  // 本机起的名字优先；空白名字等于没起；「其他」不受影响
+  const aliases = { bravo: '实验中转', alpha: '  ', __other: 'x' }
+  assert.equal(providerLabel('bravo', aliases), '实验中转')
+  assert.equal(providerLabel('alpha', aliases), 'Alpha')
+  assert.equal(providerLabel('__other', aliases), '其他')
 })
 
 test('durationParts：毫秒 → 时/分，0 与负数返回 null', () => {
@@ -597,4 +602,79 @@ test('环比颜色：增长红色、下降绿色（取宿主主题的状态色�
 test('client.js 里不能声明名为 window 的局部变量（会遮住全局对象：升级后 window.location.reload() 曾因此报错）', () => {
   const source = readClientSource()
   assert.equal(/\b(const|let|var)\s+window\b/.test(source), false)
+})
+
+/* ------------------------------------------------------------ 本月 / 自定义范围 */
+
+const rangeHelpers = () =>
+  loadClientHelpers({
+    extraCode: ["const RANGE_DAYS = { '7d': 7, '30d': 30, '90d': 90, all: 0 }"],
+    functions: ['rangeWindow', 'deltaWindows', 'daysBetween', 'parseDateKey', 'localDateKey', 'addDays', 'startOfDay'],
+  })
+
+test('rangeWindow：本月是 1 号到今天；自定义起止颠倒时对调、终点不晚于今天', () => {
+  const { rangeWindow } = rangeHelpers()
+  assert.deepEqual(rangeWindow('month', '2026-11-08'), { range: 'month', kind: 'month', days: 8, startKey: '2026-11-01', endKey: '2026-11-08' })
+  assert.deepEqual(rangeWindow('month', '2026-11-01'), { range: 'month', kind: 'month', days: 1, startKey: '2026-11-01', endKey: '2026-11-01' })
+  assert.deepEqual(rangeWindow('custom', '2026-11-08', { startKey: '2026-10-01', endKey: '2026-10-31' }), {
+    range: 'custom',
+    kind: 'custom',
+    days: 31,
+    startKey: '2026-10-01',
+    endKey: '2026-10-31',
+  })
+  assert.deepEqual(rangeWindow('custom', '2026-11-08', { startKey: '2026-10-31', endKey: '2026-10-01' }).startKey, '2026-10-01', '起止颠倒自动对调')
+  const clamped = rangeWindow('custom', '2026-11-08', { startKey: '2026-11-05', endKey: '2026-12-31' })
+  assert.equal(clamped.endKey, '2026-11-08', '终点不晚于今天')
+  assert.equal(clamped.days, 4)
+  // 跨夏令时的天数也按日历算（不是毫秒除以 86400000 再取整出错）
+  assert.equal(rangeWindow('custom', '2026-11-08', { startKey: '2026-03-01', endKey: '2026-03-31' }).days, 31)
+  // 没选过自定义日期时退回累计
+  assert.equal(rangeWindow('custom', '2026-11-08', null).startKey, '')
+  assert.equal(rangeWindow('7d', '2026-11-08').startKey, '2026-11-02')
+})
+
+test('deltaWindows：本月对上个月从 1 号起的同样天数；自定义整段在过去时整段对前一段', () => {
+  const { rangeWindow, deltaWindows } = rangeHelpers()
+  // 11 月 8 日看本月：已过完 1–7 日，对 10 月 1–7 日
+  assert.deepEqual(deltaWindows(rangeWindow('month', '2026-11-08'), '2026-11-08'), {
+    current: { startKey: '2026-11-01', endKey: '2026-11-07' },
+    previous: { startKey: '2026-10-01', endKey: '2026-10-07' },
+  })
+  // 1 号还没有过完的天：不比
+  assert.equal(deltaWindows(rangeWindow('month', '2026-11-01'), '2026-11-01'), null)
+  // 3 月 31 日看本月：上一期是 2 月 1 日到 2 月最后一天（不跨进 3 月）
+  assert.deepEqual(deltaWindows(rangeWindow('month', '2026-03-31'), '2026-03-31').previous, { startKey: '2026-02-01', endKey: '2026-02-28' })
+  // 自定义 10 月整月（已过完）：对它前面的 31 天
+  assert.deepEqual(deltaWindows(rangeWindow('custom', '2026-11-08', { startKey: '2026-10-01', endKey: '2026-10-31' }), '2026-11-08'), {
+    current: { startKey: '2026-10-01', endKey: '2026-10-31' },
+    previous: { startKey: '2026-08-31', endKey: '2026-09-30' },
+  })
+  // 自定义到今天：和固定范围一样不含今天
+  assert.deepEqual(deltaWindows(rangeWindow('custom', '2026-11-08', { startKey: '2026-11-05', endKey: '2026-11-08' }), '2026-11-08'), {
+    current: { startKey: '2026-11-05', endKey: '2026-11-07' },
+    previous: { startKey: '2026-11-01', endKey: '2026-11-03' },
+  })
+  // 只选了今天一天：没有过完的天
+  assert.equal(deltaWindows(rangeWindow('custom', '2026-11-08', { startKey: '2026-11-08', endKey: '2026-11-08' }), '2026-11-08'), null)
+})
+
+test('granularitiesFor：本月同近 30 天；自定义按天数分档，一周以内只看日', () => {
+  const { granularitiesFor } = loadClientHelpers({ functions: ['toNumber', 'granularitiesFor'] })
+  assert.deepEqual(granularitiesFor('month', 8), ['day', 'week'])
+  assert.deepEqual(granularitiesFor('custom', 5), ['day'])
+  assert.deepEqual(granularitiesFor('custom', 31), ['day', 'week'])
+  assert.deepEqual(granularitiesFor('custom', 120), ['week', 'month'])
+  assert.deepEqual(granularitiesFor('custom', 900), ['month'])
+})
+
+test('rangeText：今年的范围不写年份，跨年写全；只有一天时写一个日期', () => {
+  const { rangeText } = loadClientHelpers({
+    extraCode: ["function formatDate(date, options) { return options.year ? `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}` : `${date.getMonth() + 1}/${date.getDate()}` }"],
+    functions: ['rangeText', 'parseDateKey'],
+  })
+  assert.equal(rangeText({ startKey: '2026-10-01', endKey: '2026-10-31' }, '2026-11-08'), '10/1–10/31')
+  assert.equal(rangeText({ startKey: '2025-12-20', endKey: '2026-01-05' }, '2026-11-08'), '2025/12/20–2026/1/5')
+  assert.equal(rangeText({ startKey: '2026-11-03', endKey: '2026-11-03' }, '2026-11-08'), '11/3')
+  assert.equal(rangeText({ startKey: '', endKey: '2026-11-08' }, '2026-11-08'), '')
 })

@@ -13,6 +13,7 @@
   var SNAPSHOT_URL = '/api/dsh-profile-stats/snapshot'
   var REFRESH_URL = '/api/dsh-profile-stats/refresh'
   var UPDATE_URL = '/api/dsh-profile-stats/update'
+  var ALIAS_URL = '/api/dsh-profile-stats/alias'
 
   /* ------------------------------------------------------------ 模块加载器 */
 
@@ -299,6 +300,7 @@
       return { ok: true, identity: identity, totals: emptyTotals(), daily: [], scanning: true, firstScan: true, progress: { done: hostState.firstScanDone, total: 69 }, generatedAt: 0, update: updateBlock() }
     }
     var body = JSON.parse(JSON.stringify(state.view === 'cache-write' ? writeSnapshot : fullSnapshot))
+    body.aliases = { providers: readAliases() }
     body.generatedAt = Date.now()
     body.update = updateBlock()
     if (hostState.scanLeft > 0) {
@@ -313,13 +315,37 @@
 
   /* ------------------------------------------------------------- fetch 拦截 */
 
-  var requestLog = { snapshot: 0, refresh: 0, update: 0, blocked: 0 }
+  var requestLog = { snapshot: 0, refresh: 0, update: 0, alias: 0, blocked: 0 }
+
+  /** 供应商显示名：宿主存在本机文件里，预览存在这个浏览器的 localStorage 里（刷新后还在）。 */
+  var ALIAS_STORE = 'dps-preview-aliases'
+  function readAliases() {
+    try {
+      var parsed = JSON.parse(window.localStorage.getItem(ALIAS_STORE) || '{}')
+      return parsed && typeof parsed === 'object' ? parsed : {}
+    } catch (error) {
+      return {}
+    }
+  }
+  function writeAlias(provider, name) {
+    var aliases = readAliases()
+    var label = String(name || '').trim().slice(0, 40)
+    if (label) aliases[provider] = label
+    else delete aliases[provider]
+    try {
+      window.localStorage.setItem(ALIAS_STORE, JSON.stringify(aliases))
+    } catch (error) {
+      /* 无痕窗口等拿不到 localStorage：只在这次页面里生效 */
+    }
+    return aliases
+  }
 
   function renderLog() {
     var node = document.getElementById('pv-log')
     if (!node) return
     node.textContent =
       'GET snapshot ×' + requestLog.snapshot + ' · POST refresh ×' + requestLog.refresh + ' · POST update ×' + requestLog.update +
+      (requestLog.alias ? ' · POST alias ×' + requestLog.alias : '') +
       (requestLog.blocked ? ' · 拦截外部请求 ×' + requestLog.blocked : '')
   }
 
@@ -346,6 +372,17 @@
       requestLog.refresh += 1
       if (state.view !== 'empty' && state.view !== 'scanning' && state.view !== 'error') hostState.scanLeft = 3
       result = json(200, { ok: true, accepted: true })
+    } else if (url === ALIAS_URL && method === 'POST') {
+      requestLog.alias += 1
+      var payload = {}
+      try {
+        payload = JSON.parse((init && init.body) || '{}')
+      } catch (error) {
+        payload = {}
+      }
+      result = payload && typeof payload.provider === 'string' && payload.provider
+        ? json(200, { ok: true, aliases: { providers: writeAlias(payload.provider, payload.name) } })
+        : json(400, { ok: false, error: 'invalid-provider' })
     } else if (url === UPDATE_URL && method === 'POST') {
       requestLog.update += 1
       hostState.updateAt = Date.now() + 3000

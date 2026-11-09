@@ -28,6 +28,7 @@ export const inject = ['webServer', 'sessionQuery']
 const SNAPSHOT_PATH = '/api/dsh-profile-stats/snapshot'
 const REFRESH_PATH = '/api/dsh-profile-stats/refresh'
 const UPDATE_PATH = '/api/dsh-profile-stats/update'
+const ALIAS_PATH = '/api/dsh-profile-stats/alias'
 
 /** 本插件自己的包名 / 目录（用于读自身版本、给 pluginManager 传 spec）。 */
 const SELF_NAME = 'dsh-profile-stats'
@@ -80,6 +81,78 @@ function readIdentityOverride() {
     // 文件不存在或写坏了都当作「没有覆盖」，回落到系统账户名。
     return null
   }
+}
+
+/**
+ * 供应商的显示名（只存在本机，不进仓库、不进 npm 包）：{ "providers": { "<provider id>": "<显示名>" } }。
+ * 公开代码里不写任何私有渠道的名字，页面默认显示原始 id；用户可以在供应商卡片上给自己的渠道起名。
+ */
+function aliasFile() {
+  return path.join(dshHome(), 'dsh-profile-stats', 'aliases.json')
+}
+
+const ALIAS_MAX_NAME = 40
+const ALIAS_MAX_ID = 200
+const ALIAS_MAX_COUNT = 200
+const ALIAS_BODY_LIMIT = 16 * 1024
+
+/** 只留「非空 id → 非空、不超过 40 字的名字」，最多 200 条；文件被手改坏了也不抛错。 */
+function sanitizeAliases(raw) {
+  const providers = {}
+  const source = raw && typeof raw === 'object' && raw.providers && typeof raw.providers === 'object' && !Array.isArray(raw.providers) ? raw.providers : {}
+  for (const [id, name] of Object.entries(source)) {
+    if (Object.keys(providers).length >= ALIAS_MAX_COUNT) break
+    const key = String(id).trim()
+    const label = typeof name === 'string' ? name.trim().slice(0, ALIAS_MAX_NAME) : ''
+    if (!key || key.length > ALIAS_MAX_ID || !label) continue
+    providers[key] = label
+  }
+  return { providers }
+}
+
+function readAliases() {
+  try {
+    return sanitizeAliases(JSON.parse(fs.readFileSync(aliasFile(), 'utf8')))
+  } catch {
+    return { providers: {} }
+  }
+}
+
+/** 改一个供应商的显示名；名字为空表示删掉（回到原始 id）。先写临时文件再改名，写到一半不会留下坏文件。 */
+function writeAlias(provider, name) {
+  const id = typeof provider === 'string' ? provider.trim() : ''
+  if (!id || id.length > ALIAS_MAX_ID) return { ok: false, error: 'invalid-provider' }
+  if (name !== undefined && name !== null && typeof name !== 'string') return { ok: false, error: 'invalid-name' }
+  const label = typeof name === 'string' ? name.trim().slice(0, ALIAS_MAX_NAME) : ''
+  const current = readAliases()
+  if (label) current.providers[id] = label
+  else delete current.providers[id]
+  const next = sanitizeAliases(current)
+  if (label && !next.providers[id]) return { ok: false, error: 'too-many' }
+  const file = aliasFile()
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const temporary = `${file}.${process.pid}.tmp`
+  fs.writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`)
+  fs.renameSync(temporary, file)
+  return { ok: true, aliases: next }
+}
+
+/** 读 JSON 请求体（宿主给的是 Node 的请求流），超过上限直接拒绝。 */
+async function readJsonBody(req, limit) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))
+    size += buffer.length
+    if (size > limit) {
+      const error = new Error('body-too-large')
+      error.code = 'too-large'
+      throw error
+    }
+    chunks.push(buffer)
+  }
+  const text = Buffer.concat(chunks).toString('utf8')
+  return text ? JSON.parse(text) : {}
 }
 
 function toNumber(value) {
@@ -1078,6 +1151,7 @@ export function createController(ctx) {
       progress: state.progress,
       identity: identity(),
       update: updateInfo(),
+      aliases: readAliases(),
       totals: agg.totals,
       daily: agg.daily,
       failedSessions: Object.keys(state.errors).length,
@@ -1136,6 +1210,32 @@ export function apply(ctx) {
   ctx.effect(() =>
     ctx.webServer.register({
       kind: 'exact',
+      path: ALIAS_PATH,
+      handler: async (req, res) => {
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { ok: false, error: 'method-not-allowed' })
+          return
+        }
+        let body
+        try {
+          body = await readJsonBody(req, ALIAS_BODY_LIMIT)
+        } catch (error) {
+          sendJson(res, error && error.code === 'too-large' ? 413 : 400, { ok: false, error: error && error.code === 'too-large' ? 'too-large' : 'invalid-json' })
+          return
+        }
+        try {
+          const result = writeAlias(body && body.provider, body && body.name)
+          sendJson(res, result.ok ? 200 : 400, result)
+        } catch (error) {
+          sendJson(res, 500, { ok: false, error: 'write-failed', message: error && error.message ? error.message : String(error) })
+        }
+      },
+    }),
+  )
+
+  ctx.effect(() =>
+    ctx.webServer.register({
+      kind: 'exact',
       path: UPDATE_PATH,
       handler: (req, res) => {
         if (req.method !== 'POST') {
@@ -1176,6 +1276,9 @@ export {
   shiftDayKey,
   nextDayKey,
   emptyFold,
+  sanitizeAliases,
+  readAliases,
+  writeAlias,
   usageParts,
   stepTokens,
   usageMismatch,
