@@ -2875,20 +2875,26 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 表格最后一列（费用）的宽度：量出这一列里最宽的内容（标签 + 金额）。每一行是单独的网格，列宽不能按内容自动撑开
-     * （各行会对不齐），写死 68px 又放不下「×0.12 ¥1,234.5」。量不到（没有布局）时用 CSS 里的默认宽度。
+     * 表格最右边两列的宽度：费用（量出最宽的金额）和标签（量出最宽的标签）。每一行是单独的网格，列宽不能按内容自动撑开
+     * （各行会对不齐），写死又放不下「¥12.3 万」「not saved」这类。量不到（没有布局）时用 CSS 里的默认宽度。
      */
     function useCostColumn(tableRef, key) {
-      const [width, setWidth] = useState(0)
+      const [widths, setWidths] = useState({ cost: 0, tag: 0 })
       useLayoutEffect(() => {
         const table = tableRef.current
         if (!table || typeof table.querySelectorAll !== 'function') return
-        let widest = 0
-        for (const node of table.querySelectorAll('.dps-prov-cost')) widest = Math.max(widest, toNumber(node.scrollWidth))
-        const next = widest > 0 ? Math.ceil(widest) : 0
-        setWidth((current) => (current === next ? current : next))
+        let cost = 0
+        let tag = 0
+        for (const node of table.querySelectorAll('.dps-prov-cost')) cost = Math.max(cost, toNumber(node.scrollWidth))
+        for (const node of table.querySelectorAll('.dps-cost-tag')) tag = Math.max(tag, toNumber(node.getBoundingClientRect().width))
+        const next = { cost: cost > 0 ? Math.ceil(cost) : 0, tag: tag > 0 ? Math.ceil(tag) : 0 }
+        setWidths((current) => (current.cost === next.cost && current.tag === next.tag ? current : next))
       }, [key])
-      return width > 0 ? { '--dps-cost-w': `${Math.max(68, width)}px` } : undefined
+      if (widths.cost <= 0) return undefined
+      // 有标签列时右边几列收紧一点（金额列最小 50px），给名称多留位置
+      const style = { '--dps-cost-w': `${Math.max(widths.tag > 0 ? 50 : 68, widths.cost)}px` }
+      if (widths.tag > 0) style['--dps-tag-w'] = `${widths.tag}px`
+      return style
     }
 
     function ProviderCard(props) {
@@ -2918,9 +2924,9 @@ window.__ModuleLoader__.load({
       const otherSpend = costs
         ? Object.entries(costs.byProvider).reduce((sum, [id, row]) => (shownIds.has(id) || row.spend === null ? sum : sum + row.spend), 0)
         : 0
-      const costCell = (row) => {
-        if (!costs) return h('span', { className: 'dps-prov-cost', role: 'cell' }, t('unit.none'))
-        if (row.id === '__other') return h('span', { className: 'dps-prov-cost', role: 'cell', 'data-value': otherSpend }, formatMoney(otherSpend))
+      /** 一家的计费信息：费用、计费方式、标签（打折倍数 / 包月 / 未保存）和悬停文字。「其他」那一行和没有费用数据时是 null。 */
+      const costInfo = (row) => {
+        if (!costs || row.id === '__other') return null
         const cost = costs.byProvider[row.id] || null
         const bill = cost ? cost.billing : billingOf(row.id, props.billingSettings)
         const titleParts = [t('billing.listValue', { value: formatMoney(cost ? cost.value : 0) })]
@@ -2929,7 +2935,26 @@ window.__ModuleLoader__.load({
         // 上一次改计费方式没存上：标签换成「未保存」，悬停写原因
         const failed = errors[row.id]
         if (failed) titleParts.unshift(t('billing.saveFailed', { reason: failed }))
-        const tag = failed ? t('billing.tagUnsaved') : billingTag(bill)
+        return { cost, bill, failed, tag: failed ? t('billing.tagUnsaved') : billingTag(bill), title: titleParts.join(' · ') }
+      }
+      // 有任何一家带标签时，表格最右边多出一列专门放标签：用量 / 占比 / 命中率 / 费用整体往左收，金额照样对齐
+      const hasTags = data.rows.some((row) => {
+        const info = costInfo(row)
+        return Boolean(info && info.tag)
+      })
+      const toggleBilling = (id) => setBillingOpen(billingOpen === id ? null : id)
+      const tagCell = (row) => {
+        const info = costInfo(row)
+        return h(
+          'span',
+          { className: 'dps-prov-tagcell', role: 'cell' },
+          info && info.tag ? h('span', { className: 'dps-cost-tag', 'data-dps-field': 'billing-tag', title: info.title, onClick: () => toggleBilling(row.id) }, info.tag) : null,
+        )
+      }
+      const costCell = (row) => {
+        if (!costs) return h('span', { className: 'dps-prov-cost', role: 'cell' }, t('unit.none'))
+        if (row.id === '__other') return h('span', { className: 'dps-prov-cost', role: 'cell', 'data-value': otherSpend }, formatMoney(otherSpend))
+        const { cost, bill, failed, title } = costInfo(row)
         return h(
           'span',
           { className: 'dps-prov-costcell', role: 'cell' },
@@ -2944,10 +2969,9 @@ window.__ModuleLoader__.load({
               'data-list-value': cost ? cost.value : 0,
               'data-error': failed ? 'true' : undefined,
               'aria-expanded': billingOpen === row.id ? 'true' : 'false',
-              title: titleParts.join(' · '),
-              onClick: () => setBillingOpen(billingOpen === row.id ? null : row.id),
+              title,
+              onClick: () => toggleBilling(row.id),
             },
-            tag ? h('span', { className: 'dps-cost-tag', 'data-dps-field': 'billing-tag' }, tag) : null,
             // 这一档里没有这家的费用明细（旧版宿主没有 slots）：未设置照样写「设置」，其余写「—」，不写 ¥0
             costCellText(cost || { mode: bill.mode, spend: null }),
           ),
@@ -3056,7 +3080,7 @@ window.__ModuleLoader__.load({
           ? h('div', { className: 'dps-prov-empty' }, t('chart.empty'))
           : h(
               'div',
-              { ref: tableRef, className: 'dps-prov-table', role: 'table', style: costColumn },
+              { ref: tableRef, className: 'dps-prov-table', role: 'table', style: costColumn, 'data-tags': hasTags ? 'true' : undefined },
               h(
                 'div',
                 { className: 'dps-prov-row dps-prov-th', role: 'row' },
@@ -3065,6 +3089,7 @@ window.__ModuleLoader__.load({
                 h('span', { role: 'columnheader' }, t('provider.colShare')),
                 h('span', { role: 'columnheader' }, t('provider.colHit')),
                 h('span', { role: 'columnheader' }, t('provider.colCost')),
+                hasTags ? h('span', { role: 'columnheader', 'aria-hidden': true }) : null,
               ),
               data.rows.map((row) =>
                 h(
@@ -3083,6 +3108,7 @@ window.__ModuleLoader__.load({
                   h('span', { className: 'dps-prov-share', role: 'cell' }, formatPercent(row.share)),
                   h('span', { className: 'dps-prov-hit', role: 'cell' }, row.hitRate === null ? t('unit.none') : formatPercent(row.hitRate)),
                   costCell(row),
+                  hasTags ? tagCell(row) : null,
                   h(
                     'span',
                     { className: 'dps-prov-track', 'aria-hidden': true },
@@ -3520,7 +3546,9 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
 .dps-bill .dps-seg{align-self:flex-start}
 .dps-bill-fields{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px}
 .dps-bill-input{width:104px}
-.dps-cost-tag{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:var(--dsw-alias-state-error-primary);color:var(--dps-card);font-size:10.5px;font-weight:600;line-height:16px;vertical-align:1px}
+.dps-prov-table[data-tags="true"] .dps-prov-row{grid-template-columns:minmax(0,1fr) 56px 42px 52px var(--dps-cost-w,50px) var(--dps-tag-w,34px);column-gap:7px}
+.dps-prov-tagcell{display:flex;align-items:center;min-width:0;margin-left:-2px}
+.dps-cost-tag{display:inline-block;padding:0 4px;border-radius:4px;background:var(--dsw-alias-state-error-primary);color:var(--dps-card);font-size:10.5px;font-weight:600;line-height:16px;white-space:nowrap;cursor:pointer}
 .dps-bill-foot{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
 .dps-bill-meta{margin-right:auto;font-size:12px;color:var(--dps-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .dps-bill .dps-btn{height:28px;padding:0 12px}
