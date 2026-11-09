@@ -83,14 +83,9 @@ window.__ModuleLoader__.load({
       'provider.setBilling': 'Set',
       'billing.official': 'List price',
       'billing.multiplier': 'Discount',
-      'billing.custom': 'Unit price',
       'billing.plan': 'Monthly',
       'billing.free': 'Not mine',
       'billing.factor': 'Multiplier',
-      'billing.miss': 'Cache miss',
-      'billing.hit': 'Cache hit',
-      'billing.output': 'Output',
-      'billing.unit': 'per 1M tokens',
       'billing.monthly': '¥ per month',
       'billing.since': 'Since',
       'billing.reset': 'Default',
@@ -98,11 +93,7 @@ window.__ModuleLoader__.load({
       'billing.listValue': 'At list price {value}',
       'billing.excluded': 'Excluded',
       'billing.planCell': '{value} / month',
-      'billing.write': 'Cache write',
-      'billing.otherModels': 'Other models',
-      'billing.model': 'Model',
       'billing.tagPlan': 'plan',
-      'billing.tagCustom': 'custom',
       'billing.unpriced': 'No list price: {models}',
       'billing.saveFailed': 'Not saved: {reason}',
       'billing.tagUnsaved': 'not saved',
@@ -217,14 +208,9 @@ window.__ModuleLoader__.load({
       'provider.setBilling': '设置',
       'billing.official': '官方价',
       'billing.multiplier': '打折',
-      'billing.custom': '单价',
       'billing.plan': '包月',
       'billing.free': '不计入',
       'billing.factor': '倍数',
-      'billing.miss': '未命中',
-      'billing.hit': '命中',
-      'billing.output': '输出',
-      'billing.unit': '每百万 token',
       'billing.monthly': '月费（元）',
       'billing.since': '开始日期',
       'billing.reset': '恢复默认',
@@ -232,11 +218,7 @@ window.__ModuleLoader__.load({
       'billing.listValue': '按官方价算 {value}',
       'billing.excluded': '不计入',
       'billing.planCell': '{value} / 月',
-      'billing.write': '缓存写入',
-      'billing.otherModels': '其他模型',
-      'billing.model': '模型',
       'billing.tagPlan': '包月',
-      'billing.tagCustom': '单价',
       'billing.unpriced': '没有官方价：{models}',
       'billing.saveFailed': '没有存上：{reason}',
       'billing.tagUnsaved': '未保存',
@@ -845,16 +827,13 @@ window.__ModuleLoader__.load({
       return { currency: 'USD', miss: input, hit: or(cacheRead), write: or(cacheWrite), output, peak: false, timed: false }
     }
 
-    /** 自定义单价的价目：新写法 { prices: { '*' | 模型: {...} } }；旧写法四个价直接挂在上面，当作 '*'。 */
-    function customPrices(bill) {
-      if (bill && bill.prices && typeof bill.prices === 'object') return bill.prices
-      return bill && typeof bill.miss === 'number' ? { '*': { miss: bill.miss, hit: bill.hit, write: bill.write === undefined ? bill.miss : bill.write, output: bill.output } } : {}
-    }
+    /** 计费方式：官方价、打折（官方价 × 倍数）、包月、不计入。 */
+    const BILLING_MODES = ['official', 'multiplier', 'plan', 'free']
 
-    /** 某个供应商的计费方式：本机设置的优先；没设置时官方直连按官方价，其余是「未设置」。 */
+    /** 某个供应商的计费方式：本机设置的优先（不认识的写法当没设置）；没设置时官方直连按官方价，其余是「未设置」。 */
     function billingOf(provider, settings) {
       const entry = settings && settings[provider]
-      if (entry && entry.mode) return entry
+      if (entry && BILLING_MODES.includes(entry.mode)) return entry
       return OFFICIAL_PROVIDERS.includes(provider) ? { mode: 'official', auto: true } : { mode: 'unset' }
     }
 
@@ -867,11 +846,11 @@ window.__ModuleLoader__.load({
      * options：{ table（价格表：模型 → [输入, 输出, 缓存读, 缓存写] 美元 / 百万），usdCny（美元兑人民币） }
      *   value     按官方价折算（所有人都有；美元价按汇率换算）
      *   peakValue / peakBase  有高峰 / 空闲时段的模型（DeepSeek）里，高峰时段的部分 / 全部——高峰占比只看这些模型
-     *   spend     按各家计费方式：官方 = value，打折 = value × 倍数，单价 = 这家自己的价目（按模型，没填的模型按官方价），
+     *   spend     按各家计费方式：官方 = value，打折 = value × 倍数，
      *             包月 = 月费按天摊（从 since 起，没填就从这一家第一次有用量那天起，到今天为止；从没用过又没填 since 就不收），
      *             不计入 = 0，未设置 = 不知道（不算进 spend，列在 unset 里）
-     *   unpricedTokens  花费要按官方价算、却没有已知官方价的用量（官方 / 打折 / 单价里没填价的模型）：这部分没算进 spend。
-     *             包月、不计入、自己填了单价的用量不需要官方价，不算在里面
+     *   unpricedTokens  花费要按官方价算、却没有已知官方价的用量（官方 / 打折）：这部分没算进 spend。
+     *             包月、不计入的用量不需要官方价，不算在里面
      *   byProject 各项目的花费；用量全部来自未设置 / 不计入的供应商的项目不出现（页面写「—」，不是 ¥0）
      * 包月费按当天各项目的官方价折算比例摊到项目上；那天这一家的用量全都没有官方价时按 token 比例摊（那天没用量就不摊）。
      * 范围内有月费、却没有用量的包月供应商也会有一行（models 为空），页面要能看到、改掉它。
@@ -922,9 +901,8 @@ window.__ModuleLoader__.load({
               if (rate.peak) result.peakValue += value
             }
           }
-          // 这一格的花费要不要用官方价：官方、打折、单价里没填这个模型（也没有「其他模型」）时要；未设置的格子显示的也是官方价
-          const own = bill.mode === 'custom' ? customPrices(bill)[model] || customPrices(bill)['*'] || null : null
-          const needsList = bill.mode === 'official' || bill.mode === 'multiplier' || (bill.mode === 'custom' && !own) || bill.mode === 'unset'
+          // 这一格的花费要不要用官方价：官方、打折要；未设置的格子显示的也是官方价
+          const needsList = bill.mode === 'official' || bill.mode === 'multiplier' || bill.mode === 'unset'
           if (value === null && needsList) {
             row.unpricedTokens += tokens
             if (!row.unpriced.includes(model)) row.unpriced.push(model)
@@ -933,13 +911,7 @@ window.__ModuleLoader__.load({
           let spend = 0
           if (bill.mode === 'official') spend = value === null ? 0 : value
           else if (bill.mode === 'multiplier') spend = value === null ? 0 : value * toNumber(bill.factor)
-          else if (bill.mode === 'custom') {
-            if (own) {
-              const currency = bill.currency === 'USD' ? 'USD' : 'CNY'
-              spend = toCny((input * toNumber(own.miss) + read * toNumber(own.hit) + write * toNumber(own.write === undefined ? own.miss : own.write) + output * toNumber(own.output)) / 1e6, currency)
-              if (currency === 'USD') result.usdValue += spend
-            } else spend = value === null ? 0 : value
-          } else if (bill.mode === 'plan') {
+          else if (bill.mode === 'plan') {
             const dayKey = `${id}\u0000${entry.date}`
             const day = planShares.get(dayKey) || { value: 0, tokens: 0, byValue: {}, byTokens: {} }
             if (value !== null) {
@@ -2786,10 +2758,8 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /** 价格、月费的上限，和宿主一致（index.js 的 PRICE_LIMIT）：超过的宿主会拒绝，编辑器里就不让点「确定」。 */
+    /** 月费的上限，和宿主一致（index.js 的 PRICE_LIMIT）：超过的宿主会拒绝，编辑器里就不让点「确定」。 */
     const BILLING_LIMIT = 100000
-    /** 自定义单价最多几个模型（含「其他模型」），和宿主一致。 */
-    const BILLING_MAX_MODELS = 50
 
     /** 文本 → 非负数，只认普通的小数写法（12、0.12、.5）；1e3、0x10、Infinity、负数、超过上限都返回 null。 */
     function billingNumber(text) {
@@ -2799,11 +2769,8 @@ window.__ModuleLoader__.load({
       return Number.isFinite(value) && value >= 0 && value <= BILLING_LIMIT ? value : null
     }
 
-    const PRICE_FIELDS = ['miss', 'hit', 'write', 'output']
-
     /**
      * 编辑器里的草稿 → 要保存的计费方式；不完整或超出宿主的限制时返回 null（「确定」不可点）。
-     * 自定义单价按行：一行四格全空就跳过；未命中、命中、输出要填全，缓存写入不填时按未命中价；至少要有一行，最多 50 行。
      * 包月的开始日期可以不填；填了就得是真实存在的日子。
      */
     function billingDraft(mode, fields) {
@@ -2811,20 +2778,6 @@ window.__ModuleLoader__.load({
       if (mode === 'multiplier') {
         const factor = billingNumber(fields.factor)
         return factor === null || factor > 100 ? null : { mode, factor }
-      }
-      if (mode === 'custom') {
-        const prices = {}
-        for (const [model, row] of Object.entries(fields.prices || {})) {
-          const values = PRICE_FIELDS.map((field) => String((row && row[field]) || '').trim())
-          if (values.every((value) => !value)) continue
-          const [miss, hit, write, output] = PRICE_FIELDS.map((field) => billingNumber(row[field]))
-          if (miss === null || hit === null || output === null) return null
-          if (values[2] && write === null) return null
-          prices[model] = { miss, hit, write: write === null ? miss : write, output }
-        }
-        const count = Object.keys(prices).length
-        if (!count || count > BILLING_MAX_MODELS) return null
-        return { mode, currency: fields.currency === 'USD' ? 'USD' : 'CNY', prices }
       }
       if (mode === 'plan') {
         const monthly = billingNumber(fields.monthly)
@@ -2836,32 +2789,17 @@ window.__ModuleLoader__.load({
       return null
     }
 
-    const BILLING_MODES = ['official', 'multiplier', 'custom', 'plan', 'free']
-
     /**
      * 供应商卡里展开的一行：选计费方式、填数字。只有标签和输入框；按官方价折算的金额写在左下角作参照。
-     * 「单价」每个用到的模型一行（外加「其他模型」），四格：未命中 / 命中 / 缓存写入 / 输出，币种可选人民币或美元。
      */
     function BillingEditor(props) {
       const current = props.billing && BILLING_MODES.includes(props.billing.mode) ? props.billing : { mode: 'official' }
       const [mode, setMode] = useState(current.mode)
       const text = (value) => (value === undefined || value === null ? '' : String(value))
-      const models = (props.models || []).slice().sort()
-      const saved = customPrices(current)
-      const initialPrices = {}
-      for (const model of ['*', ...models]) {
-        const row = saved[model] || {}
-        initialPrices[model] = { miss: text(row.miss), hit: text(row.hit), write: text(row.write), output: text(row.output) }
-      }
-      for (const [model, row] of Object.entries(saved)) {
-        if (!initialPrices[model]) initialPrices[model] = { miss: text(row.miss), hit: text(row.hit), write: text(row.write), output: text(row.output) }
-      }
       const [fields, setFields] = useState({
         factor: text(current.factor),
         monthly: text(current.monthly),
         since: current.since || '',
-        currency: current.currency === 'USD' ? 'USD' : 'CNY',
-        prices: initialPrices,
       })
       const draft = billingDraft(mode, fields)
       const onKeyDown = (event) => {
@@ -2883,19 +2821,6 @@ window.__ModuleLoader__.load({
             ...(attrs || {}),
           }),
         )
-      const priceInput = (model, name) =>
-        h('input', {
-          key: name,
-          className: 'dps-date dps-bill-price',
-          'data-dps-field': `billing-price-${name}`,
-          'data-model': model,
-          'aria-label': `${model === '*' ? t('billing.otherModels') : model} ${t(`billing.${name}`)}`,
-          inputMode: 'decimal',
-          value: fields.prices[model][name],
-          onChange: (event) =>
-            setFields({ ...fields, prices: { ...fields.prices, [model]: { ...fields.prices[model], [name]: event.target.value } } }),
-          onKeyDown,
-        })
       let inputs = null
       if (mode === 'multiplier') inputs = h('div', { className: 'dps-bill-fields' }, field('factor', t('billing.factor'), { placeholder: '0.12' }))
       else if (mode === 'plan') {
@@ -2904,45 +2829,6 @@ window.__ModuleLoader__.load({
           { className: 'dps-bill-fields' },
           field('monthly', t('billing.monthly')),
           field('since', t('billing.since'), { type: 'date', inputMode: undefined, className: 'dps-date' }),
-        )
-      } else if (mode === 'custom') {
-        const rows = [...models.filter((model) => fields.prices[model]), ...Object.keys(fields.prices).filter((model) => model !== '*' && !models.includes(model)), '*']
-        inputs = h(
-          'div',
-          { className: 'dps-bill-custom' },
-          h(
-            'div',
-            { className: 'dps-bill-currency' },
-            h(Segmented, {
-              control: 'billing-currency',
-              label: t('billing.unit'),
-              value: fields.currency,
-              onChange: (currency) => setFields({ ...fields, currency }),
-              options: [
-                { id: 'CNY', label: '¥' },
-                { id: 'USD', label: '$' },
-              ],
-            }),
-            h('span', { className: 'dps-bill-meta' }, t('billing.unit')),
-          ),
-          h(
-            'div',
-            { className: 'dps-bill-grid', role: 'table' },
-            h(
-              'div',
-              { className: 'dps-bill-gridrow dps-bill-gridhead', role: 'row' },
-              h('span', { role: 'columnheader' }, t('billing.model')),
-              PRICE_FIELDS.map((name) => h('span', { key: name, role: 'columnheader' }, t(`billing.${name}`))),
-            ),
-            rows.map((model) =>
-              h(
-                'div',
-                { key: model, className: 'dps-bill-gridrow', role: 'row', 'data-model': model },
-                h('span', { className: 'dps-bill-model', role: 'cell', title: model === '*' ? t('billing.otherModels') : model }, model === '*' ? t('billing.otherModels') : model),
-                PRICE_FIELDS.map((name) => priceInput(model, name)),
-              ),
-            ),
-          ),
         )
       }
       return h(
@@ -2971,12 +2857,11 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** 费用格前面的小标签：打折写倍数（×0.12），包月、自定义单价各写一个词；官方价不写。 */
+    /** 费用格前面的小标签：打折写倍数（×0.12），包月写「包月」；官方价不写。 */
     function billingTag(bill) {
       if (!bill) return ''
       if (bill.mode === 'multiplier') return `×${Number(bill.factor)}`
       if (bill.mode === 'plan') return t('billing.tagPlan')
-      if (bill.mode === 'custom') return t('billing.tagCustom')
       return ''
     }
 
@@ -3210,7 +3095,6 @@ window.__ModuleLoader__.load({
                         label: providerLabel(row.id, aliases),
                         billing: (costs && costs.byProvider[row.id] && costs.byProvider[row.id].billing) || billingOf(row.id, props.billingSettings),
                         listValue: costs && costs.byProvider[row.id] ? costs.byProvider[row.id].value : 0,
-                        models: costs && costs.byProvider[row.id] ? costs.byProvider[row.id].models : [],
                         onClose: () => setBillingOpen(null),
                         onSave: (entry) => {
                           setBillingOpen(null)
@@ -3632,20 +3516,11 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
 .dps-prov-cost[data-mode="unset"]{color:var(--dps-accent);font-weight:600}
 .dps-prov-cost[data-mode="free"]{color:var(--dps-muted)}
 .dps-proj .dps-prov-row{grid-template-columns:minmax(0,1fr) 60px 44px 62px var(--dps-cost-w,68px)}
-.dps-prov-cost[data-error="true"] .dps-cost-tag{background:var(--dsw-alias-state-error-primary)}
 .dps-bill{grid-column:1 / -1;display:flex;flex-direction:column;gap:10px;margin-top:2px;padding:12px;border:1px solid var(--dps-line);border-radius:10px;background:var(--dps-hover)}
 .dps-bill .dps-seg{align-self:flex-start}
 .dps-bill-fields{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px}
 .dps-bill-input{width:104px}
-.dps-bill-custom{display:flex;flex-direction:column;gap:8px}
-.dps-bill-currency{display:flex;align-items:center;gap:10px}
-.dps-bill-grid{display:flex;flex-direction:column;gap:6px}
-.dps-bill-gridrow{display:grid;grid-template-columns:minmax(0,1fr) repeat(4,58px);align-items:center;gap:6px}
-.dps-bill-gridhead{font-size:11px;color:var(--dps-faint)}
-.dps-bill-gridhead span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dps-bill-model{min-width:0;font-size:12px;color:var(--dps-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dps-bill-price{width:100%;height:28px;padding:0 6px;font-size:12px;font-variant-numeric:tabular-nums}
-.dps-cost-tag{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:var(--dps-accent);color:var(--dps-card);font-size:10.5px;font-weight:600;line-height:16px;vertical-align:1px}
+.dps-cost-tag{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:var(--dsw-alias-state-error-primary);color:var(--dps-card);font-size:10.5px;font-weight:600;line-height:16px;vertical-align:1px}
 .dps-bill-foot{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
 .dps-bill-meta{margin-right:auto;font-size:12px;color:var(--dps-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .dps-bill .dps-btn{height:28px;padding:0 12px}

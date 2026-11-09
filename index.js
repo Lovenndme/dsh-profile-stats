@@ -204,16 +204,16 @@ function writeAlias(provider, name) {
  * 每个供应商的计费方式（只存在本机，不进仓库、不进 npm 包）：{ "providers": { "<provider id>": { mode, ... } } }。
  *   official   官方直连：花费 = 按官方价折算
  *   multiplier 按官方价打折：花费 = 官方价折算 × factor
- *   custom     自定义单价：miss / hit / write / output，元 / 百万 token
  *   plan       包月：monthly 元 / 月，since 起（YYYY-MM-DD，可空）
  *   free       不计入（公司付费、免费额度）
  * 没设置的供应商由页面决定默认值（官方直连的 id 自动当作 official，其余只显示官方价折算）。
+ * 顶层可以手写 usdCny（美元兑人民币，0.1 ~ 100），不写就用 DEFAULT_USD_CNY；页面上不改它。
  */
 function billingFile() {
   return path.join(dshHome(), 'dsh-profile-stats', 'billing.json')
 }
 
-const BILLING_MODES = ['official', 'multiplier', 'custom', 'plan', 'free']
+const BILLING_MODES = ['official', 'multiplier', 'plan', 'free']
 const PRICE_LIMIT = 100000
 
 /** 非负、有限、不超过上限的数；否则返回 null。 */
@@ -221,20 +221,8 @@ function priceNumber(value) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= PRICE_LIMIT ? value : null
 }
 
-const CUSTOM_MAX_MODELS = 50
 /** 美元兑人民币：页面把美元价换算成人民币显示。默认值是中国外汇交易中心 2026-11-06 的中间价（100 美元 = 671.68 元）。 */
 const DEFAULT_USD_CNY = 6.7168
-
-/** 一行自定义单价：未命中 / 命中 / 输出必填，缓存写入不填时按未命中价。 */
-function customPriceRow(row) {
-  if (!row || typeof row !== 'object') return null
-  const miss = priceNumber(row.miss)
-  const hit = priceNumber(row.hit)
-  const output = priceNumber(row.output)
-  if (miss === null || hit === null || output === null) return null
-  const write = priceNumber(row.write)
-  return { miss, hit, write: write === null ? miss : write, output }
-}
 
 function usdRate(value) {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0.1 && value <= 100 ? value : null
@@ -247,20 +235,6 @@ function sanitizeBillingEntry(raw) {
   if (raw.mode === 'multiplier') {
     const factor = priceNumber(raw.factor)
     return factor === null || factor > 100 ? null : { mode: 'multiplier', factor }
-  }
-  if (raw.mode === 'custom') {
-    // 新写法：{ currency, prices: { '*': {...}, '<模型>': {...} } }；旧写法（四个价直接挂在上面）当作 '*'
-    const source = raw.prices && typeof raw.prices === 'object' && !Array.isArray(raw.prices) ? raw.prices : { '*': raw }
-    const prices = {}
-    for (const [model, row] of Object.entries(source)) {
-      if (Object.keys(prices).length >= CUSTOM_MAX_MODELS) break
-      const key = String(model).trim()
-      const clean = customPriceRow(row)
-      if (!key || key.length > ALIAS_MAX_ID || !clean) continue
-      prices[key] = clean
-    }
-    if (!Object.keys(prices).length) return null
-    return { mode: 'custom', currency: raw.currency === 'USD' ? 'USD' : 'CNY', prices }
   }
   const monthly = priceNumber(raw.monthly)
   if (monthly === null) return null
@@ -305,20 +279,9 @@ function saveBilling(next) {
   fs.renameSync(temporary, file)
 }
 
-/** 改美元兑人民币的汇率；null 表示回到默认值。 */
-function writeUsdRate(value) {
-  if (value !== null && usdRate(value) === null) return { ok: false, error: 'invalid-rate' }
-  const current = readBilling()
-  if (value === null) delete current.usdCny
-  else current.usdCny = value
-  const next = sanitizeBilling(current)
-  saveBilling(next)
-  return { ok: true, billing: next }
-}
-
 /**
  * 改一个供应商的计费方式；billing 为 null 表示删掉（回到默认），没带这个字段（拼错了）不删、直接报错。
- * 读文件时坏数据静默丢掉；写的时候不行：单价超上限、自定义超过 50 个模型、起始日不存在，都整条拒绝，
+ * 读文件时坏数据静默丢掉；写的时候不行：倍数 / 月费超上限、起始日不存在，都整条拒绝，
  * 免得页面以为存上了。写法同 writeAlias：先写临时文件再改名。
  */
 function writeBilling(provider, billing) {
@@ -330,11 +293,6 @@ function writeBilling(provider, billing) {
   else {
     const clean = sanitizeBillingEntry(billing)
     if (!clean) return { ok: false, error: 'invalid-billing' }
-    if (clean.mode === 'custom' && billing.prices && typeof billing.prices === 'object') {
-      const rows = Object.keys(billing.prices)
-      if (rows.length > CUSTOM_MAX_MODELS) return { ok: false, error: 'too-many-models' }
-      if (Object.keys(clean.prices).length !== rows.length) return { ok: false, error: 'invalid-billing' }
-    }
     if (clean.mode === 'plan' && billing.since !== undefined && billing.since !== null && billing.since !== '' && !clean.since) {
       return { ok: false, error: 'invalid-since' }
     }
@@ -1785,7 +1743,7 @@ export function apply(ctx) {
         }
         try {
           const has = (name) => Boolean(body) && typeof body === 'object' && Object.prototype.hasOwnProperty.call(body, name)
-          const result = has('usdCny') ? writeUsdRate(body.usdCny) : writeBilling(has('provider') ? body.provider : undefined, has('billing') ? body.billing : undefined)
+          const result = writeBilling(has('provider') ? body.provider : undefined, has('billing') ? body.billing : undefined)
           sendJson(res, result.ok ? 200 : 400, result)
         } catch (error) {
           sendJson(res, 500, { ok: false, error: 'write-failed', message: error && error.message ? error.message : String(error) })
@@ -1877,7 +1835,6 @@ export {
   cacheTimeZone,
   sameOriginRequest,
   jsonRequest,
-  writeUsdRate,
   providerOf,
   normalizeModelId,
   modelFamilyOf,

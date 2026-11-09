@@ -718,27 +718,10 @@ test('计费接口：每家的计费方式存在本机 billing.json，快照带�
   assert.deepEqual(multiplier.json.billing.providers, { 'relay-x': { mode: 'multiplier', factor: 0.12 } })
   await host.request(BILLING, 'POST', { provider: 'plan-x', billing: { mode: 'plan', monthly: 199, since: '2026-10-20' } })
   await host.request(BILLING, 'POST', { provider: 'work', billing: { mode: 'free' } })
-  // 自定义单价：旧写法（四个价直接挂在上面）当作「其他模型」；没填缓存写入时按未命中价
-  const custom = await host.request(BILLING, 'POST', { provider: 'own', billing: { mode: 'custom', miss: 2, hit: 0.2, output: 8 } })
-  assert.deepEqual(custom.json.billing.providers.own, { mode: 'custom', currency: 'CNY', prices: { '*': { miss: 2, hit: 0.2, write: 2, output: 8 } } })
-  // 新写法：按模型分开填、美元
-  const perModel = await host.request(BILLING, 'POST', {
-    provider: 'relay-us',
-    billing: { mode: 'custom', currency: 'USD', prices: { 'claude-sonnet-5-5': { miss: 3, hit: 0.3, write: 3.75, output: 15 } } },
-  })
-  assert.deepEqual(perModel.json.billing.providers['relay-us'], { mode: 'custom', currency: 'USD', prices: { 'claude-sonnet-5-5': { miss: 3, hit: 0.3, write: 3.75, output: 15 } } })
-  // 写的时候有一行不合法就整条拒绝（读文件时才静默丢掉），免得页面以为存上了
-  const partlyBad = await host.request(BILLING, 'POST', {
-    provider: 'relay-us',
-    billing: { mode: 'custom', currency: 'USD', prices: { 'claude-sonnet-5-5': { miss: 3, hit: 0.3, write: 3.75, output: 15 }, bad: { miss: 'x' } } },
-  })
-  assert.equal(partlyBad.json.error, 'invalid-billing')
-  await host.request(BILLING, 'POST', { provider: 'relay-us', billing: null })
   assert.deepEqual((await host.request(SNAPSHOT, 'GET')).json.billing.providers, {
     'relay-x': { mode: 'multiplier', factor: 0.12 },
     'plan-x': { mode: 'plan', monthly: 199, since: '2026-10-20' },
     work: { mode: 'free' },
-    own: { mode: 'custom', currency: 'CNY', prices: { '*': { miss: 2, hit: 0.2, write: 2, output: 8 } } },
   })
 
   // null = 回到默认
@@ -748,6 +731,8 @@ test('计费接口：每家的计费方式存在本机 billing.json，快照带�
   // 坏请求不写文件
   const before = fs.readFileSync(file, 'utf8')
   assert.equal((await host.request(BILLING, 'POST', { provider: 'a', billing: { mode: 'magic' } })).json.error, 'invalid-billing')
+  // 早期版本的「自定义单价」已经去掉
+  assert.equal((await host.request(BILLING, 'POST', { provider: 'a', billing: { mode: 'custom', miss: 2, hit: 0.2, output: 8 } })).json.error, 'invalid-billing')
   assert.equal((await host.request(BILLING, 'POST', { provider: 'a', billing: { mode: 'multiplier', factor: -1 } })).json.error, 'invalid-billing')
   assert.equal((await host.request(BILLING, 'POST', { provider: 'a', billing: { mode: 'plan', monthly: 'x' } })).json.error, 'invalid-billing')
   assert.equal((await host.request(BILLING, 'POST', { billing: { mode: 'free' } })).json.error, 'invalid-provider')
@@ -758,10 +743,9 @@ test('计费接口：每家的计费方式存在本机 billing.json，快照带�
   for (const since of ['2026-02-31', '2026-13-01', '0202-06-01', '0000-00-00', 'yesterday']) {
     assert.equal((await host.request(BILLING, 'POST', { provider: 'p', billing: { mode: 'plan', monthly: 99, since } })).json.error, 'invalid-since', since)
   }
-  // 超过上限的单价、超过 50 个模型
+  // 超过上限的月费、倍数
   assert.equal((await host.request(BILLING, 'POST', { provider: 'p', billing: { mode: 'plan', monthly: 100001 } })).json.error, 'invalid-billing')
-  const many = Object.fromEntries(Array.from({ length: 51 }, (_, index) => [`m${index}`, { miss: 1, hit: 0.1, output: 2 }]))
-  assert.equal((await host.request(BILLING, 'POST', { provider: 'p', billing: { mode: 'custom', prices: many } })).json.error, 'too-many-models')
+  assert.equal((await host.request(BILLING, 'POST', { provider: 'p', billing: { mode: 'multiplier', factor: 101 } })).json.error, 'invalid-billing')
   assert.equal((await host.request(BILLING, 'POST', { provider: '__proto__', billing: { mode: 'free' } })).json.error, 'invalid-provider')
   assert.equal(fs.readFileSync(file, 'utf8'), before)
   assert.equal(JSON.parse(before).providers['relay-x'].mode, 'multiplier')
@@ -772,7 +756,7 @@ test('billing.json 被手改坏也不影响快照：只留合法条目', async (
   fs.mkdirSync(path.join(home, 'dsh-profile-stats'), { recursive: true })
   fs.writeFileSync(
     path.join(home, 'dsh-profile-stats', 'billing.json'),
-    JSON.stringify({ providers: { a: { mode: 'free' }, b: { mode: 'multiplier' }, c: 'x', d: { mode: 'plan', monthly: 10, since: 'yesterday' } } }),
+    JSON.stringify({ providers: { a: { mode: 'free' }, b: { mode: 'multiplier' }, c: 'x', d: { mode: 'plan', monthly: 10, since: 'yesterday' }, e: { mode: 'custom', miss: 2, hit: 0.2, output: 8 } } }),
   )
   const host = createFakeHost({ sessions: makeSessions() })
   apply(host.ctx)
@@ -780,19 +764,24 @@ test('billing.json 被手改坏也不影响快照：只留合法条目', async (
   assert.deepEqual((await host.request(SNAPSHOT, 'GET')).json.billing.providers, { a: { mode: 'free' }, d: { mode: 'plan', monthly: 10 } })
 })
 
-test('汇率：POST { usdCny } 改美元兑人民币，null 回到默认；不合理的值被拒', async (t) => {
-  withTemporaryHome(t)
+test('汇率：billing.json 里手写的 usdCny 随快照带出，不合理的值丢掉；改计费方式时保留它；接口不能改汇率', async (t) => {
+  const home = withTemporaryHome(t)
+  const file = path.join(home, 'dsh-profile-stats', 'billing.json')
   const host = createFakeHost({ sessions: makeSessions() })
   apply(host.ctx)
   t.after(() => host.dispose())
   const snapshot = (await host.request(SNAPSHOT, 'GET')).json
   assert.equal(snapshot.billing.usdCny, undefined)
   assert.equal(snapshot.prices.defaultUsdCny, 6.7168, '默认值：中国外汇交易中心 2026-11-06 中间价')
-  assert.equal((await host.request(BILLING, 'POST', { usdCny: 7.2 })).json.billing.usdCny, 7.2)
-  assert.equal((await host.request(SNAPSHOT, 'GET')).json.billing.usdCny, 7.2)
-  assert.equal((await host.request(BILLING, 'POST', { usdCny: 0 })).json.error, 'invalid-rate')
-  assert.equal((await host.request(BILLING, 'POST', { usdCny: 'x' })).json.error, 'invalid-rate')
-  assert.equal((await host.request(BILLING, 'POST', { usdCny: null })).json.billing.usdCny, undefined)
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  for (const [rate, expected] of [[7.2, 7.2], [0, undefined], ['x', undefined], [1000, undefined]]) {
+    fs.writeFileSync(file, JSON.stringify({ usdCny: rate, providers: {} }))
+    assert.equal((await host.request(SNAPSHOT, 'GET')).json.billing.usdCny, expected, String(rate))
+  }
+  fs.writeFileSync(file, JSON.stringify({ usdCny: 7.2, providers: {} }))
+  assert.equal((await host.request(BILLING, 'POST', { provider: 'relay-x', billing: { mode: 'free' } })).json.billing.usdCny, 7.2)
+  assert.equal((await host.request(BILLING, 'POST', { usdCny: 8 })).json.error, 'invalid-provider')
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).usdCny, 7.2)
 })
 
 test('价格表：快照只带用到的模型；名字带 -thinking / -high 之类后缀时退回基础模型；找不到的不带', async (t) => {

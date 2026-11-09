@@ -771,9 +771,9 @@ test('summarizeDaily：按项目与子代理部分累加', () => {
 const costHelpers = (locale = withLocale) =>
   loadClientHelpers({
     ...locale,
-    constants: ['OFFICIAL_PRICES', 'CN_HOLIDAYS', 'OFFICIAL_PROVIDERS', 'holidayKeys'],
+    constants: ['OFFICIAL_PRICES', 'CN_HOLIDAYS', 'OFFICIAL_PROVIDERS', 'BILLING_MODES', 'holidayKeys'],
     functions: [
-      'computeCosts', 'officialRate', 'customPrices', 'isPeakHour', 'priceFamily', 'holidaySet', 'billingOf', 'daysInMonth', 'validDateKey',
+      'computeCosts', 'officialRate', 'isPeakHour', 'priceFamily', 'holidaySet', 'billingOf', 'daysInMonth', 'validDateKey',
       'moneyParts', 'formatMoney', 'bigNumberParts', 'unitGap', 'indexDaily', 'parseDateKey', 'localDateKey', 'addDays', 'toNumber',
     ],
   })
@@ -833,7 +833,7 @@ test('officialRate：按调用时间选价格行；8 月 17 日前没有已知�
   assert.equal(officialRate('deepseek-v4-pro', bjHour(2026, 8, 1, 10), { 'deepseek-v4-pro': [1, 1, 1, 1] }), null)
 })
 
-test('computeCosts：官方价折算与五种计费方式；包月按天摊；未设置的不算进花费', () => {
+test('computeCosts：官方价折算与四种计费方式；包月按天摊；未设置的不算进花费；不认识的写法当没设置', () => {
   const { computeCosts } = costHelpers()
   const peak = bjHour(2026, 11, 6, 10)
   const off = bjHour(2026, 11, 6, 21)
@@ -848,7 +848,7 @@ test('computeCosts：官方价折算与五种计费方式；包月按天摊；�
         [off, 'mystery', 'deepseek-v4-1-flash', 'p1', M, 0, 0, 0],
         [off, 'plan', 'deepseek-v4-1-flash', 'p1', M, 0, 0, 0],
         [off, 'work', 'deepseek-v4-1-flash', 'p2', M, 0, 0, 0],
-        [off, 'own', 'x-model', 'p2', M, M, 0, M],
+        [off, 'old', 'deepseek-v4-1-flash', 'p2', M, 0, 0, 0],
       ],
     },
   ]
@@ -856,25 +856,26 @@ test('computeCosts：官方价折算与五种计费方式；包月按天摊；�
     relay: { mode: 'multiplier', factor: 0.1 },
     plan: { mode: 'plan', monthly: 300, since: '2026-11-01' },
     work: { mode: 'free' },
-    own: { mode: 'custom', miss: 2, hit: 0.5, write: 2, output: 10 },
+    // 早期版本的「自定义单价」已经去掉：手写进 billing.json 的也当没设置
+    old: { mode: 'custom', miss: 2, hit: 0.5, write: 2, output: 10 },
   }
   const day = computeCosts(daily, '2026-11-06', '2026-11-06', settings, '2026-11-06')
   near(day.byProvider['deepseek-official'].spend, 2 + 0.04 + 8, '官方直连（自动识别）：高峰价')
   near(day.byProvider.relay.spend, 0.1, '打折：官方价 1 元 × 0.1；没有官方价的 claude 那条不算')
   near(day.byProvider.plan.spend, 10, '包月：300 ÷ 11 月 30 天')
   near(day.byProvider.work.spend, 0, '不计入')
-  near(day.byProvider.own.spend, 2 + 0.5 + 10, '自定义单价，不看官方价')
   assert.equal(day.byProvider.mystery.spend, null, '未设置：不知道花了多少')
-  assert.deepEqual(day.unset, ['mystery'])
-  near(day.spend, 10.04 + 0.1 + 10 + 12.5, '花费合计不含未设置的')
-  near(day.value, 10.04 + 1 + 1 + 1 + 1, '官方价折算：所有有官方价的用量')
+  assert.equal(day.byProvider.old.mode, 'unset', '不认识的写法')
+  assert.equal(day.byProvider.old.spend, null)
+  assert.deepEqual(day.unset, ['mystery', 'old'])
+  near(day.spend, 10.04 + 0.1 + 10, '花费合计不含未设置的')
+  near(day.value, 10.04 + 1 + 1 + 1 + 1 + 1, '官方价折算：所有有官方价的用量')
   near(day.peakValue, 10.04, '高峰部分')
-  // 「没有官方价、没算进花费」只算花费要按官方价算的那部分：打折那家的 claude-x 算；x-model 自己填了单价，不算
+  // 「没有官方价、没算进花费」只算花费要按官方价算的那部分：打折那家的 claude-x
   assert.equal(day.unpricedTokens, M, '只有打折那家的 claude-x')
   assert.deepEqual(day.byProvider.relay.unpriced, ['claude-x'])
-  assert.deepEqual(day.byProvider.own.unpriced, [], '自己填了单价的模型不需要官方价')
   near(day.byProject.p1, 10.04 + 10, '包月费摊到当天有用量的项目')
-  near(day.byProject.p2, 0.1 + 12.5, 'p2')
+  near(day.byProject.p2, 0.1, 'p2')
 
   // 累计：包月从 11-01 摊到今天（6 天）
   const all = computeCosts(daily, '', '2026-11-06', settings, '2026-11-06')
@@ -909,21 +910,19 @@ test('moneyParts / formatMoney：100 元以下两位小数、以上一位，千�
   assert.equal(english(2.5e6), '¥2.5M')
 })
 
-test('computeCosts：包月、不计入、自己填了价的用量不算「没有官方价」；单价里没填、也没有「其他模型」的才算', () => {
+test('computeCosts：包月、不计入的用量不算「没有官方价」；官方价、打折的才算', () => {
   const { computeCosts } = costHelpers()
   const M = 1e6
-  const daily = [{ date: '2026-11-06', slots: [[0, 'a', 'mystery', 'p', M, 0, 0, M], [0, 'b', 'mystery', 'p', M, 0, 0, M], [0, 'c', 'mystery', 'p', M, 0, 0, M], [0, 'd', 'mystery', 'p', M, 0, 0, M], [0, 'e', 'mystery', 'p', M, 0, 0, M], [0, 'f', 'mystery', 'p', M, 0, 0, M]] }]
+  const daily = [{ date: '2026-11-06', slots: [[0, 'a', 'mystery', 'p', M, 0, 0, M], [0, 'b', 'mystery', 'p', M, 0, 0, M], [0, 'c', 'mystery', 'p', M, 0, 0, M], [0, 'd', 'mystery', 'p', M, 0, 0, M], [0, 'f', 'mystery', 'p', M, 0, 0, M]] }]
   const settings = {
-    a: { mode: 'custom', prices: { '*': { miss: 2, hit: 1, write: 2, output: 8 } } },
+    a: { mode: 'multiplier', factor: 0.5 },
     b: { mode: 'plan', monthly: 300 },
     c: { mode: 'free' },
     d: { mode: 'official' },
-    e: { mode: 'custom', prices: { other: { miss: 1, hit: 1, write: 1, output: 1 } } },
   }
   const result = computeCosts(daily, '', '2026-11-06', settings, '2026-11-06', { table: {} })
-  assert.equal(result.unpricedTokens, 4 * M, '只有 official（d）和单价里没填（e）的')
-  assert.deepEqual(['a', 'b', 'c', 'd', 'e', 'f'].map((id) => result.byProvider[id].unpriced.length), [0, 0, 0, 1, 1, 1], '未设置（f）的格子显示官方价，悬停也要写出来')
-  near(result.byProvider.a.spend, 10, '其他模型的价')
+  assert.equal(result.unpricedTokens, 4 * M, '只有打折（a）和官方价（d）的')
+  assert.deepEqual(['a', 'b', 'c', 'd', 'f'].map((id) => result.byProvider[id].unpriced.length), [1, 0, 0, 1, 1], '未设置（f）的格子显示官方价，悬停也要写出来')
   near(result.byProvider.b.spend, 10, '月费')
 })
 
@@ -1002,7 +1001,7 @@ test('computeCosts：外国模型按价格表美元价换算人民币；缓存�
   near(day.byProvider.relay.spend, (15.5 + 40.5) * rate * 0.1, '打折作用在外国模型的官方价上')
   assert.deepEqual(day.byProvider.relay.unpriced, ['mystery-model'])
   assert.deepEqual(day.byProvider.relay.models, ['claude-sonnet-5-5', 'gpt-5-5', 'mystery-model'])
-  near(day.usdValue, (15.5 + 40.5) * rate, '美元计价部分（决定要不要显示汇率）')
+  near(day.usdValue, (15.5 + 40.5) * rate, '美元计价部分')
   near(day.peakBase, 10.04, '只有 DeepSeek 有峰谷价')
   near(day.peakValue, 10.04, 'DeepSeek 这条在高峰时段')
   // 汇率变了，人民币金额跟着线性变
@@ -1011,41 +1010,19 @@ test('computeCosts：外国模型按价格表美元价换算人民币；缓存�
   near(doubled.byProvider['deepseek-official'].value, day.byProvider['deepseek-official'].value, '人民币价不受汇率影响')
 })
 
-test('computeCosts：自定义单价按模型分开、可选美元；没填的模型用「其他模型」那行，再没有就按官方价', () => {
-  const { computeCosts } = costHelpers()
-  const M = 1e6
-  const table = { 'claude-sonnet-5-5': [2, 10, 0.1, 2.5], 'gpt-5-5': [5, 30, 0.5, null] }
-  const daily = [{ date: '2026-11-06', slots: [[0, 'relay', 'claude-sonnet-5-5', 'p', M, M, M, M], [0, 'relay', 'gpt-5-5', 'p', M, 0, 0, 0], [0, 'relay', 'other', 'p', M, 0, 0, 0]] }]
-  const perModel = { relay: { mode: 'custom', currency: 'USD', prices: { 'claude-sonnet-5-5': { miss: 3, hit: 0.3, write: 3.75, output: 15 }, '*': { miss: 1, hit: 0.1, write: 1, output: 2 } } } }
-  const result = computeCosts(daily, '', '2026-11-06', perModel, '2026-11-06', { table, usdCny: 7 })
-  near(result.byProvider.relay.spend, ((3 + 0.3 + 3.75 + 15) + 1 + 1) * 7, 'Claude 按自己的价，GPT 和不认识的模型按「其他模型」')
-  const noDefault = { relay: { mode: 'custom', currency: 'CNY', prices: { 'claude-sonnet-5-5': { miss: 3, hit: 0.3, write: 3.75, output: 15 } } } }
-  const fallback = computeCosts(daily, '', '2026-11-06', noDefault, '2026-11-06', { table, usdCny: 7 })
-  near(fallback.byProvider.relay.spend, 22.05 + 5 * 7, '没填的 GPT 按官方价（5 美元 × 7），不认识的模型算不了')
-  // 旧写法（四个价直接挂在上面）照样能用
-  const legacy = computeCosts(daily, '', '2026-11-06', { relay: { mode: 'custom', miss: 2, hit: 0.5, write: 2, output: 10 } }, '2026-11-06', { table, usdCny: 7 })
-  near(legacy.byProvider.relay.spend, (2 + 0.5 + 2 + 10) + 2 + 2, '旧写法当作「其他模型」，人民币')
-})
-
-test('billingDraft：按模型的单价行——全空跳过、必填项不全或写入不合法时不能保存', () => {
+test('billingDraft：倍数、月费、开始日期不完整或不合法时不能保存；没有「单价」这一档', () => {
   const { billingDraft } = loadClientHelpers({
     functions: ['billingDraft', 'billingNumber', 'validDateKey', 'parseDateKey', 'localDateKey'],
-    constants: ['PRICE_FIELDS', 'BILLING_LIMIT', 'BILLING_MAX_MODELS'],
+    constants: ['BILLING_LIMIT'],
   })
-  const row = (miss, hit, write, output) => ({ miss, hit, write, output })
-  assert.deepEqual(billingDraft('custom', { currency: 'USD', prices: { '*': row('1', '0.1', '', '2'), 'gpt-5-5': row('', '', '', '') } }), {
-    mode: 'custom',
-    currency: 'USD',
-    prices: { '*': { miss: 1, hit: 0.1, write: 1, output: 2 } },
-  })
-  assert.equal(billingDraft('custom', { prices: { '*': row('1', '', '', '2') } }), null, '缺命中价')
-  assert.equal(billingDraft('custom', { prices: { '*': row('1', '0.1', 'x', '2') } }), null, '写入不合法')
-  assert.equal(billingDraft('custom', { prices: { '*': row('', '', '', '') } }), null, '一行都没填')
+  assert.equal(billingDraft('custom', { prices: { '*': { miss: '1', hit: '0.1', write: '', output: '2' } } }), null)
+  assert.deepEqual(billingDraft('official', {}), { mode: 'official' })
+  assert.deepEqual(billingDraft('free', {}), { mode: 'free' })
   assert.deepEqual(billingDraft('multiplier', { factor: '0.12' }), { mode: 'multiplier', factor: 0.12 })
   assert.equal(billingDraft('multiplier', { factor: '200' }), null)
   assert.deepEqual(billingDraft('plan', { monthly: '199', since: '2026-10-20' }), { mode: 'plan', monthly: 199, since: '2026-10-20' })
   assert.deepEqual(billingDraft('plan', { monthly: '199', since: '' }), { mode: 'plan', monthly: 199 })
-  // 和宿主同样的限制：超过 100000、超过 50 个模型、不存在的日子、不是普通小数写法都不能点确定
+  // 和宿主同样的限制：超过 100000、不存在的日子、不是普通小数写法都不能点确定
   assert.equal(billingDraft('plan', { monthly: '100001' }), null)
   assert.deepEqual(billingDraft('plan', { monthly: '100000' }), { mode: 'plan', monthly: 100000 })
   assert.equal(billingDraft('plan', { monthly: '199', since: '2026-02-31' }), null)
@@ -1053,11 +1030,6 @@ test('billingDraft：按模型的单价行——全空跳过、必填项不全�
   for (const text of ['1e3', '0x10', 'Infinity', '-1', '1,000', '1.2.3', '']) assert.equal(billingDraft('plan', { monthly: text }), null, text)
   assert.deepEqual(billingDraft('multiplier', { factor: '.5' }), { mode: 'multiplier', factor: 0.5 })
   assert.deepEqual(billingDraft('multiplier', { factor: ' 0.12 ' }), { mode: 'multiplier', factor: 0.12 })
-  const many = Object.fromEntries(Array.from({ length: 51 }, (_, index) => [`m${index}`, row('1', '0.1', '', '2')]))
-  assert.equal(billingDraft('custom', { prices: many }), null, '51 个模型')
-  delete many.m50
-  assert.equal(Object.keys(billingDraft('custom', { prices: many }).prices).length, 50)
-  assert.equal(billingDraft('custom', { prices: { '*': row('100001', '0.1', '', '2') } }), null)
 })
 
 test('decodeSnapshot：slots 里的编号按 slotKeys 还原成名字；旧版宿主（没有 slotKeys）原样返回', () => {

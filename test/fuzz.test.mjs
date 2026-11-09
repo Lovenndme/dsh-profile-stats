@@ -20,9 +20,9 @@ function mulberry32(seed) {
 
 const helpers = loadClientHelpers({
   extraCode: ["const RANGE_DAYS = { '7d': 7, '30d': 30, '90d': 90, all: 0 }", 'const isChineseLocale = () => true'],
-  constants: ['OFFICIAL_PRICES', 'CN_HOLIDAYS', 'OFFICIAL_PROVIDERS', 'holidayKeys'],
+  constants: ['OFFICIAL_PRICES', 'CN_HOLIDAYS', 'OFFICIAL_PROVIDERS', 'BILLING_MODES', 'holidayKeys'],
   functions: [
-    'computeCosts', 'officialRate', 'customPrices', 'isPeakHour', 'priceFamily', 'holidaySet', 'billingOf', 'daysInMonth', 'validDateKey',
+    'computeCosts', 'officialRate', 'isPeakHour', 'priceFamily', 'holidaySet', 'billingOf', 'daysInMonth', 'validDateKey',
     'indexDaily', 'parseDateKey', 'localDateKey', 'addDays', 'startOfDay', 'toNumber', 'rangeWindow', 'deltaWindows', 'daysBetween',
   ],
 })
@@ -59,13 +59,7 @@ function randomDaily(rand) {
 function randomSettings(rand) {
   const settings = {}
   if (rand() < 0.7) settings['relay-a'] = { mode: 'multiplier', factor: Math.round(rand() * 2000) / 1000 }
-  if (rand() < 0.6) {
-    settings['relay-b'] = {
-      mode: 'custom',
-      currency: rand() < 0.5 ? 'USD' : 'CNY',
-      prices: rand() < 0.5 ? { '*': { miss: 1, hit: 0.1, write: 1.25, output: 4 }, 'claude-sonnet-5-5': { miss: 3, hit: 0.3, write: 3.75, output: 15 } } : { 'gpt-5-5': { miss: 4, hit: 0.4, write: 4, output: 20 } },
-    }
-  }
+  if (rand() < 0.6) settings['relay-b'] = { mode: 'official' }
   if (rand() < 0.6) settings['plan-x'] = rand() < 0.5 ? { mode: 'plan', monthly: 199 } : { mode: 'plan', monthly: 40, since: '2026-08-20' }
   if (rand() < 0.7) settings.work = { mode: 'free' }
   if (rand() < 0.2) settings['deepseek-account'] = { mode: 'multiplier', factor: 0.5 }
