@@ -2038,6 +2038,43 @@ window.__ModuleLoader__.load({
       return { granularity, buckets, series, total, axis: niceScale(max > 0 ? max : 1, 4) }
     }
 
+    /** 饼图的几何（viewBox 280 × 240）：圆心、半径；占比不到 6% 的扇区不在圆外写百分比（挤在一起读不了，看图例和浮层）。 */
+    const PIE_CX = 140
+    const PIE_CY = 120
+    const PIE_R = 84
+    const PIE_LABEL_MIN = 0.06
+
+    /**
+     * 饼图的扇区：values 是各项用量（非负），按给定顺序从 12 点钟方向顺时针排；返回和 values 等长的
+     * { fraction（占总量的比例 0–1）, start, end, mid（弧度，12 点钟 = 0，顺时针增大）}。总量为 0 时返回空数组。
+     */
+    function pieSlices(values) {
+      const amounts = (values || []).map((value) => Math.max(0, toNumber(value)))
+      const total = amounts.reduce((sum, value) => sum + value, 0)
+      if (!(total > 0)) return []
+      let angle = 0
+      return amounts.map((value) => {
+        const fraction = value / total
+        const start = angle
+        angle += fraction * Math.PI * 2
+        return { fraction, start, end: angle, mid: (start + angle) / 2 }
+      })
+    }
+
+    /** 一个扇区的 SVG 路径（圆心 cx, cy，半径 r）；一整圈（只有一个家族）画成圆。 */
+    function pieArc(cx, cy, r, start, end) {
+      const num = (value) => Math.round(value * 100) / 100
+      if (end - start >= Math.PI * 2 - 1e-9) {
+        return `M ${num(cx)} ${num(cy - r)} A ${num(r)} ${num(r)} 0 1 1 ${num(cx)} ${num(cy + r)} A ${num(r)} ${num(r)} 0 1 1 ${num(cx)} ${num(cy - r)} Z`
+      }
+      const x1 = cx + r * Math.sin(start)
+      const y1 = cy - r * Math.cos(start)
+      const x2 = cx + r * Math.sin(end)
+      const y2 = cy - r * Math.cos(end)
+      const large = end - start > Math.PI ? 1 : 0
+      return `M ${num(cx)} ${num(cy)} L ${num(x1)} ${num(y1)} A ${num(r)} ${num(r)} 0 ${large} 1 ${num(x2)} ${num(y2)} Z`
+    }
+
     /** 横轴刻度文案；withYear 时带上年份（跨年的范围里，年份变了的那个刻度）。 */
     function bucketTick(bucket, granularity, withYear) {
       if (granularity === 'month') return withYear ? formatDate(bucket.start, { year: 'numeric', month: 'short' }) : monthLabel(bucket.start)
@@ -2095,13 +2132,15 @@ window.__ModuleLoader__.load({
       const data = useMemo(() => buildModelSeries(props.daily, granularity, endDate, MODEL_COUNTS[granularity]), [props.daily, granularity, todayKey])
       const count = data.buckets.length
       const empty = data.total <= 0
-      // 悬浮 / 键盘选中的桶只在同一粒度下有效，换了就自然失效
-      const scope = granularity
-      // 用量（堆叠高度 = token 数）/ 占比（每根柱子铺满 100%，看各模型的比例怎么变）
+      // 用量（堆叠柱，高度 = token 数）/ 占比（饼图：窗口内各模型占总量的比例）
       const [mode, setMode] = useState('tokens')
       const share = mode === 'share'
+      // 悬浮 / 键盘选中的柱子（饼图里是扇区）只在同一粒度、同一视图下有效，换了就自然失效
+      const scope = `${granularity}|${mode}`
+      const itemCount = share ? data.series.length : count
+      const sliceRefs = useRef([])
       const [activeState, setActiveState] = useState(null)
-      const active = activeState && activeState.scope === scope && activeState.index < count ? activeState.index : null
+      const active = activeState && activeState.scope === scope && activeState.index < itemCount ? activeState.index : null
       const setActive = (index) => setActiveState(index === null || index === undefined ? null : { scope, index })
 
       const indexFromEvent = (event) => {
@@ -2119,12 +2158,13 @@ window.__ModuleLoader__.load({
       }
       const onKeyDown = (event) => {
         pointer.leave(true)
-        const current = active === null ? count - 1 : active
+        // 柱状图默认从最右边（今天）开始；饼图从最大的扇区开始
+        const current = active === null ? (share ? 0 : itemCount - 1) : active
         let next = null
-        if (event.key === 'ArrowLeft') next = Math.max(0, current - 1)
-        else if (event.key === 'ArrowRight') next = Math.min(count - 1, current + 1)
+        if (event.key === 'ArrowLeft' || (share && event.key === 'ArrowUp')) next = Math.max(0, current - 1)
+        else if (event.key === 'ArrowRight' || (share && event.key === 'ArrowDown')) next = Math.min(itemCount - 1, current + 1)
         else if (event.key === 'Home') next = 0
-        else if (event.key === 'End') next = count - 1
+        else if (event.key === 'End') next = itemCount - 1
         else if (event.key === 'Escape') {
           setActive(null)
           return
@@ -2134,12 +2174,13 @@ window.__ModuleLoader__.load({
         setActive(next)
       }
 
-      const ticks = share ? [0, 25, 50, 75, 100] : data.axis.ticks
-      const axisMax = share ? 100 : data.axis.max
-      const tickText = (tick) => (share ? `${tick}%` : formatAxis(tick))
+      const slices = share ? pieSlices(data.series.map((item) => item.total)) : []
+      const ticks = data.axis.ticks
+      const axisMax = data.axis.max
+      const tickText = (tick) => formatAxis(tick)
 
       const columns = data.buckets.map((bucket, position) => {
-        const height = share ? (bucket.total > 0 ? 100 : 0) : axisMax > 0 ? (bucket.total / axisMax) * 100 : 0
+        const height = axisMax > 0 ? (bucket.total / axisMax) * 100 : 0
         return h(
           'div',
           {
@@ -2173,11 +2214,43 @@ window.__ModuleLoader__.load({
 
       let tip = null
       let liveText = ''
-      if (active !== null && data.buckets[active] && barsRef.current && typeof barsRef.current.getBoundingClientRect === 'function') {
+      if (share) {
+        // 饼图：浮层写这个家族的占比和用量，位置跟着鼠标；键盘 / 悬停图例时贴着扇区
+        const item = data.series[active === null ? -1 : active]
+        const node = item ? sliceRefs.current[active] : null
+        if (item && node && typeof node.getBoundingClientRect === 'function') {
+          const rect = node.getBoundingClientRect()
+          const percent = data.total > 0 ? (item.total / data.total) * 100 : 0
+          liveText = `${item.name} ${formatPercent(percent)} ${formatTokens(item.total)}`
+          tip = h(
+            Popover,
+            { pointer, anchor: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } },
+            h('div', { className: 'dps-pop-title' }, item.name),
+            h(
+              'div',
+              { className: 'dps-pop-rows' },
+              h(
+                'div',
+                { className: 'dps-pop-row' },
+                h('i', { style: { background: item.color } }),
+                h('span', { className: 'dps-pop-name' }, t('model.modeShare')),
+                h('span', { className: 'dps-pop-num' }, formatPercent(percent)),
+              ),
+              h(
+                'div',
+                { className: 'dps-pop-row' },
+                h('i', null),
+                h('span', { className: 'dps-pop-name' }, t('model.modeTokens')),
+                h('span', { className: 'dps-pop-num' }, formatTokens(item.total)),
+              ),
+            ),
+          )
+        }
+      } else if (active !== null && data.buckets[active] && barsRef.current && typeof barsRef.current.getBoundingClientRect === 'function') {
         const bucket = data.buckets[active]
         const rect = barsRef.current.getBoundingClientRect()
         const columnWidth = rect.width / count
-        const top = share ? rect.top : rect.top + rect.height * (1 - (axisMax > 0 ? bucket.total / axisMax : 0))
+        const top = rect.top + rect.height * (1 - (axisMax > 0 ? bucket.total / axisMax : 0))
         const title = bucketTitle(bucket, granularity)
         const rows = data.series
           .map((item, position) => ({ item, value: bucket.segments[position] ? bucket.segments[position].value : 0 }))
@@ -2198,7 +2271,7 @@ window.__ModuleLoader__.load({
                     { key: row.item.key, className: 'dps-pop-row' },
                     h('i', { style: { background: row.item.color } }),
                     h('span', { className: 'dps-pop-name' }, row.item.name),
-                    h('span', { className: 'dps-pop-num' }, share ? formatPercent((row.value / bucket.total) * 100) : formatTokens(row.value)),
+                    h('span', { className: 'dps-pop-num' }, formatTokens(row.value)),
                   ),
                 ),
                 rows.length > 1
@@ -2218,18 +2291,21 @@ window.__ModuleLoader__.load({
         ? h(
             'ul',
             { className: 'dps-legend' },
-            data.series.map((item) =>
+            data.series.map((item, position) =>
               h(
                 'li',
                 {
                   key: item.key,
                   'data-series': item.key,
                   'data-value': item.total,
+                  'data-share': data.total > 0 ? (item.total / data.total) * 100 : 0,
                   title: item.key === '__other' ? listJoin(item.members.map(familyLabel)) : undefined,
+                  onMouseEnter: share ? () => setActive(position) : undefined,
+                  onMouseLeave: share ? () => setActive(null) : undefined,
                 },
                 h('i', { style: { background: item.color } }),
                 h('span', { className: 'dps-legend-name' }, item.name),
-                h('span', { className: 'dps-legend-value' }, formatTokens(item.total)),
+                h('span', { className: 'dps-legend-value' }, share ? formatPercent(data.total > 0 ? (item.total / data.total) * 100 : 0) : formatTokens(item.total)),
               ),
             ),
           )
@@ -2279,7 +2355,76 @@ window.__ModuleLoader__.load({
             }),
           ),
         ),
-        h(
+        share
+          ? h(
+              'div',
+              { className: 'dps-mc-pie' },
+              h(
+                'div',
+                {
+                  className: 'dps-pie-plot',
+                  tabIndex: 0,
+                  role: 'group',
+                  'aria-label': t('aria.model'),
+                  'data-dps-chart': 'model-pie',
+                  onMouseMove: (event) => pointer.move(event.clientX, event.clientY),
+                  onMouseLeave: () => {
+                    pointer.leave()
+                    setActive(null)
+                  },
+                  onKeyDown,
+                  onFocus: () => {
+                    if (active === null && data.series.length > 0) setActive(0)
+                  },
+                  onBlur: () => setActive(null),
+                },
+                h(
+                  'svg',
+                  { key: granularity, className: 'dps-pie', viewBox: '0 0 280 240', 'aria-hidden': true, focusable: 'false' },
+                  h('circle', { className: 'dps-pie-track', cx: PIE_CX, cy: PIE_CY, r: PIE_R }),
+                  slices.map((slice, position) => {
+                    const item = data.series[position]
+                    // 悬停 / 选中的扇区向外挪一点，其余变淡
+                    const lift = active === position ? 5 : 0
+                    return h('path', {
+                      key: item.key,
+                      ref: (node) => {
+                        sliceRefs.current[position] = node
+                      },
+                      className: 'dps-pie-slice',
+                      d: pieArc(PIE_CX, PIE_CY, PIE_R, slice.start, slice.end),
+                      fill: item.color,
+                      'data-slice': item.key,
+                      'data-value': item.total,
+                      'data-share': slice.fraction * 100,
+                      'data-active': active === position ? 'true' : 'false',
+                      'data-dim': active !== null && active !== position ? 'true' : 'false',
+                      style: { transform: `translate(${(lift * Math.sin(slice.mid)).toFixed(2)}px, ${(-lift * Math.cos(slice.mid)).toFixed(2)}px)` },
+                      onMouseEnter: () => setActive(position),
+                    })
+                  }),
+                  // 只给够大的扇区写百分比（放在圆外，用文字色不用系列色）；小的看图例和浮层
+                  slices.map((slice, position) =>
+                    slice.fraction >= PIE_LABEL_MIN
+                      ? h(
+                          'text',
+                          {
+                            key: `label-${data.series[position].key}`,
+                            className: 'dps-pie-label',
+                            x: (PIE_CX + (PIE_R + 12) * Math.sin(slice.mid)).toFixed(2),
+                            y: (PIE_CY - (PIE_R + 12) * Math.cos(slice.mid)).toFixed(2),
+                            textAnchor: Math.sin(slice.mid) > 0.25 ? 'start' : Math.sin(slice.mid) < -0.25 ? 'end' : 'middle',
+                            dominantBaseline: 'middle',
+                          },
+                          formatPercent(slice.fraction * 100),
+                        )
+                      : null,
+                  ),
+                ),
+                empty ? h('div', { className: 'dps-mc-empty' }, t('chart.empty')) : null,
+              ),
+            )
+          : h(
           'div',
           { className: 'dps-mc-chart', style: { '--mc-count': data.buckets.length } },
           h(
@@ -3429,6 +3574,15 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
 .dps-mc-seg{display:block;flex:0 0 auto;width:100%}
 .dps-mc-seg + .dps-mc-seg{box-shadow:inset 0 -1.5px 0 var(--dps-card)}
 .dps-mc-empty{position:absolute;inset:0;display:grid;place-items:center;font-size:12.5px;color:var(--dps-faint);pointer-events:none}
+.dps-mc-pie{flex:1 1 auto;min-height:250px;display:flex;align-items:center;justify-content:center;padding-left:52px}
+.dps-pie-plot{position:relative;width:100%;display:grid;place-items:center;border-radius:8px}
+.dps-pie-plot:focus-visible{outline-offset:4px}
+.dps-pie{display:block;width:min(100%,340px);height:auto;max-height:250px;overflow:visible;animation:dps-pie-in .45s cubic-bezier(.2,.7,.2,1) backwards}
+.dps-pie-track{fill:none;stroke:var(--dps-track);stroke-width:1}
+.dps-pie-slice{stroke:var(--dps-card);stroke-width:2;stroke-linejoin:round;transition:opacity .15s ease,transform .18s ease}
+.dps-pie-slice[data-dim="true"]{opacity:.45}
+.dps-pie-label{font-size:11px;fill:var(--dps-muted);font-variant-numeric:tabular-nums}
+@keyframes dps-pie-in{from{opacity:0;transform:scale(.94)}to{opacity:1;transform:none}}
 .dps-mc-ticks{display:grid;grid-template-columns:repeat(var(--mc-count,12),minmax(0,1fr));font-size:11px;color:var(--dps-faint);text-align:center;font-variant-numeric:tabular-nums}
 .dps-mc-ticks span{white-space:nowrap;overflow:visible}
 .dps-legend{list-style:none;margin:0;padding:2px 0 0 52px;display:flex;flex-wrap:wrap;justify-content:center;gap:8px 18px;font-size:12px}
