@@ -39,6 +39,7 @@ dsh-profile-stats
 | 🎯 | **Cache Lens** | Total tokens plus the cache hit rate, and the cache-hit / uncached-input / output split (plus cache write when a provider reports it) as a segmented bar, with a zoom into the uncached part and the daily cache hit rate underneath |
 | 💳 | **Provider split** | Tokens and cache hit rate per billing route in the selected range, or today only; give a route a display name that stays on your machine |
 | 📁 | **Projects** | Tokens per working directory in the selected range, with the part used by subagent sessions |
+| 💰 | **Spend** | The selected range's spend and its peak-hour share, plus a spend column per provider and project. Usage is priced at the list price for its call time; each provider can be set to list price, a discount, its own unit prices, a monthly plan or not counted, stored only on your machine |
 
 A range switch in the header — 7 / 30 / 90 days, this month, all time or custom dates — drives the first number, the model distribution, Cache Lens, the projects and the provider split; the selected range can be exported as CSV (one row per day) or JSON.
 

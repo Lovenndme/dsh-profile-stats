@@ -305,6 +305,17 @@ DSH 写进日志的用量四项**互不重叠**——`inputTokens` 只是未缓�
 - 本机实测：每天各项目之和都等于当天总量。
 - 断言：仓库内 `projectOf` / 按项目聚合 / `deriveProjects` / `pathTail`；仓库外 `client-smoke.mjs` 的 `[B-30]`
 
+### [B-32] 费用估算：按调用时间的官方价 + 每家的计费方式（主人确认）
+- 宿主每天按「UTC 小时 × 供应商 × 模型」记四项用量（快照里再带上项目，`slots`），`CACHE_VERSION` 14 → 15；价格按调用时间选，改价不用重扫。
+- 内置 DeepSeek 人民币官方价：2026-08-17 00:00（北京时间）起的价格与 2026-09-10 12:00 Flash 降价，出自官方价格页和两份调价公告里的价格表图片；
+  高峰时段为北京时间工作日 9–12、14–18 点，周末与 2026 年法定节假日（国务院办公厅 2025-11-04 通知）全天按空闲时段（半价）。
+  2026-08-17 之前的价格官方文档里查不到，这段用量算「未定价」。
+- 每家的计费方式只存在本机 `billing.json`（`POST /api/dsh-profile-stats/billing`）：官方价 / 打折（倍数）/ 自定义单价 / 包月（按天摊，从开始日期或第一次使用起）/ 不计入；
+  `deepseek-official`、`deepseek-account` 默认官方价，其余没设置的不计入花费，悬停写出几家未设置。
+- 页面：第一排「花费」卡（跟随范围，标签行写高峰占比），供应商卡、项目卡加「费用」列，供应商卡上展开设置；JSON 导出带费用汇总。
+- 本机实测：每小时用量之和等于当天总量；包月 ¥199 从 10-20 起累计 ¥136.73，与手算一致。
+- 断言：仓库内 `priceFamily` / `isPeakHour` / `officialRate` / `computeCosts` / `moneyParts`、计费接口与 `billing.json` 容错、slots 聚合；仓库外 `client-smoke.mjs` 的 `[B-31]`
+
 ### [B-H1] 宿主 `/update` 没有防重入
 - 现象：两个 `POST /update` 会并发跑两轮 `removeBundle → installBundle`，第二轮卸掉刚装好的包。
 - 修法：升级进行中再次请求返回 `{ ok: false, error: 'in-progress' }`。不改快照字段、不改缓存结构。

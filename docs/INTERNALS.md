@@ -17,6 +17,7 @@ Back to the [README](../README.md) · [中文 README](../README.zh.md)
 | Model split | Calendar buckets (days, Monday weeks or months) covering the selected range, including empty ones; a bucket that starts before the range counts only days inside it and is labelled with the dates it really holds. Granularity options are fixed per range: 7 days → day; 30 days → day / week; 90 days → week / month; all time → day / week up to a month of data, week / month up to two years, month beyond. DeepSeek ids are grouped by version and tier (`deepseek-v4-1-flash-261017`, `deepseek-v4.1-flash` → DeepSeek V4.1 Flash; the unversioned official `deepseek-flash` alias → V4.1 Flash). Other vendors keep their own family (`gemini-2-5-pro` → Gemini 2.5 Pro). The top six families get their own colour; the rest are merged into "Other models (N)". The **Share** switch fills every non-empty bucket to 100% to show how the mix changes; the total and the legend stay in tokens. |
 | Provider breakdown | Per-step `data.message.source.provider`, e.g. `deepseek-official`, `deepseek-account`. Shares are of the selected range's total; unknown ids are shown as they are. Each row has its own cache hit rate from that provider's four parts (the "Other" row uses their combined parts). The **Today** button shows today only; switching the header range releases it. The pencil beside a name renames that provider on this machine only (see *Provider names* below). |
 | Projects | Each session's working directory (`cwd` in the session header). Windows paths are matched case-insensitively. A session whose header has `origin: subagent` (or `delegationDepth > 0`) counts as a subagent session; its tokens go to its own working directory, which on a measured machine was always its parent's. Rows show the folder name (with the parent folder when two share a name), the share of the range, and the subagent share of that project; the full path is in the hover title. The top eight projects get a row; the rest are merged into "Other projects (N)". |
+| Spend | Every call is priced at the list price for its time from hourly usage (`slots`): DeepSeek's CNY prices from 2026-08-17 00:00 Beijing time, with the 2026-09-10 Flash cut, and peak hours on Beijing weekdays 9–12 and 14–18 (weekends and the 2026 statutory holidays are off-peak, at half price). Usage before that date, or of models without a known list price, is unpriced. Each provider's billing method then turns that list-price value into spend: list price, a discount multiplier, its own unit prices, a monthly plan spread over the days (from its start date, or the first day it was used), or not counted. `deepseek-official` and `deepseek-account` default to list price; other providers are left out of the spend until set, and the card's hover says how many. A plan's fee is shared out to projects by that day's list-price value. The peak share is the peak part of the list-price value. |
 | Number format | ≥ 1 亿 → 亿, ≥ 1 万 → 万, one decimal; every sum and share is computed on raw integers and formatted only when drawn. Shares below 0.05% read "<0.1%". |
 
 ### Why the provider breakdown exists
@@ -50,6 +51,7 @@ Host half (`index.js`):
 - `POST /api/dsh-profile-stats/refresh` — force an immediate rescan (the refresh button)
 - `POST /api/dsh-profile-stats/update` — request the in-panel update (registry installs only)
 - `POST /api/dsh-profile-stats/alias` — `{ provider, name }` sets a provider's display name; an empty name removes it
+- `POST /api/dsh-profile-stats/billing` — `{ provider, billing }` sets a provider's billing method; `null` returns it to the default
 - Reads sessions through `ctx.sessionQuery` (`listSessions`, `readSession`), folds each session and caches
   the fold; only sessions that are still running or were never folded get re-read.
 - Freshness does not depend on the page being open: the host checks every minute and rescans silently once
@@ -72,14 +74,15 @@ Snapshot fields:
 
 ```
 top:     ok, generatedAt, scanning, firstScan, progress {done, total}, identity, failedSessions,
-         aliases {providers {id: name}}, projects {key: path}
+         aliases {providers {id: name}}, projects {key: path}, billing {providers {id: {mode, ...}}}
 totals:  tokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, calls,
          sessions, activeDays, firstDay, lastDay,
          peakDay {date, tokens}, peakStepTokens, peakSessionTokens, longestTurnMs,
          longestStreak, currentStreak, usageMismatchCalls, byProvider {}, byModel {}
 daily[]: date, tokens, calls, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens,
          byProvider {id: tokens}, providerUsage {id: {inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens}},
-         byModel {}, byProject {key: tokens}, byProjectSubagent {key: tokens}
+         byModel {}, byProject {key: tokens}, byProjectSubagent {key: tokens},
+         slots [[utcHour, provider, model, projectKey, input, cacheRead, cacheWrite, output]]
 update:  installed, latest, available, canUpdate, running, lastResult
 ```
 
@@ -139,6 +142,7 @@ Disable or remove the bundle in **Plugins**. The plugin writes only these, all o
 $DSH_HOME/dsh-profile-stats/cache.json      # default: ~/.dsh/dsh-profile-stats/cache.json
 $DSH_HOME/dsh-profile-stats/profile.json    # optional display-name override
 $DSH_HOME/dsh-profile-stats/aliases.json    # provider names you set on the provider card
+$DSH_HOME/dsh-profile-stats/billing.json    # billing methods you set on the provider card
 $DSH_HOME/dsh-profile-stats/update.json     # last in-panel update result
 ```
 
