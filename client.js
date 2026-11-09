@@ -2822,7 +2822,7 @@ window.__ModuleLoader__.load({
           }),
         )
       let inputs = null
-      if (mode === 'multiplier') inputs = h('div', { className: 'dps-bill-fields' }, field('factor', t('billing.factor'), { placeholder: '0.12' }))
+      if (mode === 'multiplier') inputs = h('div', { className: 'dps-bill-fields' }, field('factor', t('billing.factor')))
       else if (mode === 'plan') {
         inputs = h(
           'div',
