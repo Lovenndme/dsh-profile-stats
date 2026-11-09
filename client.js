@@ -102,8 +102,10 @@ window.__ModuleLoader__.load({
       'billing.otherModels': 'Other models',
       'billing.model': 'Model',
       'billing.tagPlan': 'plan',
-      'billing.tagCustom': 'own price',
+      'billing.tagCustom': 'custom',
       'billing.unpriced': 'No list price: {models}',
+      'billing.saveFailed': 'Not saved: {reason}',
+      'billing.tagUnsaved': 'not saved',
       'billing.rate': '$1 = ¥{value}',
       'billing.rateLabel': 'CNY per USD',
       'stat.rangeTokens': '{range} tokens',
@@ -238,6 +240,8 @@ window.__ModuleLoader__.load({
       'billing.tagPlan': '包月',
       'billing.tagCustom': '单价',
       'billing.unpriced': '没有官方价：{models}',
+      'billing.saveFailed': '没有存上：{reason}',
+      'billing.tagUnsaved': '未保存',
       'billing.rate': '$1 = ¥{value}',
       'billing.rateLabel': '美元兑人民币',
       'stat.rangeTokens': '{range} Token',
@@ -410,28 +414,62 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * token 数 → { value, unit }：≥1 亿用「亿」，≥1 万用「万」，一位小数。
-     * 单位按「取一位小数之后」的值来选：99,999,999 不能显示成「10000.0 万」。
+     * ≥ 1 万的数 → { value, unit }，一位小数：中文界面用「万 / 亿」，其他语言用 K / M / B。
+     * 单位按「取一位小数之后」的值来选：99,999,999 不能显示成「10000.0 万」，999,950 不能显示成「1000.0K」。
+     */
+    function bigNumberParts(number) {
+      const steps = isChineseLocale()
+        ? [
+            [1e8, '亿'],
+            [1e4, '万'],
+          ]
+        : [
+            [1e9, 'B'],
+            [1e6, 'M'],
+            [1e3, 'K'],
+          ]
+      for (let index = 0; index < steps.length; index += 1) {
+        const [size, unit] = steps[index]
+        if (number < size && index < steps.length - 1) continue
+        const text = (number / size).toFixed(1)
+        const bigger = steps[index - 1]
+        if (bigger && Number(text) * size >= bigger[0]) return { value: (number / bigger[0]).toFixed(1), unit: bigger[1] }
+        return { value: text, unit }
+      }
+      return { value: String(number), unit: '' }
+    }
+
+    /** 数和单位之间：中文的「万 / 亿」隔一个空格（1.2 万），K / M / B 紧挨着（1.2K）。 */
+    function unitGap(unit) {
+      return /^[KMB]$/.test(unit) ? '' : ' '
+    }
+
+    /** 列表的分隔符：中文用顿号，其他语言用逗号。 */
+    function listJoin(items) {
+      return items.join(isChineseLocale() ? '、' : ', ')
+    }
+
+    /**
+     * token 数 → { value, unit }：一万以下写全（9,999），一万起见 bigNumberParts。
      * 只在渲染那一步调用；任何求和、占比都用原始整数。
      */
     function tokenParts(value) {
       const number = toNumber(value)
       if (number <= 0) return { value: '0', unit: '' }
-      if (number >= 1e8 || Number((number / 1e4).toFixed(1)) >= 1e4) return { value: (number / 1e8).toFixed(1), unit: '亿' }
-      if (number >= 1e4) return { value: (number / 1e4).toFixed(1), unit: '万' }
+      if (number >= 1e4) return bigNumberParts(number)
       return { value: number.toLocaleString(currentLocaleId()), unit: '' }
     }
 
     function formatTokens(value) {
       const parts = tokenParts(value)
-      return parts.unit ? `${parts.value} ${parts.unit}` : parts.value
+      return parts.unit ? `${parts.value}${unitGap(parts.unit)}${parts.unit}` : parts.value
     }
 
-    /** 纵轴刻度文案：去掉多余的 .0（1.0 亿 → 1 亿）。 */
+    /** 纵轴刻度文案：去掉多余的 .0（1.0 亿 → 1 亿，1.0B → 1B）。 */
     function formatAxis(value) {
       const number = toNumber(value)
       if (number <= 0) return '0'
-      return formatTokens(number).replace(/\.0(?=\s)/, '')
+      return formatTokens(number).replace(/\.0(?=\s|[KMB])/, '')
     }
 
     /**
@@ -801,10 +839,12 @@ window.__ModuleLoader__.load({
         const price = peak ? row.peak : row.offPeak
         return { currency: 'CNY', miss: price.miss, hit: price.hit, write: price.miss, output: price.output, peak, timed: true }
       }
-      const listed = table && Array.isArray(table[model]) ? table[model] : null
+      const listed = table && Object.prototype.hasOwnProperty.call(table, model) && Array.isArray(table[model]) ? table[model] : null
       if (!listed) return null
       const [input, output, cacheRead, cacheWrite] = listed
       if (![input, output].every((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0)) return null
+      // 输入输出都是 0：四项全 0 才是官方标明的免费；[0, 0, null, null] 是还没定价的占位
+      if (input === 0 && output === 0 && !(cacheRead === 0 && cacheWrite === 0)) return null
       const or = (value) => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : input)
       return { currency: 'USD', miss: input, hit: or(cacheRead), write: or(cacheWrite), output, peak: false, timed: false }
     }
@@ -832,9 +872,13 @@ window.__ModuleLoader__.load({
      *   value     按官方价折算（所有人都有；美元价按汇率换算）
      *   peakValue / peakBase  有高峰 / 空闲时段的模型（DeepSeek）里，高峰时段的部分 / 全部——高峰占比只看这些模型
      *   spend     按各家计费方式：官方 = value，打折 = value × 倍数，单价 = 这家自己的价目（按模型，没填的模型按官方价），
-     *             包月 = 月费按天摊（从 since 起，没填就从这一家第一次有用量那天起，到今天为止），不计入 = 0，
-     *             未设置 = 不知道（不算进 spend，列在 unset 里）
-     * 包月费按当天各项目的官方价折算比例摊到项目上（那天没用量就不摊）。
+     *             包月 = 月费按天摊（从 since 起，没填就从这一家第一次有用量那天起，到今天为止；从没用过又没填 since 就不收），
+     *             不计入 = 0，未设置 = 不知道（不算进 spend，列在 unset 里）
+     *   unpricedTokens  花费要按官方价算、却没有已知官方价的用量（官方 / 打折 / 单价里没填价的模型）：这部分没算进 spend。
+     *             包月、不计入、自己填了单价的用量不需要官方价，不算在里面
+     *   byProject 各项目的花费；用量全部来自未设置 / 不计入的供应商的项目不出现（页面写「—」，不是 ¥0）
+     * 包月费按当天各项目的官方价折算比例摊到项目上；那天这一家的用量全都没有官方价时按 token 比例摊（那天没用量就不摊）。
+     * 范围内有月费、却没有用量的包月供应商也会有一行（models 为空），页面要能看到、改掉它。
      */
     function computeCosts(daily, startKey, endKey, settings, todayKey, options) {
       const table = (options && options.table) || {}
@@ -842,7 +886,7 @@ window.__ModuleLoader__.load({
       const toCny = (amount, currency) => (currency === 'USD' ? amount * usdCny : amount)
       const result = { spend: 0, value: 0, peakValue: 0, peakBase: 0, usdValue: 0, unpricedTokens: 0, byProvider: {}, byProject: {}, unset: [] }
       const rowOf = (id) => {
-        if (!result.byProvider[id]) {
+        if (!Object.prototype.hasOwnProperty.call(result.byProvider, id)) {
           const bill = billingOf(id, settings)
           result.byProvider[id] = { spend: bill.mode === 'unset' ? null : 0, value: 0, unpricedTokens: 0, mode: bill.mode, billing: bill, models: [], unpriced: [] }
         }
@@ -853,7 +897,7 @@ window.__ModuleLoader__.load({
       }
       const entries = indexDaily(daily)
       const firstUse = {}
-      // 包月要知道每天各项目的官方价折算，才能把月费摊下去
+      // 包月要知道每天各项目的官方价折算（没有官方价时退回 token），才能把月费摊下去
       const planShares = new Map()
       for (const entry of entries.values()) {
         for (const slot of entry.slots || []) {
@@ -873,11 +917,7 @@ window.__ModuleLoader__.load({
           const bill = row.billing
           const rate = officialRate(model, hour, table)
           const value = rate ? toCny((input * rate.miss + read * rate.hit + write * rate.write + output * rate.output) / 1e6, rate.currency) : null
-          if (value === null) {
-            row.unpricedTokens += tokens
-            result.unpricedTokens += tokens
-            if (!row.unpriced.includes(model)) row.unpriced.push(model)
-          } else {
+          if (value !== null) {
             row.value += value
             result.value += value
             if (rate.currency === 'USD') result.usdValue += value
@@ -886,23 +926,33 @@ window.__ModuleLoader__.load({
               if (rate.peak) result.peakValue += value
             }
           }
+          // 这一格的花费要不要用官方价：官方、打折、单价里没填这个模型（也没有「其他模型」）时要；未设置的格子显示的也是官方价
+          const own = bill.mode === 'custom' ? customPrices(bill)[model] || customPrices(bill)['*'] || null : null
+          const needsList = bill.mode === 'official' || bill.mode === 'multiplier' || (bill.mode === 'custom' && !own) || bill.mode === 'unset'
+          if (value === null && needsList) {
+            row.unpricedTokens += tokens
+            if (!row.unpriced.includes(model)) row.unpriced.push(model)
+            if (bill.mode !== 'unset') result.unpricedTokens += tokens
+          }
           let spend = 0
           if (bill.mode === 'official') spend = value === null ? 0 : value
           else if (bill.mode === 'multiplier') spend = value === null ? 0 : value * toNumber(bill.factor)
           else if (bill.mode === 'custom') {
-            const prices = customPrices(bill)
-            const own = prices[model] || prices['*']
             if (own) {
               const currency = bill.currency === 'USD' ? 'USD' : 'CNY'
               spend = toCny((input * toNumber(own.miss) + read * toNumber(own.hit) + write * toNumber(own.write === undefined ? own.miss : own.write) + output * toNumber(own.output)) / 1e6, currency)
               if (currency === 'USD') result.usdValue += spend
             } else spend = value === null ? 0 : value
           } else if (bill.mode === 'plan') {
-            const day = planShares.get(`${id}|${entry.date}`) || { total: 0, projects: {} }
-            const weight = value === null ? tokens / 1e9 : value
-            day.total += weight
-            day.projects[project] = toNumber(day.projects[project]) + weight
-            planShares.set(`${id}|${entry.date}`, day)
+            const dayKey = `${id}\u0000${entry.date}`
+            const day = planShares.get(dayKey) || { value: 0, tokens: 0, byValue: {}, byTokens: {} }
+            if (value !== null) {
+              day.value += value
+              day.byValue[project] = toNumber(day.byValue[project]) + value
+            }
+            day.tokens += tokens
+            day.byTokens[project] = toNumber(day.byTokens[project]) + tokens
+            planShares.set(dayKey, day)
           }
           if (bill.mode === 'unset' || bill.mode === 'plan' || bill.mode === 'free') continue
           row.spend += spend
@@ -913,20 +963,24 @@ window.__ModuleLoader__.load({
       // 包月：范围内每一天摊 月费 ÷ 当月天数
       for (const [id, entry] of Object.entries(settings || {})) {
         if (!entry || entry.mode !== 'plan') continue
-        const from = [entry.since || firstUse[id] || '', startKey || ''].filter(Boolean).sort().pop()
+        const since = validDateKey(entry.since) ? entry.since : ''
+        // 没填开始日期、又从没用过：不知道从哪天开始收，不收
+        if (!since && !firstUse[id]) continue
+        const from = [since || firstUse[id], startKey || ''].filter(Boolean).sort().pop()
         const to = [endKey || todayKey, todayKey].filter(Boolean).sort()[0]
         const first = parseDateKey(from)
         const last = parseDateKey(to)
-        if (!first || !last) continue
+        if (!first || !last || first.getTime() > last.getTime()) continue
         const row = rowOf(id)
         for (let date = first; date.getTime() <= last.getTime(); date = addDays(date, 1)) {
           const fee = toNumber(entry.monthly) / daysInMonth(date)
           row.spend += fee
           result.spend += fee
-          const share = planShares.get(`${id}|${localDateKey(date)}`)
-          if (share && share.total > 0) {
-            for (const [project, weight] of Object.entries(share.projects)) addProject(project, (fee * weight) / share.total)
-          }
+          const share = planShares.get(`${id}\u0000${localDateKey(date)}`)
+          if (!share) continue
+          // 按官方价折算的比例摊；那天全都没有官方价时按 token 比例
+          const [weights, total] = share.value > 0 ? [share.byValue, share.value] : [share.byTokens, share.tokens]
+          if (total > 0) for (const [project, weight] of Object.entries(weights)) addProject(project, (fee * weight) / total)
         }
       }
       for (const [id, row] of Object.entries(result.byProvider)) if (row.mode === 'unset') result.unset.push(id)
@@ -934,21 +988,34 @@ window.__ModuleLoader__.load({
       return result
     }
 
-    /** 金额 → 显示片段：100 元以下两位小数（¥5.50），以上一位（¥1,234.5）；一万起写「¥1.2 万」；极小的非零值写「<¥0.01」。 */
+    /** 真实存在的日历日 YYYY-MM-DD（2026-02-31 不算），年份在 2000 ~ 2100 之间。 */
+    function validDateKey(text) {
+      if (typeof text !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(text)) return false
+      const year = Number(text.slice(0, 4))
+      const date = parseDateKey(text)
+      return year >= 2000 && year <= 2100 && Boolean(date) && localDateKey(date) === text
+    }
+
+    /**
+     * 金额 → 显示片段：100 元以下两位小数（¥5.50），以上一位（¥1,234.5）；一万起写「¥1.2 万」（英文界面写 ¥12.3K）；
+     * 极小的非零值写「<¥0.01」。格式按「取整之后」的值选：99.996 是 ¥100，9999.96 是 ¥1.0 万，不会出现 ¥100.00 / ¥10,000。
+     */
     function moneyParts(value) {
       const number = toNumber(value)
       if (number <= 0) return [{ prefix: '¥', value: '0', unit: '' }]
       if (number < 0.005) return [{ prefix: '<¥', value: '0.01', unit: '' }]
-      if (number >= 1e4) return [{ prefix: '¥', value: (number / 1e4).toFixed(1), unit: '万' }]
-      const digits = number < 100 ? 2 : 1
-      const text = number.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })
+      const cents = Math.round(number * 100) / 100
+      if (cents < 100) return [{ prefix: '¥', value: cents.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }), unit: '' }]
+      const tenths = Math.round(number * 10) / 10
       // 100 元以上的整数（月费 199）不写「.0」
-      return [{ prefix: '¥', value: digits === 1 ? text.replace(/\.0$/, '') : text, unit: '' }]
+      if (tenths < 1e4) return [{ prefix: '¥', value: tenths.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).replace(/\.0$/, ''), unit: '' }]
+      const big = bigNumberParts(number)
+      return [{ prefix: '¥', value: big.value, unit: big.unit }]
     }
 
     function formatMoney(value) {
       const part = moneyParts(value)[0]
-      return `${part.prefix}${part.value}${part.unit ? ` ${part.unit}` : ''}`
+      return `${part.prefix}${part.value}${part.unit ? `${unitGap(part.unit)}${part.unit}` : ''}`
     }
 
     /* -------------------------------------------------------- 导出（CSV / JSON） */
@@ -1063,8 +1130,30 @@ window.__ModuleLoader__.load({
     /* -------------------------------------------------------------- 数据拉取 */
 
     /**
+     * 宿主把 slots 里的供应商 / 模型 / 项目换成了编号（对照表在 slotKeys，省掉快照的大半体积）：还原成名字，
+     * 后面的计算都按名字来。旧版宿主没有 slotKeys，slots 里本来就是名字，原样返回。
+     */
+    function decodeSnapshot(payload) {
+      if (!payload || typeof payload !== 'object' || !payload.slotKeys || typeof payload.slotKeys !== 'object' || !Array.isArray(payload.daily)) return payload
+      const keys = payload.slotKeys
+      const pick = (list, index) => (Array.isArray(list) && typeof list[index] === 'string' ? list[index] : '')
+      const daily = payload.daily.map((entry) =>
+        entry && Array.isArray(entry.slots)
+          ? {
+              ...entry,
+              slots: entry.slots.map((slot) =>
+                Array.isArray(slot) ? [slot[0], pick(keys.providers, slot[1]), pick(keys.models, slot[2]), pick(keys.projects, slot[3]), ...slot.slice(4)] : slot,
+              ),
+            }
+          : entry,
+      )
+      return { ...payload, daily }
+    }
+
+    /**
      * 快照轮询。`reload()` 立刻重拉一次；`refresh()` 先请求宿主重扫，再立刻重拉——
      * 新快照带 scanning: true，于是切到 900ms 快轮询，扫描进度和新数字马上可见。
+     * 宿主给快照带 ETag：浏览器自己带 If-None-Match 去问，没变时宿主回 304；ETag 和上一份一样时也不重新解析、不触发重绘。
      */
     function useSnapshot(intervalMs = 45000) {
       const [snapshot, setSnapshot] = useState(null)
@@ -1076,6 +1165,8 @@ window.__ModuleLoader__.load({
         let timer = null
         // 每次请求一个序号：连点刷新时，先发出的慢请求不能覆盖后发出的新结果。
         let ticket = 0
+        let lastTag = ''
+        let lastPayload = null
 
         const schedule = (delay) => {
           if (timer) clearTimeout(timer)
@@ -1095,15 +1186,25 @@ window.__ModuleLoader__.load({
           try {
             const response = await fetch(SNAPSHOT_URL, {
               headers: { accept: 'application/json' },
-              cache: 'no-store',
+              cache: 'no-cache',
               signal: controller ? controller.signal : undefined,
             })
             if (!response.ok) throw new Error(`HTTP ${response.status}`)
-            const payload = await response.json()
+            const tag = response.headers && typeof response.headers.get === 'function' ? response.headers.get('etag') || '' : ''
+            if (tag && tag === lastTag && lastPayload) {
+              if (!alive || mine !== ticket) return
+              setError(null)
+              schedule(lastPayload.scanning ? 900 : intervalMs)
+              return
+            }
+            const payload = decodeSnapshot(await response.json())
             if (!alive || mine !== ticket) return
-            setSnapshot(payload && typeof payload === 'object' ? payload : null)
+            const next = payload && typeof payload === 'object' ? payload : null
+            lastTag = tag
+            lastPayload = next
+            setSnapshot(next)
             setError(null)
-            schedule(payload && payload.scanning ? 900 : intervalMs)
+            schedule(next && next.scanning ? 900 : intervalMs)
           } catch (failure) {
             if (!alive || mine !== ticket) return
             setError(failure || new Error('request failed'))
@@ -1720,7 +1821,11 @@ window.__ModuleLoader__.load({
           const endDate = parseDateKey(week.endKey)
           const short = { month: 'short', day: 'numeric' }
           if (mode === 'week') {
-            title = t('tip.weekRange', { start: formatDate(startDate, short), end: formatDate(endDate, short) })
+            // 这一周截到今天、只剩一天（今天是周一）：写单个日期，不写「11月9日 – 11月9日」
+            title =
+              week.startKey === week.endKey
+                ? formatDate(startDate, { month: 'long', day: 'numeric', weekday: 'short' })
+                : t('tip.weekRange', { start: formatDate(startDate, short), end: formatDate(endDate, short) })
             value = week.tokens
           } else {
             title = t('tip.through', { date: formatDate(endDate, { year: 'numeric', month: 'short', day: 'numeric' }) })
@@ -2000,9 +2105,37 @@ window.__ModuleLoader__.load({
       return { granularity, buckets, series, total, axis: niceScale(max > 0 ? max : 1, 4) }
     }
 
-    function bucketTick(bucket, granularity) {
-      if (granularity === 'month') return monthLabel(bucket.start)
-      return formatDate(bucket.start, { month: 'numeric', day: 'numeric' })
+    /** 横轴刻度文案；withYear 时带上年份（跨年的范围里，年份变了的那个刻度）。 */
+    function bucketTick(bucket, granularity, withYear) {
+      if (granularity === 'month') return withYear ? formatDate(bucket.start, { year: 'numeric', month: 'short' }) : monthLabel(bucket.start)
+      return formatDate(bucket.start, withYear ? { year: 'numeric', month: 'numeric', day: 'numeric' } : { month: 'numeric', day: 'numeric' })
+    }
+
+    /**
+     * 哪些刻度显示、哪些带年份。最多 12 个刻度：
+     *   按月且超过 12 个月：每 2 / 3 / 4 / 6 / 12 个月标一个，落在日历月上（1 月、7 月……），不会出现「6月 1月 8月」这种跳着走的序列；
+     *   其他：从最右边（今天）往左每隔 every 个标一个，最后一个标签总在。
+     * 范围跨年时，第一个刻度和年份变了的刻度带上年份。
+     */
+    function tickPlan(buckets, granularity) {
+      const count = buckets.length
+      let shown
+      if (granularity === 'month' && count > 12) {
+        const step = [2, 3, 4, 6, 12].find((size) => Math.ceil(count / size) <= 12) || 12 * Math.ceil(count / 144)
+        shown = buckets.map((bucket) => (bucket.start.getFullYear() * 12 + bucket.start.getMonth()) % step === 0)
+      } else {
+        const every = Math.ceil(count / 12)
+        shown = buckets.map((bucket, position) => every <= 1 || (count - 1 - position) % every === 0)
+      }
+      const multiYear = count > 0 && buckets[0].start.getFullYear() !== buckets[count - 1].start.getFullYear()
+      let lastYear = null
+      return buckets.map((bucket, position) => {
+        if (!shown[position]) return { shown: false, withYear: false }
+        const year = bucket.start.getFullYear()
+        const withYear = multiYear && year !== lastYear
+        lastYear = year
+        return { shown: true, withYear }
+      })
     }
 
     function bucketTitle(bucket, granularity) {
@@ -2177,7 +2310,7 @@ window.__ModuleLoader__.load({
                   key: item.key,
                   'data-series': item.key,
                   'data-value': item.total,
-                  title: item.key === '__other' ? item.members.map(familyLabel).join('、') : undefined,
+                  title: item.key === '__other' ? listJoin(item.members.map(familyLabel)) : undefined,
                 },
                 h('i', { style: { background: item.color } }),
                 h('span', { className: 'dps-legend-name' }, item.name),
@@ -2273,11 +2406,9 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 'dps-mc-ticks', 'aria-hidden': true },
-            data.buckets.map((bucket, position) => {
-              // 从最右边（今天）往左每隔 every 个标一个：最后一个标签总在，也不会和左边的挤在一起
-              const every = Math.ceil(data.buckets.length / 12)
-              const hidden = every > 1 && (data.buckets.length - 1 - position) % every !== 0
-              return h('span', { key: bucket.key, 'data-thin': hidden ? 'true' : 'false' }, hidden ? '' : bucketTick(bucket, granularity))
+            tickPlan(data.buckets, granularity).map((plan, position) => {
+              const bucket = data.buckets[position]
+              return h('span', { key: bucket.key, 'data-thin': plan.shown ? 'false' : 'true' }, plan.shown ? bucketTick(bucket, granularity, plan.withYear) : '')
             }),
           ),
         ),
@@ -2318,8 +2449,9 @@ window.__ModuleLoader__.load({
         inputTotal,
         uncachedTotal,
         partsTotal: inputTotal + output,
-        hitRate: hitRate === null ? 0 : hitRate,
-        uncachedShare: uncachedTotal > 0 ? (uncached / uncachedTotal) * 100 : 0,
+        // 没有输入 / 没有非命中用量时是 null：页面写「—」，不写 0%（和每日命中率、供应商的命中率一致）
+        hitRate,
+        uncachedShare: uncachedTotal > 0 ? (uncached / uncachedTotal) * 100 : null,
       }
     }
 
@@ -2442,7 +2574,8 @@ window.__ModuleLoader__.load({
       // 几行加起来恰好 100%。输出不属于输入，这一列不给百分比。
       const percentBasis = zoomed ? lens.uncachedTotal : lens.inputTotal
       const share = (value) => (percentBasis > 0 ? (value / percentBasis) * 100 : 0)
-      const percentCell = (row) => (zoomed || row.key !== 'output' ? formatPercent(share(row.value)) : '')
+      const percentCell = (row) => (zoomed || row.key !== 'output' ? (percentBasis > 0 ? formatPercent(share(row.value)) : t('unit.none')) : '')
+      const percentText = (value) => (value === null ? t('unit.none') : formatPercent(value))
       // 缓存写入只在有数时出一行（DeepSeek 没有这个字段，大多数时候是 0）
       const rows = [
         { key: 'cache', label: t('lens.cache'), value: lens.cache, visible: !zoomed },
@@ -2454,11 +2587,11 @@ window.__ModuleLoader__.load({
       const metrics = zoomed
         ? [
             { id: 'primary', label: t('lens.uncachedTotal'), value: lens.uncachedTotal, parts: [tokenParts(lens.uncachedTotal)] },
-            { id: 'secondary', label: t('lens.uncachedShare'), value: lens.uncachedShare, text: formatPercent(lens.uncachedShare), swatch: 'input' },
+            { id: 'secondary', label: t('lens.uncachedShare'), value: lens.uncachedShare, text: percentText(lens.uncachedShare), swatch: 'input' },
           ]
         : [
             { id: 'primary', label: t('lens.total'), value: lens.total, parts: [tokenParts(lens.total)] },
-            { id: 'secondary', label: t('lens.cacheHit'), value: lens.hitRate, text: formatPercent(lens.hitRate), swatch: 'cache', accent: true },
+            { id: 'secondary', label: t('lens.cacheHit'), value: lens.hitRate, text: percentText(lens.hitRate), swatch: 'cache', accent: true },
           ]
 
       let visibleBefore = false
@@ -2538,7 +2671,7 @@ window.__ModuleLoader__.load({
           metrics.map((metric) =>
             h(
               'div',
-              { key: metric.id, className: 'dps-metric', 'data-dps-metric': metric.id, 'data-value': metric.value, 'data-accent': metric.accent ? 'true' : 'false' },
+              { key: metric.id, className: 'dps-metric', 'data-dps-metric': metric.id, 'data-value': metric.value === null ? '' : metric.value, 'data-accent': metric.accent ? 'true' : 'false' },
               h(
                 'div',
                 { className: 'dps-metric-value' },
@@ -2624,8 +2757,10 @@ window.__ModuleLoader__.load({
      * byProvider（各家 token）+ providerUsage（各家四项用量）→ 降序行；前 6 个各一行，其余合成「其他」。
      * 占比的分母是这一档的全部合计；命中率按各家自己的四项算（「其他」用合并后的四项），
      * 这样每一行都能单独和那一家的后台对账。缺四项用量（旧版宿主）时命中率为 null。
+     * idleIds：这一档没有用量、但要单独占一行的供应商（范围内有月费的包月），排在最后、不占前 6 的名额，
+     * 否则这笔月费算进了花费，却没有地方看到、改掉它。
      */
-    function deriveProviders(byProvider, providerUsage) {
+    function deriveProviders(byProvider, providerUsage, idleIds) {
       const usageOf = providerUsage || {}
       const entries = Object.entries(byProvider || {})
         .map(([id, tokens]) => ({ id, tokens: toNumber(tokens), usage: usageOf[id] || null }))
@@ -2642,6 +2777,8 @@ window.__ModuleLoader__.load({
           usage: known.length > 0 ? known.reduce((sum, row) => addUsage(sum, row.usage), emptyUsage()) : null,
         })
       }
+      const listed = new Set(entries.map((row) => row.id))
+      for (const id of (idleIds || []).slice().sort()) if (!listed.has(id)) rows.push({ id, tokens: 0, usage: null })
       return {
         total,
         rows: rows.map((row) => ({
@@ -2653,19 +2790,25 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /** 文本 → 非负数；空或不合法返回 null。 */
+    /** 价格、月费的上限，和宿主一致（index.js 的 PRICE_LIMIT）：超过的宿主会拒绝，编辑器里就不让点「确定」。 */
+    const BILLING_LIMIT = 100000
+    /** 自定义单价最多几个模型（含「其他模型」），和宿主一致。 */
+    const BILLING_MAX_MODELS = 50
+
+    /** 文本 → 非负数，只认普通的小数写法（12、0.12、.5）；1e3、0x10、Infinity、负数、超过上限都返回 null。 */
     function billingNumber(text) {
       const trimmed = String(text === undefined || text === null ? '' : text).trim()
-      if (!trimmed) return null
+      if (!/^(\d+(\.\d*)?|\.\d+)$/.test(trimmed)) return null
       const value = Number(trimmed)
-      return Number.isFinite(value) && value >= 0 ? value : null
+      return Number.isFinite(value) && value >= 0 && value <= BILLING_LIMIT ? value : null
     }
 
     const PRICE_FIELDS = ['miss', 'hit', 'write', 'output']
 
     /**
-     * 编辑器里的草稿 → 要保存的计费方式；不完整时返回 null（「确定」不可点）。
-     * 自定义单价按行：一行四格全空就跳过；未命中、命中、输出要填全，缓存写入不填时按未命中价；至少要有一行。
+     * 编辑器里的草稿 → 要保存的计费方式；不完整或超出宿主的限制时返回 null（「确定」不可点）。
+     * 自定义单价按行：一行四格全空就跳过；未命中、命中、输出要填全，缓存写入不填时按未命中价；至少要有一行，最多 50 行。
+     * 包月的开始日期可以不填；填了就得是真实存在的日子。
      */
     function billingDraft(mode, fields) {
       if (mode === 'official' || mode === 'free') return { mode }
@@ -2683,13 +2826,16 @@ window.__ModuleLoader__.load({
           if (values[2] && write === null) return null
           prices[model] = { miss, hit, write: write === null ? miss : write, output }
         }
-        if (!Object.keys(prices).length) return null
+        const count = Object.keys(prices).length
+        if (!count || count > BILLING_MAX_MODELS) return null
         return { mode, currency: fields.currency === 'USD' ? 'USD' : 'CNY', prices }
       }
       if (mode === 'plan') {
         const monthly = billingNumber(fields.monthly)
         if (monthly === null) return null
-        return /^\d{4}-\d{2}-\d{2}$/.test(fields.since || '') ? { mode, monthly, since: fields.since } : { mode, monthly }
+        const since = String(fields.since || '').trim()
+        if (!since) return { mode, monthly }
+        return validDateKey(since) ? { mode, monthly, since } : null
       }
       return null
     }
@@ -2829,22 +2975,32 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** 美元兑人民币的汇率：供应商卡标题栏的小按钮，点开填数字；只在有美元计价的用量时出现。 */
+    /**
+     * 美元兑人民币的汇率：供应商卡标题栏的小按钮，点开填数字；只在有美元计价的用量时出现。
+     * 点外面、按 Esc 关闭；上一次没存上时按钮带 data-error（悬停写原因）。
+     */
     function RateControl(props) {
       const [open, setOpen] = useState(false)
       const [draft, setDraft] = useState('')
+      const wrapRef = useRef(null)
+      useDismiss(open, wrapRef, (reason) => {
+        setOpen(false)
+        if (reason === 'escape') focusWithin(wrapRef, '[data-dps-action="usd-rate"]')
+      })
       const value = billingNumber(draft)
       const valid = value !== null && value >= 0.1 && value <= 100
       const shown = Number(props.rate).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
       return h(
         'div',
-        { className: 'dps-menu dps-rate', 'data-dps-control': 'usd-rate' },
+        { ref: wrapRef, className: 'dps-menu dps-rate', 'data-dps-control': 'usd-rate' },
         h(
           'button',
           {
             type: 'button',
             className: 'dps-ghost',
             'data-dps-action': 'usd-rate',
+            'data-error': props.error ? 'true' : undefined,
+            title: props.error ? t('billing.saveFailed', { reason: props.error }) : undefined,
             'aria-expanded': open ? 'true' : 'false',
             onClick: () => {
               setDraft(shown)
@@ -2923,19 +3079,50 @@ window.__ModuleLoader__.load({
       if (!row) return t('unit.none')
       if (row.mode === 'unset') return t('provider.setBilling')
       if (row.mode === 'free') return t('billing.excluded')
+      if (row.spend === null || row.spend === undefined) return t('unit.none')
       return formatMoney(row.spend)
+    }
+
+    /**
+     * 表格最后一列（费用）的宽度：量出这一列里最宽的内容（标签 + 金额）。每一行是单独的网格，列宽不能按内容自动撑开
+     * （各行会对不齐），写死 68px 又放不下「×0.12 ¥1,234.5」。量不到（没有布局）时用 CSS 里的默认宽度。
+     */
+    function useCostColumn(tableRef, key) {
+      const [width, setWidth] = useState(0)
+      useLayoutEffect(() => {
+        const table = tableRef.current
+        if (!table || typeof table.querySelectorAll !== 'function') return
+        let widest = 0
+        for (const node of table.querySelectorAll('.dps-prov-cost')) widest = Math.max(widest, toNumber(node.scrollWidth))
+        const next = widest > 0 ? Math.ceil(widest) : 0
+        setWidth((current) => (current === next ? current : next))
+      }, [key])
+      return width > 0 ? { '--dps-cost-w': `${Math.max(68, width)}px` } : undefined
     }
 
     function ProviderCard(props) {
       // 默认跟随页面顶部的时间范围；「今日」按钮按下时只看今天（切换顶部范围会自动弹起）。
       const todayOnly = Boolean(props.todayOnly)
       const summary = (todayOnly ? props.today : props.summary) || emptySummary()
-      const data = useMemo(() => deriveProviders(summary.byProvider, summary.providerUsage), [summary])
-      const aliases = props.aliases || {}
       const costs = (todayOnly ? props.todayCosts : props.costs) || null
-      // 正在设置计费方式的那一行
+      // 范围内有月费、却没有用量的包月供应商：也给一行，月费算进了花费，就得能看到、改掉
+      const idleKey = costs
+        ? Object.entries(costs.byProvider)
+            .filter(([id, row]) => row.mode === 'plan' && row.spend > 0 && !(toNumber(summary.byProvider && summary.byProvider[id]) > 0))
+            .map(([id]) => id)
+            .sort()
+            .join('\u0000')
+        : ''
+      const data = useMemo(() => deriveProviders(summary.byProvider, summary.providerUsage, idleKey ? idleKey.split('\u0000') : []), [summary, idleKey])
+      const aliases = props.aliases || {}
+      const errors = props.billingErrors || {}
+      // 正在设置计费方式的那一行；那一行不在表里了（切到「今日」后没有用量）就收起，免得切回来时自己又打开
       const [billingOpen, setBillingOpen] = useState(null)
       const shownIds = new Set(data.rows.map((row) => row.id))
+      useEffect(() => {
+        if (billingOpen !== null && !shownIds.has(billingOpen)) setBillingOpen(null)
+      })
+      const tableRef = useRef(null)
       // 「其他」那一行：没单独列出来的供应商的花费合计（未设置的不计入）
       const otherSpend = costs
         ? Object.entries(costs.byProvider).reduce((sum, [id, row]) => (shownIds.has(id) || row.spend === null ? sum : sum + row.spend), 0)
@@ -2947,8 +3134,11 @@ window.__ModuleLoader__.load({
         const bill = cost ? cost.billing : billingOf(row.id, props.billingSettings)
         const titleParts = [t('billing.listValue', { value: formatMoney(cost ? cost.value : 0) })]
         if (bill && bill.mode === 'plan') titleParts.push(t('billing.planCell', { value: formatMoney(bill.monthly) }))
-        if (cost && cost.unpriced.length) titleParts.push(t('billing.unpriced', { models: cost.unpriced.join('、') }))
-        const tag = billingTag(bill)
+        if (cost && cost.unpriced.length) titleParts.push(t('billing.unpriced', { models: listJoin(cost.unpriced) }))
+        // 上一次改计费方式没存上：标签换成「未保存」，悬停写原因
+        const failed = errors[row.id]
+        if (failed) titleParts.unshift(t('billing.saveFailed', { reason: failed }))
+        const tag = failed ? t('billing.tagUnsaved') : billingTag(bill)
         return h(
           'span',
           { className: 'dps-prov-costcell', role: 'cell' },
@@ -2961,12 +3151,14 @@ window.__ModuleLoader__.load({
               'data-mode': cost ? cost.mode : bill.mode,
               'data-spend': cost && cost.spend !== null ? cost.spend : '',
               'data-list-value': cost ? cost.value : 0,
+              'data-error': failed ? 'true' : undefined,
               'aria-expanded': billingOpen === row.id ? 'true' : 'false',
               title: titleParts.join(' · '),
               onClick: () => setBillingOpen(billingOpen === row.id ? null : row.id),
             },
             tag ? h('span', { className: 'dps-cost-tag', 'data-dps-field': 'billing-tag' }, tag) : null,
-            costCellText(cost || { mode: bill.mode, spend: 0 }),
+            // 这一档里没有这家的费用明细（旧版宿主没有 slots）：未设置照样写「设置」，其余写「—」，不写 ¥0
+            costCellText(cost || { mode: bill.mode, spend: null }),
           ),
         )
       }
@@ -3031,6 +3223,16 @@ window.__ModuleLoader__.load({
               ),
         )
       }
+      // 费用列里每一格的文字变了才重新量列宽
+      const costKey = [
+        currentLocaleId(),
+        formatMoney(otherSpend),
+        ...data.rows.map((row) => {
+          const cost = costs && costs.byProvider[row.id]
+          return [row.id, cost ? cost.mode : '', cost && cost.spend !== null ? formatMoney(cost.spend) : '', cost ? billingTag(cost.billing) : '', errors[row.id] || ''].join(',')
+        }),
+      ].join(';')
+      const costColumn = useCostColumn(tableRef, costKey)
       return h(
         'section',
         { className: 'dps-panel dps-prov', 'data-dps-card': 'provider', 'data-scope': todayOnly ? 'today' : props.scope || 'all' },
@@ -3046,7 +3248,7 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 'dps-panel-tools' },
-            costs && costs.usdValue > 0 ? h(RateControl, { rate: props.usdCny, onSave: props.onRate }) : null,
+            costs && costs.usdValue > 0 ? h(RateControl, { rate: props.usdCny, onSave: props.onRate, error: props.rateError }) : null,
             h(
             'button',
             {
@@ -3064,7 +3266,7 @@ window.__ModuleLoader__.load({
           ? h('div', { className: 'dps-prov-empty' }, t('chart.empty'))
           : h(
               'div',
-              { className: 'dps-prov-table', role: 'table' },
+              { ref: tableRef, className: 'dps-prov-table', role: 'table', style: costColumn },
               h(
                 'div',
                 { className: 'dps-prov-row dps-prov-th', role: 'row' },
@@ -3185,10 +3387,14 @@ window.__ModuleLoader__.load({
       const data = useMemo(() => deriveProjects(summary.byProject, summary.byProjectSubagent, props.paths), [summary, props.paths])
       const costs = props.costs || null
       const shownIds = new Set(data.rows.map((row) => row.id))
+      // 用量全部来自未设置 / 不计入的供应商的项目不在 byProject 里：写「—」，不写 ¥0
       const projectSpend = (row) => {
         if (!costs) return null
-        if (row.other) return Object.entries(costs.byProject).reduce((sum, [id, amount]) => (shownIds.has(id) ? sum : sum + amount), 0)
-        return toNumber(costs.byProject[row.id])
+        if (row.other) {
+          const rest = Object.entries(costs.byProject).filter(([id]) => !shownIds.has(id))
+          return rest.length ? rest.reduce((sum, [, amount]) => sum + amount, 0) : null
+        }
+        return Object.prototype.hasOwnProperty.call(costs.byProject, row.id) ? toNumber(costs.byProject[row.id]) : null
       }
       return h(
         'section',
@@ -3319,14 +3525,17 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-btn{appearance:none;height:30px;padding:0 12px;border-radius:8px;border:1px solid var(--dps-line);background:var(--dps-card);color:var(--dps-ink);font-size:12.5px;cursor:pointer;white-space:nowrap;transition:background-color .15s ease}
 .dps-btn:hover{background:var(--dps-hover)}
 .dps-seg{position:relative;display:inline-grid;grid-auto-flow:column;grid-auto-columns:1fr;padding:2px;border-radius:9px;background:var(--dps-track);flex:0 0 auto}
-.dps-seg-thumb{position:absolute;top:2px;bottom:2px;left:2px;width:calc((100% - 4px) / var(--count));transform:translateX(calc(var(--index) * 100%));border-radius:7px;background:var(--dps-card);box-shadow:0 0 0 1px var(--dps-line),0 1px 2px var(--dps-shadow);transition:transform .22s cubic-bezier(.3,.7,.2,1)}
+.dps-seg-thumb{position:absolute;top:2px;bottom:2px;left:2px;width:calc((100% - 4px) / var(--count));transform:translateX(calc(var(--index) * 100%));border-radius:7px;background:var(--dps-card);box-shadow:0 0 0 1px var(--dps-line),0 1px 2px var(--dps-shadow);transition:transform .22s cubic-bezier(.3,.7,.2,1),left .22s cubic-bezier(.3,.7,.2,1),width .22s cubic-bezier(.3,.7,.2,1)}
+.dps-seg[data-fit="true"]{grid-auto-columns:auto}
+.dps-seg[data-fit="true"]:not([data-measured="true"]) button[aria-pressed="true"]{background:var(--dps-card);box-shadow:0 0 0 1px var(--dps-line)}
+.dps-seg-text{display:inline-block;max-width:13em;overflow:hidden;text-overflow:ellipsis;vertical-align:top}
 .dps-seg button{appearance:none;position:relative;border:0;background:transparent;color:var(--dps-muted);font-size:12px;line-height:1;padding:7px 12px;border-radius:7px;cursor:pointer;white-space:nowrap;transition:color .15s ease}
 .dps-seg button:hover{color:var(--dps-ink)}
 .dps-seg button[aria-pressed="true"]{color:var(--dps-ink);font-weight:600}
 .dps-kpis{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1.25fr) repeat(4,minmax(0,1fr));gap:12px}
 .dps-kpi{min-width:0;display:flex;flex-direction:column;justify-content:space-between;gap:16px;padding:16px 18px 18px;border:1px solid var(--dps-line);border-radius:var(--dps-radius);background:var(--dps-card)}
 .dps-kpi[data-hero="true"]{border-color:color-mix(in srgb,var(--dps-accent) 30%,var(--dps-line));background:color-mix(in srgb,var(--dps-accent) 5%,var(--dps-card))}
-.dps-kpi-label{display:flex;align-items:center;gap:7px;min-width:0;font-size:12.5px;color:var(--dps-muted)}
+.dps-kpi-label{display:flex;flex-wrap:wrap;align-items:center;gap:4px 7px;min-width:0;font-size:12.5px;color:var(--dps-muted)}
 .dps-kpi-label svg{width:15px;height:15px;flex:0 0 auto}
 .dps-kpi-label span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dps-kpi[data-hero="true"] .dps-kpi-label svg{color:var(--dps-accent)}
@@ -3369,6 +3578,10 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
 .dps-menu-pop button{appearance:none;border:0;background:transparent;color:var(--dps-ink);font-size:12.5px;line-height:1.4;text-align:left;padding:8px 10px;border-radius:7px;cursor:pointer;white-space:nowrap}
 .dps-menu-pop button:hover{background:var(--dps-hover)}
 .dps-grid{display:grid;grid-template-columns:minmax(0,1.62fr) minmax(0,1fr);gap:16px;align-items:stretch}
+@container dps (max-width:860px){
+.dps-top{flex-wrap:wrap}
+.dps-actions{flex:1 1 100%;margin-left:0;justify-content:flex-start}
+}
 @container dps (max-width:1040px){
 .dps-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
 .dps-kpi[data-hero="true"]{grid-column:1 / -1}
@@ -3504,7 +3717,7 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
 .dps-hit-plot{border-top:1px dashed var(--dps-line);border-bottom:1px solid var(--dps-line)}
 .dps-hit-svg{height:44px;overflow:visible}
 .dps-prov-table{display:flex;flex-direction:column;gap:14px}
-.dps-prov-row{display:grid;grid-template-columns:minmax(0,1fr) 60px 44px 52px 68px;align-items:baseline;column-gap:10px;row-gap:7px;font-size:13px}
+.dps-prov-row{display:grid;grid-template-columns:minmax(0,1fr) 60px 44px 52px var(--dps-cost-w,68px);align-items:baseline;column-gap:10px;row-gap:7px;font-size:13px}
 .dps-prov-th{margin-bottom:-6px;font-size:11.5px;color:var(--dps-faint)}
 .dps-prov-th span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dps-prov-th span:nth-child(n+2),.dps-prov-value,.dps-prov-share,.dps-prov-hit,.dps-prov-costcell,.dps-prov-cost{text-align:right}
@@ -3513,6 +3726,9 @@ button.dps-prov-cost{cursor:pointer;border-bottom:1px dashed transparent}
 button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
 .dps-prov-cost[data-mode="unset"]{color:var(--dps-accent);font-weight:600}
 .dps-prov-cost[data-mode="free"]{color:var(--dps-muted)}
+.dps-proj .dps-prov-row{grid-template-columns:minmax(0,1fr) 60px 44px 62px var(--dps-cost-w,68px)}
+.dps-prov-cost[data-error="true"] .dps-cost-tag{background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 14%,transparent);color:var(--dsw-alias-state-error-primary)}
+.dps-ghost[data-error="true"]{color:var(--dsw-alias-state-error-primary);border-color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 40%,var(--dps-line))}
 .dps-bill{grid-column:1 / -1;display:flex;flex-direction:column;gap:10px;margin-top:2px;padding:12px;border:1px solid var(--dps-line);border-radius:10px;background:var(--dps-hover)}
 .dps-bill .dps-seg{align-self:flex-start}
 .dps-bill-fields{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px}
@@ -3570,23 +3786,51 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
      * 分段开关。选中态用滑块表示（CSS 变量 --index / --count 定位），按钮带 aria-pressed，
      * data-dps-control / data-value 供测试与预览页定位。
      */
+    /**
+     * 分段开关。默认每段等宽，滑块按序号平移；fit = true 时每段按自己的文字宽度（顶部范围开关：自定义的日期可能很长，
+     * 等宽会把六段一起撑宽、挤出窗口），滑块量出按下那段的位置和宽度。量不到（没有布局）时不画滑块，按下那段自己带底色。
+     */
     function Segmented(props) {
       const options = props.options
       const index = Math.max(0, options.findIndex((option) => option.id === props.value))
+      const groupRef = useRef(null)
+      const [thumb, setThumb] = useState(null)
+      const labels = options.map((option) => String(option.title || option.label)).join('\u0000')
+      useLayoutEffect(() => {
+        if (!props.fit) return undefined
+        const group = groupRef.current
+        const measure = () => {
+          const button = group && typeof group.querySelector === 'function' ? group.querySelector('button[aria-pressed="true"]') : null
+          const next = button && button.offsetWidth > 0 ? { left: button.offsetLeft, width: button.offsetWidth } : null
+          setThumb((current) => (current && next && current.left === next.left && current.width === next.width ? current : next))
+        }
+        measure()
+        if (typeof ResizeObserver !== 'function' || !group) return undefined
+        const observer = new ResizeObserver(measure)
+        observer.observe(group)
+        return () => observer.disconnect()
+      }, [props.fit, props.value, labels])
+      const thumbStyle = props.fit ? (thumb ? { left: `${thumb.left}px`, width: `${thumb.width}px`, transform: 'none' } : { display: 'none' }) : undefined
       return h(
         'div',
         {
+          ref: groupRef,
           className: 'dps-seg',
           role: 'group',
           'aria-label': props.label,
           'data-dps-control': props.control,
+          'data-fit': props.fit ? 'true' : undefined,
+          'data-measured': props.fit && thumb ? 'true' : undefined,
           style: { '--index': index, '--count': options.length },
-          // ←/→ 在选项间移动并切换，焦点跟着走
+          // ←/→ 从有焦点的那一段移到相邻一段并切换，焦点跟着走。按选中值算会出错：
+          // 「自定义」只打开浮层、不改选中值，再按 ← 会从选中的那段往回跳，跳过中间的选项。
           onKeyDown: (event) => {
             const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0
             if (!step) return
             if (typeof event.preventDefault === 'function') event.preventDefault()
-            const next = options[(index + step + options.length) % options.length]
+            const focused = event.target && typeof event.target.getAttribute === 'function' ? event.target.getAttribute('data-value') : null
+            const from = options.findIndex((option) => option.id === focused)
+            const next = options[((from >= 0 ? from : index) + step + options.length) % options.length]
             props.onChange(next.id)
             const group = event.currentTarget
             if (group && typeof group.querySelector === 'function') {
@@ -3595,7 +3839,7 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
             }
           },
         },
-        h('span', { className: 'dps-seg-thumb', 'aria-hidden': true }),
+        h('span', { className: 'dps-seg-thumb', 'aria-hidden': true, style: thumbStyle }),
         options.map((option) =>
           h(
             'button',
@@ -3604,6 +3848,7 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
               type: 'button',
               'data-value': option.id,
               'aria-pressed': option.id === props.value ? 'true' : 'false',
+              title: option.title || undefined,
               onClick: () => {
                 if (option.id !== props.value) props.onChange(option.id)
                 else if (props.onReselect) props.onReselect(option.id)
@@ -3632,27 +3877,45 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
 
     /* ------------------------------------------------------------------ 页头 */
 
+    /**
+     * 浮层的关闭方式：点浮层外面、按 Esc。onClose(reason) 的 reason 是 'outside' 或 'escape'
+     * （按 Esc 关掉时把焦点还给打开它的按钮；点外面时焦点已经在别处了，不抢）。
+     */
+    function useDismiss(open, wrapRef, onClose) {
+      const closeRef = useRef(onClose)
+      closeRef.current = onClose
+      useEffect(() => {
+        if (!open || typeof document === 'undefined') return undefined
+        const outside = (event) => {
+          if (wrapRef.current && typeof wrapRef.current.contains === 'function' && !wrapRef.current.contains(event.target)) closeRef.current('outside')
+        }
+        const onKey = (event) => {
+          if (event.key === 'Escape') closeRef.current('escape')
+        }
+        document.addEventListener('mousedown', outside)
+        document.addEventListener('keydown', onKey)
+        return () => {
+          document.removeEventListener('mousedown', outside)
+          document.removeEventListener('keydown', onKey)
+        }
+      }, [open, wrapRef])
+    }
+
+    /** 把焦点还给浮层的开关按钮（selector 在 wrap 里找）。 */
+    function focusWithin(wrapRef, selector) {
+      const node = wrapRef.current
+      const button = node && typeof node.querySelector === 'function' ? node.querySelector(selector) : null
+      if (button && typeof button.focus === 'function') button.focus()
+    }
+
     /** 导出按钮 + 下拉两项（CSV / JSON）。点外面或按 Esc 关闭。 */
     function ExportMenu(props) {
       const [open, setOpen] = useState(false)
       const wrapRef = useRef(null)
-      useEffect(() => {
-        if (!open) return undefined
-        const close = (event) => {
-          if (wrapRef.current && typeof wrapRef.current.contains === 'function' && !wrapRef.current.contains(event.target)) {
-            setOpen(false)
-          }
-        }
-        const onKey = (event) => {
-          if (event.key === 'Escape') setOpen(false)
-        }
-        document.addEventListener('mousedown', close)
-        document.addEventListener('keydown', onKey)
-        return () => {
-          document.removeEventListener('mousedown', close)
-          document.removeEventListener('keydown', onKey)
-        }
-      }, [open])
+      useDismiss(open, wrapRef, (reason) => {
+        setOpen(false)
+        if (reason === 'escape') focusWithin(wrapRef, '[data-dps-action="export"]')
+      })
       const pick = (format) => {
         setOpen(false)
         props.onExport(format)
@@ -3689,7 +3952,9 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
     function RangePicker(props) {
       const [startKey, setStartKey] = useState(props.startKey || '')
       const [endKey, setEndKey] = useState(props.endKey || '')
-      const valid = Boolean(parseDateKey(startKey) && parseDateKey(endKey))
+      // 手动敲的日期能越过 max：两个都晚于今天时不能确定（否则会悄悄变成「今天」一天）
+      const earliest = startKey <= endKey ? startKey : endKey
+      const valid = Boolean(parseDateKey(startKey) && parseDateKey(endKey)) && (!props.maxKey || earliest <= props.maxKey)
       const apply = () => {
         if (!valid) return
         if (startKey <= endKey) props.onApply(startKey, endKey)
@@ -3731,29 +3996,21 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
     function RangeControl(props) {
       const [picking, setPicking] = useState(false)
       const wrapRef = useRef(null)
-      useEffect(() => {
-        if (!picking) return undefined
-        const close = (event) => {
-          if (wrapRef.current && typeof wrapRef.current.contains === 'function' && !wrapRef.current.contains(event.target)) setPicking(false)
-        }
-        const onKey = (event) => {
-          if (event.key === 'Escape') setPicking(false)
-        }
-        document.addEventListener('mousedown', close)
-        document.addEventListener('keydown', onKey)
-        return () => {
-          document.removeEventListener('mousedown', close)
-          document.removeEventListener('keydown', onKey)
-        }
-      }, [picking])
+      const focusCustom = () => focusWithin(wrapRef, 'button[data-value="custom"]')
+      useDismiss(picking, wrapRef, (reason) => {
+        setPicking(false)
+        if (reason === 'escape') focusCustom()
+      })
       const rangeWin = props.rangeWin || {}
       const isCustom = props.range === 'custom'
+      const customText = isCustom ? rangeText(rangeWin, props.todayKey) : ''
       return h(
         'div',
         { ref: wrapRef, className: 'dps-menu dps-range-menu' },
         h(Segmented, {
           control: 'range',
           label: t('aria.range'),
+          fit: true,
           value: props.range,
           onChange: (id) => {
             if (id === 'custom') {
@@ -3766,7 +4023,11 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
           onReselect: (id) => {
             if (id === 'custom') setPicking((open) => !open)
           },
-          options: RANGE_IDS.map((id) => ({ id, label: id === 'custom' && isCustom ? rangeText(rangeWin, props.todayKey) : t(`range.${id}`) })),
+          options: RANGE_IDS.map((id) =>
+            id === 'custom' && isCustom
+              ? { id, label: h('span', { className: 'dps-seg-text' }, customText), title: customText }
+              : { id, label: t(`range.${id}`) },
+          ),
         }),
         picking
           ? h(RangePicker, {
@@ -3777,6 +4038,7 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
               onApply: (startKey, endKey) => {
                 setPicking(false)
                 props.onCustom(startKey, endKey)
+                focusCustom()
               },
             })
           : null,
@@ -3911,16 +4173,34 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
      */
     function Sparkline(props) {
       const points = props.points || []
-      const bars = props.mode === 'bars'
+      // daily：画每天的实际用量（柱子；放不下柱子时画折线）；否则画 7 日均线
+      const daily = props.mode === 'bars'
       const average =
         Array.isArray(props.average) && props.average.length === points.length && points.length > 0
           ? props.average
           : points.map((point) => toNumber(point.tokens))
-      const values = bars ? points.map((point) => toNumber(point.tokens)) : average
+      const values = daily ? points.map((point) => toNumber(point.tokens)) : average
       const count = values.length
       const [hover, setHover] = useState(null)
       const wrapRef = useRef(null)
       const pointer = usePointer()
+      // 卡片窄的时候（宽屏下第一张卡被数字和环比挤到只剩几十像素），每根柱子不到 2.5px，看起来只是一抹颜色：改画折线
+      const [narrow, setNarrow] = useState(false)
+      const bars = daily && !narrow
+      useLayoutEffect(() => {
+        const node = wrapRef.current
+        if (!daily || !node || typeof node.getBoundingClientRect !== 'function') return undefined
+        const measure = () => {
+          const width = node.getBoundingClientRect().width
+          const next = width > 0 && count > 0 && width / count < 2.5
+          setNarrow((current) => (current === next ? current : next))
+        }
+        measure()
+        if (typeof ResizeObserver !== 'function') return undefined
+        const observer = new ResizeObserver(measure)
+        observer.observe(node)
+        return () => observer.disconnect()
+      }, [daily, count, bars])
       let max = 0
       for (const value of values) max = Math.max(max, value)
 
@@ -3963,7 +4243,7 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
           h(
             'div',
             { className: 'dps-pop-value' },
-            bars
+            daily
               ? value > 0
                 ? t('tip.tokens', { value: formatTokens(value) })
                 : t('tip.none')
@@ -4030,7 +4310,7 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
             'aria-label': t('aria.spark'),
           },
           area ? h('path', { className: 'dps-spark-area', d: area }) : null,
-          count > 1 ? h('path', { className: 'dps-spark-line', d: line, 'data-dps-field': 'moving-average' }) : null,
+          count > 1 ? h('path', { className: 'dps-spark-line', d: line, 'data-dps-field': daily ? 'daily-line' : 'moving-average' }) : null,
         ),
         count > 0
           ? h('span', {
@@ -4174,6 +4454,47 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
 
     /* ------------------------------------------------------------------ 页面 */
 
+    /** 对象自己的属性（不读原型上的同名属性）；没有时是 null。 */
+    function ownValue(object, key) {
+      return object && Object.prototype.hasOwnProperty.call(object, key) ? object[key] : null
+    }
+
+    /** 两个 JSON 值是否相同（键的顺序不算）。 */
+    function sameValue(left, right) {
+      const stable = (value) => {
+        if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`
+        if (value && typeof value === 'object') return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stable(value[key])}`).join(',')}}`
+        return JSON.stringify(value === undefined ? null : value)
+      }
+      return stable(left) === stable(right)
+    }
+
+    function dropKey(object, key) {
+      if (!Object.prototype.hasOwnProperty.call(object, key)) return object
+      const next = { ...object }
+      delete next[key]
+      return next
+    }
+
+    /** 页面上的改动里，快照已经跟上的那些丢掉；都没跟上时返回原对象（不触发重绘）。 */
+    function settleEdits(edits, savedOf) {
+      let next = edits
+      for (const [id, value] of Object.entries(edits)) if (sameValue(value === null ? null : value, savedOf(id))) next = dropKey(next, id)
+      return next
+    }
+
+    /** POST 一份 JSON；宿主回 ok: false（或 HTTP 出错）时抛错，错误的 message 是宿主给的原因。 */
+    async function postJson(url, body) {
+      const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+      const result = await response.json().catch(() => null)
+      if (!response.ok || !result || result.ok !== true) throw new Error((result && result.error) || `HTTP ${response.status}`)
+      return result
+    }
+
+    function errorReason(error) {
+      return String((error && error.message) || error || 'error')
+    }
+
     function ProfilePage() {
       useLocaleRevision()
       const { snapshot, error, refresh, reload } = useSnapshot()
@@ -4200,15 +4521,22 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
       const [aliasEdits, setAliasEdits] = useState({})
       // 计费方式同理：id → 设置；null 表示刚恢复成默认
       const [billingEdits, setBillingEdits] = useState({})
+      // 没存上的计费方式 / 汇率：id → 宿主给的原因（费用格的标签换成「未保存」，悬停写原因）
+      const [billingErrors, setBillingErrors] = useState({})
+      const [rateError, setRateError] = useState('')
 
       // 打开页面不再强制重扫：宿主在后台定时保鲜，读快照时数据旧了也会自己静默补扫。
+      // 连点两下时第一下先结束：等所有这次点出来的请求都回来才停转，否则图标会在宿主还在扫的时候停下
+      const refreshesRef = useRef(0)
       const runRefresh = useCallback(async () => {
+        refreshesRef.current += 1
         setRefreshing(true)
         setManualScan(true)
         try {
           await refresh()
         } finally {
-          if (mounted.current) setRefreshing(false)
+          refreshesRef.current -= 1
+          if (mounted.current && refreshesRef.current === 0) setRefreshing(false)
         }
       }, [refresh, mounted])
 
@@ -4265,6 +4593,22 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
       }, [daily, spark])
       const projectPaths = (snapshot && snapshot.projects) || null
       const snapshotBilling = snapshot && snapshot.billing && snapshot.billing.providers
+      const snapshotAliases = snapshot && snapshot.aliases && snapshot.aliases.providers
+      const snapshotRate = snapshot && snapshot.billing && typeof snapshot.billing.usdCny === 'number' ? snapshot.billing.usdCny : null
+      // 页面先显示刚改的值（保存中 / 刚存上还没拉到新快照）；快照里已经是这个值了就丢掉这条改动，之后以快照为准，
+      // 否则别的窗口、手改的 billing.json 在这一页上永远看不到
+      const latest = useRef({ billing: null, aliases: null, rate: null })
+      latest.current = { billing: snapshotBilling || {}, aliases: snapshotAliases || {}, rate: snapshotRate }
+      useEffect(() => {
+        setBillingEdits((current) => settleEdits(current, (id) => ownValue(snapshotBilling, id)))
+      }, [snapshotBilling])
+      useEffect(() => {
+        setAliasEdits((current) => settleEdits(current, (id) => ownValue(snapshotAliases, id) || ''))
+      }, [snapshotAliases])
+      const [rateEdit, setRateEdit] = useState(undefined)
+      useEffect(() => {
+        setRateEdit((current) => (current !== undefined && current === snapshotRate ? undefined : current))
+      }, [snapshotRate])
       const billingSettings = useMemo(() => {
         const merged = { ...(snapshotBilling || {}) }
         for (const [id, entry] of Object.entries(billingEdits)) {
@@ -4273,10 +4617,8 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
         }
         return merged
       }, [snapshotBilling, billingEdits])
-      // 价格表（宿主只带用到的模型，美元）与汇率：本机设置的优先，其次是这次刚改的，最后是宿主给的默认值
+      // 价格表（宿主只带用到的模型，美元）与汇率：这次刚改的优先，其次是本机设置的，最后是宿主给的默认值
       const priceTable = (snapshot && snapshot.prices && snapshot.prices.models) || null
-      const [rateEdit, setRateEdit] = useState(undefined)
-      const snapshotRate = snapshot && snapshot.billing && typeof snapshot.billing.usdCny === 'number' ? snapshot.billing.usdCny : null
       const defaultRate = snapshot && snapshot.prices && typeof snapshot.prices.defaultUsdCny === 'number' ? snapshot.prices.defaultUsdCny : 7
       const usdCny = rateEdit !== undefined ? (rateEdit === null ? defaultRate : rateEdit) : snapshotRate !== null ? snapshotRate : defaultRate
       const priceOptions = useMemo(() => ({ table: priceTable, usdCny }), [priceTable, usdCny])
@@ -4288,14 +4630,19 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
       const saveRate = useCallback(
         async (value) => {
           setRateEdit(value)
+          setRateError('')
           try {
-            const response = await fetch(BILLING_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ usdCny: value }) })
-            const result = await response.json().catch(() => null)
-            if (!response.ok || !result || result.ok !== true) throw new Error((result && result.error) || `HTTP ${response.status}`)
+            const result = await postJson(BILLING_URL, { usdCny: value })
+            // 换成宿主实际存下的值；快照跟上之后这条改动就丢掉（见上面的 effect）
+            const saved = result.billing && typeof result.billing.usdCny === 'number' ? result.billing.usdCny : null
+            if (mounted.current) setRateEdit(saved === latest.current.rate ? undefined : saved)
             reload()
           } catch (error) {
             console.warn('[dsh-profile-stats] 保存汇率失败：', error && error.message ? error.message : error)
-            if (mounted.current) setRateEdit(undefined)
+            if (mounted.current) {
+              setRateEdit(undefined)
+              setRateError(errorReason(error))
+            }
           }
         },
         [reload, mounted],
@@ -4303,52 +4650,41 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
       const saveBilling = useCallback(
         async (id, entry) => {
           setBillingEdits((current) => ({ ...current, [id]: entry }))
+          setBillingErrors((current) => dropKey(current, id))
           try {
-            const response = await fetch(BILLING_URL, {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ provider: id, billing: entry }),
-            })
-            const result = await response.json().catch(() => null)
-            if (!response.ok || !result || result.ok !== true) throw new Error((result && result.error) || `HTTP ${response.status}`)
+            const result = await postJson(BILLING_URL, { provider: id, billing: entry })
+            // 宿主会整理写法（去掉多余字段、补上缓存写入价）：换成它存下的那份，快照跟上之后丢掉
+            const saved = ownValue(result.billing && result.billing.providers, id)
+            if (mounted.current) {
+              setBillingEdits((current) => (sameValue(saved, ownValue(latest.current.billing, id)) ? dropKey(current, id) : { ...current, [id]: saved }))
+            }
             reload()
           } catch (error) {
             console.warn('[dsh-profile-stats] 保存计费方式失败：', error && error.message ? error.message : error)
             if (mounted.current) {
-              setBillingEdits((current) => {
-                const next = { ...current }
-                delete next[id]
-                return next
-              })
+              setBillingEdits((current) => dropKey(current, id))
+              setBillingErrors((current) => ({ ...current, [id]: errorReason(error) }))
             }
           }
         },
         [reload, mounted],
       )
-      const snapshotAliases = snapshot && snapshot.aliases && snapshot.aliases.providers
       const aliases = useMemo(() => ({ ...(snapshotAliases || {}), ...aliasEdits }), [snapshotAliases, aliasEdits])
       const saveAlias = useCallback(
         async (id, name) => {
-          const clean = String(name || '').trim().slice(0, 40)
+          // 和宿主一样按字符截断，不把 emoji 切成半个
+          const clean = Array.from(String(name || '').trim()).slice(0, 40).join('')
           setAliasEdits((current) => ({ ...current, [id]: clean }))
           try {
-            const response = await fetch(ALIAS_URL, {
-              method: 'POST',
-              headers: { 'content-type': 'application/json' },
-              body: JSON.stringify({ provider: id, name: clean }),
-            })
-            const result = await response.json().catch(() => null)
-            if (!response.ok || !result || result.ok !== true) throw new Error((result && result.error) || `HTTP ${response.status}`)
+            const result = await postJson(ALIAS_URL, { provider: id, name: clean })
+            const saved = ownValue(result.aliases && result.aliases.providers, id) || ''
+            if (mounted.current) {
+              setAliasEdits((current) => (saved === (ownValue(latest.current.aliases, id) || '') ? dropKey(current, id) : { ...current, [id]: saved }))
+            }
             reload()
           } catch (error) {
             console.warn('[dsh-profile-stats] 保存供应商名称失败：', error && error.message ? error.message : error)
-            if (mounted.current) {
-              setAliasEdits((current) => {
-                const next = { ...current }
-                delete next[id]
-                return next
-              })
-            }
+            if (mounted.current) setAliasEdits((current) => dropKey(current, id))
           }
         },
         [reload, mounted],
@@ -4513,9 +4849,11 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
               costs,
               todayCosts,
               billingSettings,
+              billingErrors,
               onBilling: saveBilling,
               usdCny,
               onRate: saveRate,
+              rateError,
             }),
           ),
         ),

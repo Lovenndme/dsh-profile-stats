@@ -12,13 +12,17 @@
  * 一切都可以从日志重建，磁盘缓存只是把「已经折过的会话」记下来，避免每次打开
  * 页面都重读几十 MB 日志；缓存丢了只是慢一次，不会出现和日志不一致的数字。
  *
- * 浏览器半区只走这三个同源路由：
- *   GET  /api/dsh-profile-stats/snapshot  当前快照（扫描中也会返回进度），唯一的数据来源
+ * 浏览器半区只走这几个同源路由：
+ *   GET  /api/dsh-profile-stats/snapshot  当前快照（扫描中也会返回进度），唯一的数据来源；带 ETag，没变时回 304
  *   POST /api/dsh-profile-stats/refresh   请求立即重扫（点刷新按钮时用；平时由后台定时保鲜）
  *   POST /api/dsh-profile-stats/update    一键升级（仅 registry 安装且有新版本时）
+ *   POST /api/dsh-profile-stats/alias     改供应商的显示名
+ *   POST /api/dsh-profile-stats/billing   改供应商的计费方式 / 美元汇率
+ * POST 一律只接受同源请求（看 Sec-Fetch-Site / Origin），带请求体的只接受 JSON。
  */
 
-import fs, { appendFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -44,8 +48,10 @@ const UPDATE_CHECK_TTL_MS = 6 * 60 * 60 * 1000
  *     每天每个 provider 记四项用量。
  * 14：会话记下工作目录（cwd）与是否子代理会话，用于按项目统计。
  * 15：每天按「小时 × 供应商 × 模型」记四项用量（slots），用于按调用时间折算费用。
+ * 16：会话记下折叠时是否还在运行（结束后补读一次尾巴）；只有 totalTokens 的调用记作未缓存输入；
+ *     slots 键改用 \u0000 分隔；模型名归一化改为反复去后缀；继承前缀记单次峰值与最长任务；缓存记下时区。
  */
-const CACHE_VERSION = 15
+const CACHE_VERSION = 16
 const DAY_MS = 86400000
 /**
  * 数据保鲜不依赖用户打开页面：宿主运行期间每分钟看一眼，快照超过 5 分钟就在后台静默补扫；
@@ -54,6 +60,13 @@ const DAY_MS = 86400000
 const BACKGROUND_CHECK_MS = 60 * 1000
 const BACKGROUND_STALE_MS = 5 * 60 * 1000
 const VIEW_STALE_MS = 60 * 1000
+/** 扫描中途最多每 2 秒重算一次聚合、每 10 秒落一次缓存。 */
+const REBUILD_INTERVAL_MS = 2000
+const CACHE_WRITE_INTERVAL_MS = 10 * 1000
+/** 缓存非空时，会话列表要连续空一分钟才当真（清空统计）。 */
+const EMPTY_LISTING_GRACE_MS = 60 * 1000
+/** timing.log 超过 256 KB 就换成 timing.log.1 重新开始，最多留两份。 */
+const TIMING_LOG_LIMIT = 256 * 1024
 
 /* ------------------------------------------------------------------ 基础工具 */
 
@@ -61,8 +74,47 @@ function dshHome() {
   return process.env.DSH_HOME || path.join(os.homedir(), '.dsh')
 }
 
+/**
+ * 日志、缓存文件、请求体里的 id 都会被拿来当普通对象的键。`__proto__` 当键时读到的是 Object.prototype，
+ * addUsage 这类「读出来再改」的写法会把字段写进所有对象的原型，这里统一换成一个普通的键。
+ * \u0000 是 slots 键的分隔符，也从 id 里去掉。
+ */
+function safeKey(id) {
+  const text = String(id).replace(/\u0000/g, '')
+  return text === '__proto__' ? '(__proto__)' : text
+}
+
+/** JSON.parse 会把 "__proto__" 建成自有属性，之后再拷贝就会改到原型上：读本地文件和请求体时直接丢掉这种键。 */
+function parseJson(text) {
+  return JSON.parse(text, (key, value) => (key === '__proto__' ? undefined : value))
+}
+
+/** 按字符（不是 UTF-16 码元）截断，免得把 emoji 这类代理对切成半个。 */
+function truncateText(text, max) {
+  const chars = Array.from(text)
+  return chars.length > max ? chars.slice(0, max).join('') : text
+}
+
 function cacheFile() {
   return path.join(dshHome(), 'dsh-profile-stats', 'cache.json')
+}
+
+/** 扫描耗时记一行。目录还没建（第一次扫描）时先建；文件太大就轮换，不会无限增长。写不进去不影响扫描。 */
+function appendTimingLog(line) {
+  try {
+    const file = path.join(dshHome(), 'dsh-profile-stats', 'timing.log')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    let size = 0
+    try {
+      size = fs.statSync(file).size
+    } catch {
+      size = 0
+    }
+    if (size > TIMING_LOG_LIMIT) fs.renameSync(file, `${file}.1`)
+    fs.appendFileSync(file, line)
+  } catch {
+    /* 日志写不进去不影响扫描 */
+  }
 }
 
 /** 用户可编辑的身份覆盖文件：{ "name": "...", "handle": "@...", "avatar": "M" } */
@@ -106,27 +158,35 @@ function sanitizeAliases(raw) {
   for (const [id, name] of Object.entries(source)) {
     if (Object.keys(providers).length >= ALIAS_MAX_COUNT) break
     const key = String(id).trim()
-    const label = typeof name === 'string' ? name.trim().slice(0, ALIAS_MAX_NAME) : ''
-    if (!key || key.length > ALIAS_MAX_ID || !label) continue
+    const label = typeof name === 'string' ? truncateText(name.trim(), ALIAS_MAX_NAME) : ''
+    if (!validProviderId(key) || !label) continue
     providers[key] = label
   }
   return { providers }
 }
 
+/** 能当供应商 id 存进本地文件的字符串：非空、不太长、不是 __proto__。 */
+function validProviderId(id) {
+  return typeof id === 'string' && id.length > 0 && id.length <= ALIAS_MAX_ID && id === safeKey(id)
+}
+
 function readAliases() {
   try {
-    return sanitizeAliases(JSON.parse(fs.readFileSync(aliasFile(), 'utf8')))
+    return sanitizeAliases(parseJson(fs.readFileSync(aliasFile(), 'utf8')))
   } catch {
     return { providers: {} }
   }
 }
 
-/** 改一个供应商的显示名；名字为空表示删掉（回到原始 id）。先写临时文件再改名，写到一半不会留下坏文件。 */
+/**
+ * 改一个供应商的显示名；名字为空串或 null 表示删掉（回到原始 id）。没带 name 字段（拼错了）不删，直接报错。
+ * 先写临时文件再改名，写到一半不会留下坏文件。
+ */
 function writeAlias(provider, name) {
   const id = typeof provider === 'string' ? provider.trim() : ''
-  if (!id || id.length > ALIAS_MAX_ID) return { ok: false, error: 'invalid-provider' }
-  if (name !== undefined && name !== null && typeof name !== 'string') return { ok: false, error: 'invalid-name' }
-  const label = typeof name === 'string' ? name.trim().slice(0, ALIAS_MAX_NAME) : ''
+  if (!validProviderId(id)) return { ok: false, error: 'invalid-provider' }
+  if (name !== null && typeof name !== 'string') return { ok: false, error: 'invalid-name' }
+  const label = typeof name === 'string' ? truncateText(name.trim(), ALIAS_MAX_NAME) : ''
   const current = readAliases()
   if (label) current.providers[id] = label
   else delete current.providers[id]
@@ -204,8 +264,15 @@ function sanitizeBillingEntry(raw) {
   }
   const monthly = priceNumber(raw.monthly)
   if (monthly === null) return null
-  const since = typeof raw.since === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.since) ? raw.since : ''
+  const since = validSince(raw.since) ? raw.since : ''
   return since ? { mode: 'plan', monthly, since } : { mode: 'plan', monthly }
+}
+
+/** 包月起始日：真实存在的日历日（2026-02-31 不算），年份在 2000 ~ 2100 之间（0202 年会让月费摊出上百万）。 */
+function validSince(value) {
+  if (typeof value !== 'string' || !Number.isFinite(dayIndex(value))) return false
+  const year = Number(value.slice(0, 4))
+  return year >= 2000 && year <= 2100
 }
 
 function sanitizeBilling(raw) {
@@ -215,7 +282,7 @@ function sanitizeBilling(raw) {
     if (Object.keys(providers).length >= ALIAS_MAX_COUNT) break
     const key = String(id).trim()
     const clean = sanitizeBillingEntry(entry)
-    if (!key || key.length > ALIAS_MAX_ID || !clean) continue
+    if (!validProviderId(key) || !clean) continue
     providers[key] = clean
   }
   const rate = raw && typeof raw === 'object' ? usdRate(raw.usdCny) : null
@@ -224,7 +291,7 @@ function sanitizeBilling(raw) {
 
 function readBilling() {
   try {
-    return sanitizeBilling(JSON.parse(fs.readFileSync(billingFile(), 'utf8')))
+    return sanitizeBilling(parseJson(fs.readFileSync(billingFile(), 'utf8')))
   } catch {
     return { providers: {} }
   }
@@ -249,15 +316,28 @@ function writeUsdRate(value) {
   return { ok: true, billing: next }
 }
 
-/** 改一个供应商的计费方式；billing 为 null 表示删掉（回到默认）。写法同 writeAlias：先写临时文件再改名。 */
+/**
+ * 改一个供应商的计费方式；billing 为 null 表示删掉（回到默认），没带这个字段（拼错了）不删、直接报错。
+ * 读文件时坏数据静默丢掉；写的时候不行：单价超上限、自定义超过 50 个模型、起始日不存在，都整条拒绝，
+ * 免得页面以为存上了。写法同 writeAlias：先写临时文件再改名。
+ */
 function writeBilling(provider, billing) {
   const id = typeof provider === 'string' ? provider.trim() : ''
-  if (!id || id.length > ALIAS_MAX_ID) return { ok: false, error: 'invalid-provider' }
+  if (!validProviderId(id)) return { ok: false, error: 'invalid-provider' }
+  if (billing === undefined) return { ok: false, error: 'invalid-billing' }
   const current = readBilling()
-  if (billing === null || billing === undefined) delete current.providers[id]
+  if (billing === null) delete current.providers[id]
   else {
     const clean = sanitizeBillingEntry(billing)
     if (!clean) return { ok: false, error: 'invalid-billing' }
+    if (clean.mode === 'custom' && billing.prices && typeof billing.prices === 'object') {
+      const rows = Object.keys(billing.prices)
+      if (rows.length > CUSTOM_MAX_MODELS) return { ok: false, error: 'too-many-models' }
+      if (Object.keys(clean.prices).length !== rows.length) return { ok: false, error: 'invalid-billing' }
+    }
+    if (clean.mode === 'plan' && billing.since !== undefined && billing.since !== null && billing.since !== '' && !clean.since) {
+      return { ok: false, error: 'invalid-since' }
+    }
     current.providers[id] = clean
   }
   const next = sanitizeBilling(current)
@@ -276,7 +356,7 @@ let priceTable = null
 function loadPriceTable() {
   if (priceTable) return priceTable
   try {
-    const parsed = JSON.parse(fs.readFileSync(path.join(SELF_DIR, 'prices.json'), 'utf8'))
+    const parsed = parseJson(fs.readFileSync(path.join(SELF_DIR, 'prices.json'), 'utf8'))
     const models = parsed && parsed.models && typeof parsed.models === 'object' ? parsed.models : {}
     priceTable = { fetchedAt: typeof parsed.fetchedAt === 'string' ? parsed.fetchedAt : '', models }
   } catch {
@@ -285,16 +365,28 @@ function loadPriceTable() {
   return priceTable
 }
 
-/** 中转站常在模型名后面加这些变体后缀；价格表里没有时退回基础模型的价格。 */
-const MODEL_VARIANTS = /-(thinking|reasoning|non-reasoning|high|medium|low|minimal|fast|online|search|free|nothink|no-think)$/
+/**
+ * 中转站常在模型名后面加的推理档位后缀；价格表里没有时退回基础模型的价格。
+ * 不含 -fast / -free / -online / -search：这些通常是另一档价格（快速档更贵、联网另收费），按基础价算会算错，宁可算未定价。
+ */
+const MODEL_VARIANTS = /-(thinking|reasoning|non-reasoning|high|medium|low|minimal|nothink|no-think)$/
+
+/**
+ * 价格表里能用的一行：输入、输出是非负数。输入、输出都是 0 时只有四项全 0 才算（生成器只给官方标明免费的模型这么写）；
+ * [0, 0, null, null] 是上游还没定价的占位，当未定价，不能当免费。
+ */
+function usablePriceRow(row) {
+  if (!Array.isArray(row) || row.length < 2 || !row.slice(0, 2).every((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0)) return false
+  return row[0] > 0 || row[1] > 0 || (row[2] === 0 && row[3] === 0)
+}
 
 /** 模型 → 价格表里的一行 [输入, 输出, 缓存读, 缓存写]（美元 / 百万 token）；找不到返回 null。 */
 function priceRowOf(model, table) {
   const models = (table || loadPriceTable()).models
   let id = String(model || '')
   for (let attempt = 0; attempt < 3 && id; attempt += 1) {
-    const row = models[id]
-    if (Array.isArray(row) && row.length >= 2 && row.slice(0, 2).every((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0)) return row
+    const row = Object.prototype.hasOwnProperty.call(models, id) ? models[id] : null
+    if (usablePriceRow(row)) return row
     if (!MODEL_VARIANTS.test(id)) break
     id = id.replace(MODEL_VARIANTS, '')
   }
@@ -329,7 +421,7 @@ async function readJsonBody(req, limit) {
     chunks.push(buffer)
   }
   const text = Buffer.concat(chunks).toString('utf8')
-  return text ? JSON.parse(text) : {}
+  return text ? parseJson(text) : {}
 }
 
 function toNumber(value) {
@@ -394,7 +486,7 @@ function projectOf(cwd) {
   const display = typeof cwd === 'string' ? cwd.trim().replace(/(.)[\\/]+$/, '$1') : ''
   if (!display) return { key: '', path: '' }
   const windows = /^[A-Za-z]:/.test(display) || display.includes('\\')
-  return { key: windows ? display.replace(/\\/g, '/').toLowerCase() : display, path: display }
+  return { key: safeKey(windows ? display.replace(/\\/g, '/').toLowerCase() : display), path: display }
 }
 
 function emptyFold(sessionId, createdAt, parentSession) {
@@ -415,6 +507,8 @@ function emptyFold(sessionId, createdAt, parentSession) {
     cacheWriteTokens: 0,
     maxStepTokens: 0,
     longestTurnMs: 0,
+    /** 折叠时会话还在运行：日志之后还会追加，会话结束后要再读一次，补上最后一次扫描之后的那段。 */
+    live: false,
     /** 给了 totalTokens 却和四项之和对不上的步数（只计数，见 usageMismatch）。 */
     usageMismatchCalls: 0,
     perDay: {},
@@ -453,6 +547,9 @@ function emptyFold(sessionId, createdAt, parentSession) {
     inheritedPerDayOutput: {},
     inheritedPerDayCacheRead: {},
     inheritedPerDayCacheWrite: {},
+    /** 继承前缀里的单次调用峰值与最长任务：孤儿前缀补回总量时，峰值记录也要跟着补。 */
+    inheritedMaxStepTokens: 0,
+    inheritedLongestTurnMs: 0,
     complete: false,
   }
 }
@@ -478,13 +575,22 @@ function partsSum(parts) {
 }
 
 /**
+ * 一步记账用的四项。四项都没有、只给了 totalTokens 时，把总量记作未缓存输入：
+ * 否则总量里有它、各项明细与 slots 里没有，费用按 0 算还不提示未定价。
+ */
+function stepParts(usage) {
+  const parts = usageParts(usage)
+  if (partsSum(parts) === 0) parts.inputTokens = Math.max(0, toNumber(usage && usage.totalTokens))
+  return parts
+}
+
+/**
  * 一次模型调用的 token 数 = 未缓存输入 + 缓存读 + 缓存写 + 输出。
  * 不再以 totalTokens 为准：2026-08 ~ 09 的旧版 DSH 日志里有的步骤没写它，旧实现退回「输入 + 输出」，
- * 把缓存整块漏掉了。四项都没有时才用 totalTokens。
+ * 把缓存整块漏掉了。四项都没有时才用 totalTokens（见 stepParts）。
  */
 function stepTokens(usage) {
-  const sum = partsSum(usageParts(usage))
-  return sum > 0 ? sum : Math.max(0, toNumber(usage && usage.totalTokens))
+  return partsSum(stepParts(usage))
 }
 
 /** 上游给了 totalTokens 却和四项之和对不上。只计数（进快照 totals，供导出核对），不拿它修正任何数字。 */
@@ -544,6 +650,9 @@ function dayMapsOf(fold, inherited) {
   }
 }
 
+/** slots 键的分隔符。供应商、模型、项目路径里都可能有「|」，\u0000 不会出现在这些名字里（safeKey 也会去掉）。 */
+const SLOT_SEP = '\u0000'
+
 /**
  * 一步记进某一天。slots 再按「UTC 小时序号 × 供应商 × 模型」记四项用量：价格按调用时间选
  * （DeepSeek 分高峰 / 空闲时段、会调价），时段边界都在整点，存到小时就够，页面现算费用、改价不用重扫。
@@ -562,7 +671,7 @@ function addStepToDay(maps, key, parts, tokens, provider, modelFamily, time) {
   const models = maps.models[key] || (maps.models[key] = {})
   models[modelFamily] = toNumber(models[modelFamily]) + tokens
   const slots = maps.slots[key] || (maps.slots[key] = {})
-  const slotKey = `${Math.floor(toNumber(time) / 3600000)}|${provider}|${modelFamily}`
+  const slotKey = `${Math.floor(toNumber(time) / 3600000)}${SLOT_SEP}${provider}${SLOT_SEP}${modelFamily}`
   const slot = slots[slotKey] || (slots[slotKey] = [0, 0, 0, 0])
   slot[0] += parts.inputTokens
   slot[1] += parts.cacheReadTokens
@@ -573,31 +682,47 @@ function addStepToDay(maps, key, parts, tokens, provider, modelFamily, time) {
 /** 这一步是谁服务的（deepseek-official / deepseek-account …），用于和网关账单对账。 */
 function providerOf(event) {
   const source = event && event.data && event.data.message && event.data.message.source
-  const provider = source && typeof source.provider === 'string' ? source.provider.trim() : ''
+  const provider = source && typeof source.provider === 'string' ? safeKey(source.provider.trim()) : ''
   return provider || 'unknown'
 }
+
+/** 尾部的日期 / 快照 / 渠道噪音：2024-08-06、20250929、261017、0613、-latest、-preview。 */
+const MODEL_NOISE = [/-\d{4}-\d{2}-\d{2}$/, /-\d{6,8}$/, /-\d{4}$/, /-(latest|preview|stable|exp)$/]
+/** 尾部的版本号：只有去掉后还剩数字时才去（deepseek-v3 去掉 -v3 就只剩 deepseek，会和 v4 混成一个）。 */
+const MODEL_VERSION_TAG = /-v\d+$/
 
 /**
  * 模型 id 归一化：把中转站常见的写法差异（前缀、点/下划线、日期快照后缀）抹平，
  * 让同一个模型的多种写法落到同一个 family 上。例如
  *   deepseek-v4-1-flash-261017 / deepseek-v4.1-flash / DeepSeek-V4-1-Flash
  * 都归一成 deepseek-v4-1-flash。
+ *   - 「厂商/模型」「平台/厂商/模型」只取最后一段（openai/gpt-4o、deepseek-ai/DeepSeek-V3）；
+ *   - 末尾的推理档位（-thinking、-high …）先摘下来，去完噪音再接回去：
+ *     claude-sonnet-4-5-20250929-thinking → claude-sonnet-4-5-thinking；
+ *   - 噪音反复去到不再变化：kimi-k2-0905-preview → kimi-k2，不会因为顺序固定而停在 kimi-k2-0905。
  */
 function normalizeModelId(raw) {
   let id = String(raw || '').trim().toLowerCase()
   if (!id) return ''
-  // 有些中转站会把厂商当前缀再拼一层
-  id = id.replace(/^(openai|anthropic|google|azure|aliyun|zhipu|baidu|moonshot)[/:]/, '')
-  // 点、下划线统一成分隔符
-  id = id.replace(/[._]/g, '-')
-  // 去掉尾部的日期/快照/版本噪音
-  id = id
-    .replace(/-\d{4}-\d{2}-\d{2}$/, '')
-    .replace(/-\d{6,8}$/, '')
-    .replace(/-\d{4}$/, '')
-    .replace(/-v\d+$/, '')
-    .replace(/-(latest|preview|stable|exp)$/, '')
-  return id.replace(/-+/g, '-').replace(/^-|-$/g, '')
+  id = id.slice(id.lastIndexOf('/') + 1)
+  id = id.replace(/^(openai|anthropic|google|azure|aliyun|zhipu|baidu|moonshot):/, '')
+  // 点、下划线、空白统一成分隔符
+  id = id.replace(/[._\s]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
+  let variant = ''
+  const tail = id.match(MODEL_VARIANTS)
+  if (tail && tail.index > 0) {
+    variant = tail[0]
+    id = id.slice(0, tail.index)
+  }
+  for (;;) {
+    let next = id
+    for (const pattern of MODEL_NOISE) next = next.replace(pattern, '')
+    const unversioned = next.replace(MODEL_VERSION_TAG, '')
+    if (/\d/.test(unversioned)) next = unversioned
+    if (next === id || !next) break
+    id = next
+  }
+  return safeKey(id + variant)
 }
 
 /** 这一步实际用的模型族（模型 id 归一化后的结果，原样作为统计键）。 */
@@ -617,13 +742,13 @@ function applyEvent(fold, event) {
     if (time > fold.lastTime) fold.lastTime = time
   }
 
-  const data = event.data || {}
+  const data = event.data && typeof event.data === 'object' ? event.data : {}
   switch (event.type) {
     case 'assistant/message': {
       const usage = data.usage
       if (!usage) break
-      const parts = usageParts(usage)
-      const tokens = stepTokens(usage)
+      const parts = stepParts(usage)
+      const tokens = partsSum(parts)
       fold.calls += 1
       fold.tokens += tokens
       fold.inputTokens += parts.inputTokens
@@ -645,13 +770,13 @@ function applyEvent(fold, event) {
     }
     case 'turn/start': {
       const turn = data.turn
-      if (turn !== undefined && time > 0) fold.openTurns[String(turn)] = time
+      if (turn !== undefined && time > 0) fold.openTurns[safeKey(turn)] = time
       break
     }
     case 'turn/end': {
       const turn = data.turn
       if (turn === undefined) break
-      const key = String(turn)
+      const key = safeKey(turn)
       const started = fold.openTurns[key]
       if (typeof started === 'number' && time >= started) {
         const span = time - started
@@ -682,15 +807,29 @@ function foldSnapshot(snapshot) {
   const fold = emptyFold(sessionId, header.createdAt, header.parentSession)
   fold.cwd = typeof header.cwd === 'string' ? header.cwd : ''
   fold.subagent = header.origin === 'subagent' || toNumber(header.delegationDepth) > 0
-  const events = (snapshot && snapshot.events) || []
+  const events = snapshot && Array.isArray(snapshot.events) ? snapshot.events : []
+  /** 继承前缀里还没结束的 turn：前缀不进本体的任务用时，单独算它自己的最长任务。 */
+  const inheritedTurns = {}
   for (const event of events) {
+    // 坏掉的单条事件（null、数字）跳过，不能让整个会话折叠失败
+    if (!event || typeof event !== 'object') continue
     const seq = toNumber(event.seq)
     if (seq < inherited) {
-      // 继承前缀：只累加用量，不进任务用时/首末时间。
+      // 继承前缀：只累加用量，不进本体的任务用时/首末时间。
+      const turn = event.data && event.data.turn
+      if (event.type === 'turn/start' && turn !== undefined && toNumber(event.time) > 0) inheritedTurns[safeKey(turn)] = toNumber(event.time)
+      if (event.type === 'turn/end' && turn !== undefined) {
+        const started = inheritedTurns[safeKey(turn)]
+        if (typeof started === 'number' && toNumber(event.time) >= started) {
+          fold.inheritedLongestTurnMs = Math.max(fold.inheritedLongestTurnMs, toNumber(event.time) - started)
+        }
+        delete inheritedTurns[safeKey(turn)]
+      }
       const usage = event.type === 'assistant/message' && event.data ? event.data.usage : undefined
       if (usage) {
-        const parts = usageParts(usage)
-        const tokens = stepTokens(usage)
+        const parts = stepParts(usage)
+        const tokens = partsSum(parts)
+        if (tokens > fold.inheritedMaxStepTokens) fold.inheritedMaxStepTokens = tokens
         fold.inheritedTokens += tokens
         fold.inheritedCalls += 1
         fold.inheritedInputTokens += parts.inputTokens
@@ -752,8 +891,8 @@ function computeStreaks(activeDays, now) {
 function slotRows(slots) {
   const rows = []
   for (const [key, parts] of Object.entries(slots || {})) {
-    const [hour, provider, model, ...project] = key.split('|')
-    rows.push([Number(hour), provider, model, project.join('|'), ...parts])
+    const [hour, provider = '', model = '', project = ''] = key.split(SLOT_SEP)
+    rows.push([Number(hour), provider, model, project, ...parts])
   }
   return rows.sort((left, right) => left[0] - right[0] || (left[1] < right[1] ? -1 : left[1] > right[1] ? 1 : 0))
 }
@@ -815,7 +954,7 @@ function aggregate(sessions, now, knownIds) {
       entry.tokens += tokens
       // 每小时用量再带上项目：[UTC 小时序号, 供应商, 模型, 项目键, 未缓存输入, 缓存读, 缓存写, 输出]
       for (const [slotKey, parts] of Object.entries(maps.slots[key] || {})) {
-        const fullKey = `${slotKey}|${project.key}`
+        const fullKey = `${slotKey}${SLOT_SEP}${project.key}`
         const sum = entry.slots[fullKey] || (entry.slots[fullKey] = [0, 0, 0, 0])
         for (let index = 0; index < 4; index += 1) sum[index] += toNumber(parts && parts[index])
       }
@@ -840,6 +979,13 @@ function aggregate(sessions, now, knownIds) {
     }
   }
 
+  /**
+   * 原件「在」= 它的折叠结果就在这批会话里。只看会话列表不够：原件列出来了却读失败（没有折叠结果）时，
+   * 副本的前缀两边都不算，这笔花费就丢了。首次全量扫描中途，副本先于原件折完时前缀会暂时多算，原件折完就回正。
+   */
+  const folded = new Set(sessions.map((fold) => fold.sessionId))
+  const parentPresent = (parent) => Boolean(parent) && folded.has(parent) && (!knownIds || knownIds.has(parent))
+
   for (const fold of sessions) {
     const place = projectOf(fold.cwd)
     const project = { key: place.key, subagent: Boolean(fold.subagent) }
@@ -859,10 +1005,15 @@ function aggregate(sessions, now, knownIds) {
     }
 
     const inheritedTokens = toNumber(fold.inheritedTokens)
+    /** 这个会话的「自己的」峰值记录；孤儿前缀补回时，前缀里的峰值也算它的。 */
+    let sessionTokens = fold.tokens
+    let sessionMaxStep = fold.maxStepTokens
+    let sessionLongestTurn = fold.longestTurnMs
     if (inheritedTokens > 0) {
       // 前缀是不是「重复计数」，取决于它的原件还在不在语料里。
-      const sourceInCorpus = fold.parentSession ? knownIds.has(fold.parentSession) : false
-      if (sourceInCorpus) {
+      // 已知限制：A → B → C 连续 fork、中间的 B 被删而 A 还在时，C 的前缀里属于 A 的那段会被补回、重复计一次
+      // （要知道前缀里哪段来自哪个会话，得记逐事件的来源，日志里没有）。
+      if (parentPresent(fold.parentSession)) {
         totals.inheritedTokens += inheritedTokens
         totals.inheritedCalls += toNumber(fold.inheritedCalls)
         totals.inheritedSessions += 1
@@ -883,19 +1034,22 @@ function aggregate(sessions, now, knownIds) {
           totals.byProvider[provider] = toNumber(totals.byProvider[provider]) + toNumber(value)
         }
         mergeDay(dayMapsOf(fold, true), project)
+        sessionTokens += inheritedTokens
+        sessionMaxStep = Math.max(sessionMaxStep, toNumber(fold.inheritedMaxStepTokens))
+        sessionLongestTurn = Math.max(sessionLongestTurn, toNumber(fold.inheritedLongestTurnMs))
       }
     }
 
-    if (fold.tokens > peakSessionTokens) {
-      peakSessionTokens = fold.tokens
+    if (sessionTokens > peakSessionTokens) {
+      peakSessionTokens = sessionTokens
       peakSession = fold.sessionId
     }
-    if (fold.maxStepTokens > peakStepTokens) {
-      peakStepTokens = fold.maxStepTokens
+    if (sessionMaxStep > peakStepTokens) {
+      peakStepTokens = sessionMaxStep
       peakStepSession = fold.sessionId
     }
-    if (fold.longestTurnMs > longestTurnMs) {
-      longestTurnMs = fold.longestTurnMs
+    if (sessionLongestTurn > longestTurnMs) {
+      longestTurnMs = sessionLongestTurn
       longestTurnSession = fold.sessionId
     }
 
@@ -942,19 +1096,77 @@ function aggregate(sessions, now, knownIds) {
 
 /* ---------------------------------------------------------------- 缓存读写 */
 
+/**
+ * 缓存里的每日键是折叠时按本地时区算的：换了时区（出差、系统改时区），旧会话还留在旧时区的日子上，
+ * 和新会话的分天对不上。缓存记下时区名，读的时候不一样就整份重折。
+ */
+function cacheTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || ''
+  } catch {
+    return ''
+  }
+}
+
+/** 折叠结果里的字段：数字必须是有限数，表必须是普通对象、值的形状对得上。 */
+const FOLD_NUMBERS = [
+  'seq', 'createdAt', 'calls', 'tokens', 'inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens',
+  'maxStepTokens', 'longestTurnMs', 'usageMismatchCalls', 'firstTime', 'lastTime', 'inheritedTokens', 'inheritedCalls',
+  'inheritedInputTokens', 'inheritedOutputTokens', 'inheritedCacheReadTokens', 'inheritedCacheWriteTokens',
+  'inheritedMaxStepTokens', 'inheritedLongestTurnMs',
+]
+const FOLD_STRINGS = ['sessionId', 'parentSession', 'cwd']
+const FOLD_NUMBER_MAPS = [
+  'perDay', 'perDayCalls', 'perDayInput', 'perDayOutput', 'perDayCacheRead', 'perDayCacheWrite', 'perProvider', 'perModel',
+  'openTurns', 'inheritedPerDay', 'inheritedPerDayCalls', 'inheritedPerModel', 'inheritedPerProvider', 'inheritedPerDayInput',
+  'inheritedPerDayOutput', 'inheritedPerDayCacheRead', 'inheritedPerDayCacheWrite',
+]
+const FOLD_NESTED_MAPS = ['perDayProvider', 'perDayModel', 'inheritedPerDayProvider', 'inheritedPerDayModel']
+const FOLD_USAGE_MAPS = ['perDayProviderUsage', 'inheritedPerDayProviderUsage']
+const FOLD_SLOT_MAPS = ['perDaySlots', 'inheritedPerDaySlots']
+
+/**
+ * 校验一条缓存里的折叠结果；哪里不对就返回 null（丢掉，下次扫描重折）。
+ * 旧实现只看是不是对象：`{}` 进聚合让总量变成 NaN，`tokens: "5"` 让总量变成字符串拼接，
+ * `{ complete: true }` 还永远不会被重读。
+ */
+function validFold(raw) {
+  const finite = (value) => typeof value === 'number' && Number.isFinite(value)
+  const plain = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+  const mapOf = (value, check) => plain(value) && Object.values(value).every(check)
+  const usage = (value) => plain(value) && ['inputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'outputTokens'].every((name) => finite(value[name]))
+  const slot = (value) => Array.isArray(value) && value.length === 4 && value.every(finite)
+  if (!plain(raw) || raw.complete !== true) return null
+  if (!FOLD_NUMBERS.every((name) => finite(raw[name]))) return null
+  if (!FOLD_STRINGS.every((name) => typeof raw[name] === 'string')) return null
+  const fold = { ...raw, subagent: raw.subagent === true, live: raw.live === true }
+  const maps = [
+    [FOLD_NUMBER_MAPS, finite],
+    [FOLD_NESTED_MAPS, (value) => mapOf(value, finite)],
+    [FOLD_USAGE_MAPS, (value) => mapOf(value, usage)],
+    [FOLD_SLOT_MAPS, (value) => mapOf(value, slot)],
+  ]
+  for (const [names, check] of maps) {
+    // 没有的表（还没记过东西）由 dayMapsOf 用到时再建
+    for (const name of names) if (fold[name] !== undefined && !mapOf(fold[name], check)) return null
+  }
+  return fold
+}
+
 function readCache() {
   const empty = { version: CACHE_VERSION, generatedAt: 0, sessions: {}, complete: false }
   try {
-    const parsed = JSON.parse(fs.readFileSync(cacheFile(), 'utf8'))
+    const parsed = parseJson(fs.readFileSync(cacheFile(), 'utf8'))
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || parsed.version !== CACHE_VERSION) return empty
+    if (parsed.timeZone !== cacheTimeZone()) return empty
     // 缓存文件是本地可改的：sessions 可能是 null / 数组，单条记录也可能被写坏。
     // 这类记录直接丢掉（下次扫描会重折），不能让 Object.keys(null) 或 fold.tokens 在启动时抛错。
     const sessions = {}
     const source = parsed.sessions
     if (source && typeof source === 'object' && !Array.isArray(source)) {
-      for (const [id, fold] of Object.entries(source)) {
-        if (!fold || typeof fold !== 'object' || Array.isArray(fold)) continue
-        sessions[id] = fold
+      for (const [id, raw] of Object.entries(source)) {
+        const fold = validFold(raw)
+        if (fold) sessions[id] = fold
       }
     }
     return {
@@ -974,7 +1186,7 @@ function writeCache(cache) {
     const file = cacheFile()
     fs.mkdirSync(path.dirname(file), { recursive: true })
     const temporary = `${file}.${process.pid}.tmp`
-    fs.writeFileSync(temporary, JSON.stringify(cache))
+    fs.writeFileSync(temporary, JSON.stringify({ ...cache, timeZone: cacheTimeZone() }))
     fs.renameSync(temporary, file)
   } catch (error) {
     // 缓存只是加速层：写不进去就下次重扫，不影响正确性。
@@ -1075,12 +1287,28 @@ export function createController(ctx) {
     firstScan: false,
     /** 语料里现存的所有会话 id，用来判断继承前缀的「原件」还在不在。 */
     knownIds: new Set(Object.keys(cache.sessions)),
+    /** 缓存里的会话变了、聚合还没重算。聚合在有人要快照时才算（最多每 2 秒一次），扫描本身不再反复重算。 */
+    dirty: false,
+    rebuiltAt: 0,
+    /** 会话列表从什么时候开始一直是空的（缓存非空时）：空一下多半是宿主还没准备好，持续一分钟才当真。 */
+    emptySince: 0,
+    /** 快照里编码过的每日明细，跟着聚合结果走（聚合不变就不用重新编码）。 */
+    encoded: null,
   }
   state.generatedAt = state.cache.generatedAt
-  state.aggregate = aggregate(Object.values(state.cache.sessions), Date.now(), state.knownIds)
 
   const rebuild = () => {
     state.aggregate = aggregate(Object.values(state.cache.sessions), Date.now(), state.knownIds)
+    state.dirty = false
+    state.rebuiltAt = Date.now()
+    state.encoded = null
+    return state.aggregate
+  }
+  rebuild()
+
+  /** 当前的聚合结果：扫描中途要快照时，离上次重算超过 2 秒才重算一次。 */
+  const currentAggregate = () => {
+    if (!state.aggregate || (state.dirty && Date.now() - state.rebuiltAt >= REBUILD_INTERVAL_MS)) rebuild()
     return state.aggregate
   }
 
@@ -1091,39 +1319,54 @@ export function createController(ctx) {
       state.firstScan = Object.keys(state.cache.sessions).length === 0 || state.cache.complete === false
       state.scanning = true
       try {
-        const records = await ctx.sessionQuery.listSessions()
-        const ids = new Set()
-        for (const record of records) {
+        const listed = await ctx.sessionQuery.listSessions()
+        if (!Array.isArray(listed)) throw new Error('listSessions 没有返回列表')
+        /** 会话 id（__proto__ 这种当不了普通对象键的跳过）。 */
+        const idOf = (record) => {
           const id = record && record.header && record.header.id
-          if (id !== undefined) ids.add(String(id))
+          if (id === undefined || id === null) return ''
+          const text = String(id)
+          return text && text === safeKey(text) ? text : ''
         }
-        // 会话被删掉/归档到别处时，旧 fold 会污染总数，这里同步剔除。
+        const records = listed.filter((record) => idOf(record))
+        if (records.length === 0 && Object.keys(state.cache.sessions).length > 0) {
+          // 一次空列表多半是宿主那边还没准备好（启动中、目录暂时读不到）：先不动缓存，持续一分钟还是空的再当真
+          if (!state.emptySince) state.emptySince = Date.now()
+          if (Date.now() - state.emptySince < EMPTY_LISTING_GRACE_MS) return
+        }
+        state.emptySince = 0
+        const ids = new Set(records.map(idOf))
+        // 会话被删掉/归档到别处时，旧 fold 会污染总数，这里同步剔除；它的读取失败记录也一起清掉。
         for (const id of Object.keys(state.cache.sessions)) {
-          if (!ids.has(id)) delete state.cache.sessions[id]
+          if (!ids.has(id)) {
+            delete state.cache.sessions[id]
+            state.dirty = true
+          }
         }
+        for (const id of Object.keys(state.errors)) if (!ids.has(id)) delete state.errors[id]
+        if (ids.size !== state.knownIds.size || [...ids].some((id) => !state.knownIds.has(id))) state.dirty = true
         state.knownIds = ids
-        rebuild()
 
         const pending = []
         for (const record of records) {
-          const id = record && record.header && record.header.id
-          if (id === undefined) continue
-          const sessionId = String(id)
+          const sessionId = idOf(record)
           const cached = state.cache.sessions[sessionId]
-          // 只有「活着的会话」（可能还在追加）或「从没折过的会话」需要读日志：
-          // 已经落盘且不在运行的会话，日志不会再变，缓存就是它的全部真相。
-          if (record.live || !cached || !cached.complete) pending.push({ id: sessionId, live: Boolean(record.live) })
+          // 需要读日志的：活着的会话（可能还在追加）、从没折过的会话，以及上次折的时候还活着、现在结束了的会话
+          // （最后一次扫描之后到结束之间写下的那段还没读过）。已经结束且结束后读过的会话，日志不会再变。
+          if (record.live || !cached || !cached.complete || cached.live) pending.push({ id: sessionId, live: Boolean(record.live) })
         }
         pending.sort((left, right) => Number(right.live) - Number(left.live))
 
         /** 埋点：readSession（宿主内部解压+解析）与本插件 fold 分开计时，写 timing.log。 */
         const stats = { read: 0, readMs: 0, foldMs: 0, events: 0 }
         state.progress = { done: 0, total: pending.length }
-        // 并行读几个会话（zstd 解压 + JSON 解析有 I/O 成分，串行会让冷启动白等），
-        // 同时每 4 个会话才重建一次聚合，避免 O(n²) 的重复合并。
+        // 并行读几个会话（zstd 解压 + JSON 解析有 I/O 成分，串行会让冷启动白等）。
+        // 聚合不在这里重算（有人要快照时才算，见 currentAggregate），缓存每 10 秒才落一次盘：
+        // 旧实现每 4 个会话重算、每 16 个会话写一次整份缓存，冷启动的耗时随会话数平方增长。
         const CONCURRENCY = Math.min(8, Math.max(1, pending.length))
         let cursor = 0
         let done = 0
+        let writtenAt = Date.now()
         const worker = async () => {
           for (;;) {
             const index = cursor
@@ -1134,7 +1377,10 @@ export function createController(ctx) {
               const _t0 = Date.now()
               const snapshot = await ctx.sessionQuery.readSession(target.id)
               const _t1 = Date.now()
-              state.cache.sessions[target.id] = foldSnapshot(snapshot)
+              const fold = foldSnapshot(snapshot)
+              fold.live = target.live
+              state.cache.sessions[target.id] = fold
+              state.dirty = true
               stats.read += 1
               stats.readMs += _t1 - _t0
               stats.foldMs += Date.now() - _t1
@@ -1149,10 +1395,10 @@ export function createController(ctx) {
             }
             done += 1
             state.progress = { done, total: pending.length }
-            if (done % 4 === 0) rebuild()
-            // 每 16 个会话落一次盘：首次全量扫描被打断（关应用/崩溃）时，
+            // 每 10 秒落一次盘：首次全量扫描被打断（关应用/崩溃）时，
             // 下次启动只需补扫剩下的部分，不必从头再来。
-            if (done % 16 === 0) {
+            if (Date.now() - writtenAt >= CACHE_WRITE_INTERVAL_MS) {
+              writtenAt = Date.now()
               state.cache.generatedAt = Date.now()
               if (state.firstScan) state.cache.complete = false
               writeCache(state.cache)
@@ -1162,16 +1408,12 @@ export function createController(ctx) {
         }
         await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()))
 
-          // 把「到底慢在哪」记成一行：readSession 是宿主服务内部的解压+解析，fold 是本插件自己。
-          if (stats.read > 0) {
-            const line = `[${new Date().toISOString()}] reason=${reason} sessions=${stats.read} events=${stats.events} readSession=${stats.readMs}ms fold=${stats.foldMs}ms total=${Date.now() - startedAt}ms concurrency=${CONCURRENCY}
-`
-            try {
-              appendFileSync(path.join(dshHome(), 'dsh-profile-stats', 'timing.log'), line)
-            } catch {
-              /* 日志写不进去不影响扫描 */
-            }
-          }
+        // 把「到底慢在哪」记成一行：readSession 是宿主服务内部的解压+解析，fold 是本插件自己。
+        if (stats.read > 0) {
+          appendTimingLog(
+            `[${new Date().toISOString()}] reason=${reason} sessions=${stats.read} events=${stats.events} readSession=${stats.readMs}ms fold=${stats.foldMs}ms total=${Date.now() - startedAt}ms concurrency=${CONCURRENCY}\n`,
+          )
+        }
         state.generatedAt = Date.now()
         state.cache.generatedAt = state.generatedAt
         state.cache.complete = true
@@ -1373,8 +1615,35 @@ export function createController(ctx) {
     return { ok: true, target }
   }
 
+  /**
+   * 快照里的每日明细：slots 里的供应商 / 模型 / 项目路径换成编号，对照表放在 slotKeys 里（页面收到后还原）。
+   * 这三个字符串在每一行里重复，占了快照的大半体积（一年重度使用约 1.7 MB，编号后约三分之一）。
+   * 跟着聚合结果缓存，聚合不变就不重新编码。
+   */
+  const encodedDaily = (agg) => {
+    if (state.encoded && state.encoded.aggregate === agg) return state.encoded
+    const slotKeys = { providers: [], models: [], projects: [] }
+    const lookup = { providers: new Map(), models: new Map(), projects: new Map() }
+    const code = (kind, value) => {
+      let index = lookup[kind].get(value)
+      if (index === undefined) {
+        index = slotKeys[kind].length
+        slotKeys[kind].push(value)
+        lookup[kind].set(value, index)
+      }
+      return index
+    }
+    const daily = agg.daily.map((entry) => ({
+      ...entry,
+      slots: entry.slots.map(([hour, provider, model, project, ...parts]) => [hour, code('providers', provider), code('models', model), code('projects', project), ...parts]),
+    }))
+    state.encoded = { aggregate: agg, daily, slotKeys, prices: pricesFor(agg.daily) }
+    return state.encoded
+  }
+
   const snapshotBody = () => {
-    const agg = state.aggregate || rebuild()
+    const agg = currentAggregate()
+    const encoded = encodedDaily(agg)
     return {
       ok: true,
       generatedAt: state.generatedAt,
@@ -1386,15 +1655,46 @@ export function createController(ctx) {
       update: updateInfo(),
       aliases: readAliases(),
       billing: readBilling(),
-      prices: pricesFor(agg.daily),
+      prices: encoded.prices,
       totals: agg.totals,
-      daily: agg.daily,
+      /** slots 的元组：[UTC 小时序号, 供应商编号, 模型编号, 项目编号, 未缓存输入, 缓存读, 缓存写, 输出]，编号查 slotKeys。 */
+      daily: encoded.daily,
+      slotKeys: encoded.slotKeys,
       projects: agg.projects || {},
       failedSessions: Object.keys(state.errors).length,
     }
   }
 
   return { state, scan, kick, snapshotBody, identity, updateInfo, refreshUpdateInfo, startUpdate }
+}
+
+/**
+ * 只接受同源的 POST，否则别的网页可以在后台发请求改你的计费设置、触发升级。
+ * 浏览器会带 Sec-Fetch-Site（同源是 same-origin，地址栏 / 书签是 none）；没有这个头的老浏览器看 Origin 的
+ * host 是否等于请求的 Host。两个都没有（curl、脚本）放行：那不是网页发的。
+ */
+function sameOriginRequest(req) {
+  const headers = (req && req.headers) || {}
+  const site = headers['sec-fetch-site']
+  if (typeof site === 'string' && site) return site === 'same-origin' || site === 'none'
+  const origin = headers.origin
+  if (typeof origin !== 'string' || !origin) return true
+  try {
+    return new URL(origin).host === String(headers.host || '')
+  } catch {
+    return false
+  }
+}
+
+/** 带请求体的 POST 只接受 JSON：跨站的表单只能发 text/plain / form，发不了 application/json（要预检，预检过不了）。 */
+function jsonRequest(req) {
+  const type = req && req.headers ? req.headers['content-type'] : ''
+  return /^application\/json\s*(;|$)/i.test(String(type || ''))
+}
+
+/** 快照的 ETag：内容的哈希。页面轮询时内容没变就回 304，不用每次重发整份快照。 */
+function snapshotTag(body) {
+  return `"${createHash('sha1').update(body).digest('base64url')}"`
 }
 
 /* ------------------------------------------------------------------ 插件本体 */
@@ -1412,6 +1712,23 @@ export function apply(ctx) {
     res.end(body)
   }
 
+  /** POST 的公共检查：方法、同源、（带请求体的）JSON。不通过时已经回了错误，返回 false。 */
+  const acceptPost = (req, res, withBody) => {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { ok: false, error: 'method-not-allowed' })
+      return false
+    }
+    if (!sameOriginRequest(req)) {
+      sendJson(res, 403, { ok: false, error: 'cross-origin' })
+      return false
+    }
+    if (withBody && !jsonRequest(req)) {
+      sendJson(res, 415, { ok: false, error: 'json-only' })
+      return false
+    }
+    return true
+  }
+
   ctx.effect(() =>
     ctx.webServer.register({
       kind: 'exact',
@@ -1423,7 +1740,20 @@ export function apply(ctx) {
         }
         // 先回当前快照（可能略旧），再在后台补扫，页面永远不用等一次全量扫描。
         kick('view')
-        sendJson(res, 200, snapshotBody())
+        const body = JSON.stringify(snapshotBody())
+        const tag = snapshotTag(body)
+        // no-cache（不是 no-store）：浏览器留一份，下次带 If-None-Match 来问，没变就回 304
+        res.setHeader('etag', tag)
+        res.setHeader('cache-control', 'no-cache')
+        if (req.headers && req.headers['if-none-match'] === tag) {
+          res.statusCode = 304
+          res.end()
+          return
+        }
+        res.statusCode = 200
+        res.setHeader('content-type', 'application/json; charset=utf-8')
+        res.setHeader('content-length', Buffer.byteLength(body))
+        res.end(body)
       },
     }),
   )
@@ -1433,10 +1763,7 @@ export function apply(ctx) {
       kind: 'exact',
       path: REFRESH_PATH,
       handler: (req, res) => {
-        if (req.method !== 'POST') {
-          sendJson(res, 405, { ok: false, error: 'method-not-allowed' })
-          return
-        }
+        if (!acceptPost(req, res, false)) return
         kick('forced')
         sendJson(res, 200, { ok: true, accepted: true, scanning: state.scanning })
       },
@@ -1448,10 +1775,7 @@ export function apply(ctx) {
       kind: 'exact',
       path: BILLING_PATH,
       handler: async (req, res) => {
-        if (req.method !== 'POST') {
-          sendJson(res, 405, { ok: false, error: 'method-not-allowed' })
-          return
-        }
+        if (!acceptPost(req, res, true)) return
         let body
         try {
           body = await readJsonBody(req, ALIAS_BODY_LIMIT)
@@ -1460,10 +1784,8 @@ export function apply(ctx) {
           return
         }
         try {
-          const result =
-            body && Object.prototype.hasOwnProperty.call(body, 'usdCny')
-              ? writeUsdRate(body.usdCny === null ? null : body.usdCny)
-              : writeBilling(body && body.provider, body ? body.billing : undefined)
+          const has = (name) => Boolean(body) && typeof body === 'object' && Object.prototype.hasOwnProperty.call(body, name)
+          const result = has('usdCny') ? writeUsdRate(body.usdCny) : writeBilling(has('provider') ? body.provider : undefined, has('billing') ? body.billing : undefined)
           sendJson(res, result.ok ? 200 : 400, result)
         } catch (error) {
           sendJson(res, 500, { ok: false, error: 'write-failed', message: error && error.message ? error.message : String(error) })
@@ -1477,10 +1799,7 @@ export function apply(ctx) {
       kind: 'exact',
       path: ALIAS_PATH,
       handler: async (req, res) => {
-        if (req.method !== 'POST') {
-          sendJson(res, 405, { ok: false, error: 'method-not-allowed' })
-          return
-        }
+        if (!acceptPost(req, res, true)) return
         let body
         try {
           body = await readJsonBody(req, ALIAS_BODY_LIMIT)
@@ -1489,7 +1808,8 @@ export function apply(ctx) {
           return
         }
         try {
-          const result = writeAlias(body && body.provider, body && body.name)
+          const has = (name) => Boolean(body) && typeof body === 'object' && Object.prototype.hasOwnProperty.call(body, name)
+          const result = writeAlias(has('provider') ? body.provider : undefined, has('name') ? body.name : undefined)
           sendJson(res, result.ok ? 200 : 400, result)
         } catch (error) {
           sendJson(res, 500, { ok: false, error: 'write-failed', message: error && error.message ? error.message : String(error) })
@@ -1503,10 +1823,7 @@ export function apply(ctx) {
       kind: 'exact',
       path: UPDATE_PATH,
       handler: (req, res) => {
-        if (req.method !== 'POST') {
-          sendJson(res, 405, { ok: false, error: 'method-not-allowed' })
-          return
-        }
+        if (!acceptPost(req, res, false)) return
         sendJson(res, 200, startUpdate())
       },
     }),
@@ -1552,8 +1869,15 @@ export {
   readAliases,
   writeAlias,
   usageParts,
+  stepParts,
   stepTokens,
   usageMismatch,
+  safeKey,
+  validFold,
+  cacheTimeZone,
+  sameOriginRequest,
+  jsonRequest,
+  writeUsdRate,
   providerOf,
   normalizeModelId,
   modelFamilyOf,

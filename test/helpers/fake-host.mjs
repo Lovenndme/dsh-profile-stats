@@ -84,8 +84,11 @@ export function createFakeHost({ sessions = [], services = {} } = {}) {
     },
   }
 
-  /** body：字符串（原样作为请求体）或对象（转成 JSON）；请求对象和 Node 的一样可以 for await 读取。 */
-  const request = async (path, method = 'GET', body) => {
+  /**
+   * body：字符串（原样作为请求体）或对象（转成 JSON）；请求对象和 Node 的一样可以 for await 读取。
+   * extraHeaders：额外的请求头（小写键），会覆盖默认的 content-type。
+   */
+  const request = async (path, method = 'GET', body, extraHeaders = {}) => {
     const handler = routes.get(path)
     if (!handler) throw new Error(`route not registered: ${path}`)
     const headers = {}
@@ -112,7 +115,7 @@ export function createFakeHost({ sessions = [], services = {} } = {}) {
         const req = {
           method,
           url: path,
-          headers: raw ? { 'content-type': 'application/json' } : {},
+          headers: { ...(raw ? { 'content-type': 'application/json' } : {}), ...extraHeaders },
           async *[Symbol.asyncIterator]() {
             if (raw) yield Buffer.from(raw, 'utf8')
           },

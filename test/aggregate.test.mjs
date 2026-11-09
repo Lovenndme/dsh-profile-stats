@@ -287,3 +287,52 @@ test('aggregate：每天按「UTC 小时 × 供应商 × 模型 × 项目」记�
     assert.equal(sum, entry.tokens, entry.date)
   }
 })
+
+test('aggregate：供应商、模型、项目路径里有「|」也不会拆错 slots', () => {
+  const hour = Date.UTC(2026, 10, 6, 4) / 3600000
+  const fold = foldSnapshot({
+    session: { id: 'pipe', cwd: '/srv/a|b' },
+    events: [assistantEvent({ seq: 0, time: hour * 3600000 + 5, input: 100, output: 10, provider: 'gw|east', model: 'my|model' })],
+  })
+  const { daily } = aggregate([fold], NOW, new Set(['pipe']))
+  assert.deepEqual(daily[0].slots, [[hour, 'gw|east', 'my|model', '/srv/a|b', 100, 0, 0, 10]])
+  assert.deepEqual(daily[0].byProvider, { 'gw|east': 110 })
+})
+
+test('aggregate：原件列在会话列表里但没有折叠结果（读失败）时，副本的前缀补回，不会两边都不算', () => {
+  const copy = foldSnapshot({
+    session: { id: 'copy', parentSession: 'origin' },
+    inheritedEventCount: 1,
+    events: [
+      assistantEvent({ seq: 0, time: DAY_1, input: 900, output: 100 }),
+      assistantEvent({ seq: 1, time: DAY_2, input: 150, output: 50 }),
+    ],
+  })
+  const { totals } = aggregate([copy], NOW, new Set(['copy', 'origin']))
+  assert.equal(totals.tokens, 1200)
+  assert.equal(totals.orphanedTokens, 1000)
+  assert.equal(totals.inheritedTokens, 0)
+})
+
+test('aggregate：孤儿前缀补回时，单次峰值、最长任务、单会话峰值也算上前缀', () => {
+  const copy = foldSnapshot({
+    session: { id: 'copy', parentSession: 'gone' },
+    inheritedEventCount: 3,
+    events: [
+      turnStartEvent({ seq: 0, time: DAY_1, turn: 1 }),
+      assistantEvent({ seq: 1, time: DAY_1 + 1000, input: 900000, output: 100000 }),
+      turnEndEvent({ seq: 2, time: DAY_1 + 7200000, turn: 1 }),
+      assistantEvent({ seq: 3, time: DAY_2, input: 10, output: 5 }),
+    ],
+  })
+  const { totals } = aggregate([copy], NOW, new Set(['copy']))
+  assert.equal(totals.tokens, 1000015)
+  assert.equal(totals.peakStepTokens, 1000000)
+  assert.equal(totals.longestTurnMs, 7200000)
+  assert.equal(totals.peakSessionTokens, 1000015)
+  // 原件还在时前缀不算这个会话的
+  const origin = foldOf('gone', [assistantEvent({ seq: 0, time: DAY_1, input: 900000, output: 100000 })])
+  const both = aggregate([origin, copy], NOW, new Set(['copy', 'gone'])).totals
+  assert.equal(both.longestTurnMs, 0)
+  assert.equal(both.peakSessionTokens, 1000000)
+})

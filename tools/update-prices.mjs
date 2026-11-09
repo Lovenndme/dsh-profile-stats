@@ -11,7 +11,9 @@
  *   - 键用宿主的 normalizeModelId 归一化，和统计里的模型名一致（claude-sonnet-5-5、gpt-5-5、gemini-3-1-pro …）；
  *   - 同一个键有多条时：厂商顺序靠前的优先，其次是本来就不带日期 / preview 后缀的那条；
  *   - 分档定价（tiered_pricing）取第一档；按单次请求长度加价（*_above_*）的不取，按基础价算；
- *   - 没有缓存读 / 写价格的记 null（页面按未缓存输入价算）。
+ *   - 没有缓存读 / 写价格的记 null（页面按未缓存输入价算）；
+ *   - 输入、输出都是 0 的条目：带官方价格页链接的是真免费，记 [0, 0, 0, 0]；没有链接的是还没定价的占位，不取
+ *     （宿主只把四个 0 当免费，[0, 0, null, null] 这种当未定价）。
  * DeepSeek 的 Flash / Pro 由页面里带调价历史与高峰时段的人民币价表负责，这里的同名条目不会被用到。
  */
 import fs from 'node:fs'
@@ -49,6 +51,9 @@ function pricesOf(entry) {
     output = perMillion(first.output_cost_per_token)
   }
   if (input === null || output === null) return null
+  // 输入、输出都是 0：带官方价格页链接（source）的是真免费（GLM-4.5-Flash、AI Studio 上的 Gemma），记成四个 0；
+  // 没有链接的是还没定价的占位（例如 volcengine 的 kimi-k2-thinking），不取。
+  if (input === 0 && output === 0) return entry.source ? [0, 0, 0, 0] : null
   return [input, output, perMillion(entry.cache_read_input_token_cost), perMillion(entry.cache_creation_input_token_cost)]
 }
 

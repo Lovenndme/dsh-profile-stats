@@ -8,6 +8,7 @@ import {
   modelFamilyOf,
   normalizeModelId,
   providerOf,
+  stepParts,
   stepTokens,
   usageMismatch,
   usageParts,
@@ -54,6 +55,8 @@ test('providerOf：读 message.source.provider，缺失回落 unknown', () => {
   assert.equal(providerOf(event({ provider: '' })), 'unknown')
   assert.equal(providerOf(event({})), 'unknown')
   assert.equal(providerOf(event({ provider: 42 })), 'unknown')
+  assert.equal(providerOf(event({ provider: '__proto__' })), '(__proto__)', '__proto__ 当不了普通对象的键')
+  assert.equal(providerOf(event({ provider: 'a\u0000b' })), 'ab', '\u0000 是 slots 键的分隔符')
   assert.equal(providerOf({}), 'unknown')
   assert.equal(providerOf(null), 'unknown')
 })
@@ -69,7 +72,22 @@ test('normalizeModelId：抹平大小写、点、下划线、厂商前缀、日�
     ['azure/gpt-4o-mini', 'gpt-4o-mini'],
     ['qwen-plus-latest', 'qwen-plus'],
     ['deepseek-v4-1-flash-preview', 'deepseek-v4-1-flash'],
-    ['some-model-v2', 'some-model'],
+    // 去掉版本号后不剩数字的不去：deepseek-v3 / v4 不能都变成 deepseek
+    ['some-model-v2', 'some-model-v2'],
+    ['deepseek-v3', 'deepseek-v3'],
+    ['deepseek-v3-0324', 'deepseek-v3'],
+    ['model-20250101-v2', 'model'],
+    // 噪音反复去到不变；推理档位留在最后
+    ['kimi-k2-0905-preview', 'kimi-k2'],
+    ['kimi-k2-0905', 'kimi-k2'],
+    ['claude-sonnet-4-5-20250929-thinking', 'claude-sonnet-4-5-thinking'],
+    ['o3-high', 'o3-high'],
+    // 「平台/厂商/模型」只取最后一段
+    ['deepseek-ai/DeepSeek-V3', 'deepseek-v3'],
+    ['Pro/deepseek-ai/DeepSeek-R1', 'deepseek-r1'],
+    ['DeepSeek V4 Flash', 'deepseek-v4-flash'],
+    // 不能当普通对象键的名字被换掉
+    ['__proto__', 'proto'],
     ['  DeepSeek-V4-Pro  ', 'deepseek-v4-pro'],
     ['', ''],
     [undefined, ''],
@@ -335,4 +353,52 @@ test('foldSnapshot：事件乱序也取到正确的 seq 与首末时间', () => 
   assert.equal(fold.firstTime, day1)
   assert.equal(fold.lastTime, day2)
   assert.equal(fold.tokens, 30)
+})
+
+test('stepParts：只给 totalTokens 的调用记作未缓存输入，各项与总量对得上', () => {
+  assert.deepEqual(stepParts({ totalTokens: 2000 }), { inputTokens: 2000, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 })
+  assert.deepEqual(stepParts({ inputTokens: 5, outputTokens: 1, totalTokens: 999 }), { inputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 1 })
+  assert.deepEqual(stepParts({ totalTokens: -3 }), { inputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 })
+  const time = localNoon(2026, 11, 6)
+  const fold = foldSnapshot({
+    session: { id: 'only-total' },
+    events: [{ seq: 0, time, type: 'assistant/message', data: { usage: { totalTokens: 2000 }, message: { source: { provider: 'p', model: 'm' } } } }],
+  })
+  assert.equal(fold.tokens, 2000)
+  assert.equal(fold.inputTokens, 2000)
+  const [slot] = Object.values(Object.values(fold.perDaySlots)[0])
+  assert.deepEqual(slot, [2000, 0, 0, 0])
+  assert.deepEqual(Object.values(fold.perDayProviderUsage)[0].p, { inputTokens: 2000, cacheReadTokens: 0, cacheWriteTokens: 0, outputTokens: 0 })
+})
+
+test('foldSnapshot：坏掉的单条事件（null、数字、data 不是对象）跳过，不让整个会话读失败', () => {
+  const time = localNoon(2026, 11, 6)
+  const fold = foldSnapshot({
+    session: { id: 'messy' },
+    events: [null, 42, 'x', { seq: 1, time, type: 'turn/start', data: 'oops' }, assistantEvent({ seq: 2, time, input: 10, output: 5 })],
+  })
+  assert.equal(fold.tokens, 15)
+  assert.equal(fold.calls, 1)
+  assert.equal(foldSnapshot({ session: { id: 'e' }, events: 'nope' }).tokens, 0)
+})
+
+test('foldSnapshot：继承前缀单独记单次峰值与最长任务（孤儿前缀补回时要用）', () => {
+  const time = localNoon(2026, 11, 6)
+  const fold = foldSnapshot({
+    session: { id: 'copy', parentSession: 'gone' },
+    inheritedEventCount: 4,
+    events: [
+      turnStartEvent({ seq: 0, time, turn: 1 }),
+      assistantEvent({ seq: 1, time: time + 1000, input: 900000, output: 100000 }),
+      assistantEvent({ seq: 2, time: time + 2000, input: 10, output: 5 }),
+      turnEndEvent({ seq: 3, time: time + 7200000, turn: 1 }),
+      turnStartEvent({ seq: 4, time: time + 8000000, turn: 2 }),
+      assistantEvent({ seq: 5, time: time + 8000100, input: 10, output: 5 }),
+      turnEndEvent({ seq: 6, time: time + 8060000, turn: 2 }),
+    ],
+  })
+  assert.equal(fold.inheritedMaxStepTokens, 1000000)
+  assert.equal(fold.inheritedLongestTurnMs, 7200000)
+  assert.equal(fold.maxStepTokens, 15, '本体的峰值不含前缀')
+  assert.equal(fold.longestTurnMs, 60000)
 })

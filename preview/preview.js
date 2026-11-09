@@ -453,6 +453,29 @@
       (requestLog.blocked ? ' · 拦截外部请求 ×' + requestLog.blocked : '')
   }
 
+  /** 和宿主一样：slots 里的供应商 / 模型 / 项目换成编号，对照表放进 slotKeys（页面收到后还原）。 */
+  function encodeSnapshot(snapshot) {
+    if (!snapshot || !Array.isArray(snapshot.daily)) return snapshot
+    var slotKeys = { providers: [], models: [], projects: [] }
+    var code = function (kind, value) {
+      var index = slotKeys[kind].indexOf(value)
+      if (index < 0) {
+        index = slotKeys[kind].length
+        slotKeys[kind].push(value)
+      }
+      return index
+    }
+    var daily = snapshot.daily.map(function (entry) {
+      if (!entry || !Array.isArray(entry.slots)) return entry
+      return Object.assign({}, entry, {
+        slots: entry.slots.map(function (slot) {
+          return [slot[0], code('providers', slot[1]), code('models', slot[2]), code('projects', slot[3])].concat(slot.slice(4))
+        }),
+      })
+    })
+    return Object.assign({}, snapshot, { daily: daily, slotKeys: slotKeys })
+  }
+
   function json(status, body) {
     return new Response(JSON.stringify(body), { status: status, headers: { 'content-type': 'application/json' } })
   }
@@ -471,7 +494,7 @@
     var result
     if (url === SNAPSHOT_URL && method === 'GET') {
       requestLog.snapshot += 1
-      result = state.view === 'error' ? json(500, { ok: false, error: 'preview-error' }) : json(200, currentSnapshot())
+      result = state.view === 'error' ? json(500, { ok: false, error: 'preview-error' }) : json(200, encodeSnapshot(currentSnapshot()))
     } else if (url === REFRESH_URL && method === 'POST') {
       requestLog.refresh += 1
       if (state.view !== 'empty' && state.view !== 'scanning' && state.view !== 'error') hostState.scanLeft = 3

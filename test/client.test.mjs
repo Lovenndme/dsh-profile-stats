@@ -6,7 +6,9 @@ import { loadClientHelpers, readClientSource } from './helpers/client-source.mjs
 /* 这些用例测的是 client.js 里的纯函数（数值格式、日期窗口、图表几何、Cache Lens 口径）。
  * 组件渲染由 profile-stats-verify/client-smoke.mjs 那套 smoke 覆盖，这里只管算得对不对。 */
 
-const withLocale = { extraCode: ["const currentLocaleId = () => 'zh-CN'"] }
+const withLocale = { extraCode: ["const currentLocaleId = () => 'zh-CN'", 'const isChineseLocale = () => true'] }
+const withEnglish = { extraCode: ["const currentLocaleId = () => 'en-US'", 'const isChineseLocale = () => false'] }
+const NUMBER_HELPERS = ['toNumber', 'bigNumberParts', 'unitGap', 'tokenParts', 'formatTokens']
 
 const lensHelpers = () => loadClientHelpers({ functions: ['deriveLens', 'cacheHitRate', 'toNumber'] })
 
@@ -62,11 +64,13 @@ test('deriveLens / cacheHitRate：全零 / 空快照不产生 NaN；没有输入
   for (const totals of [undefined, {}, { tokens: 0 }, { tokens: null, inputTokens: 'x' }, { inputTokens: -5, cacheReadTokens: -1 }]) {
     const lens = deriveLens(totals)
     for (const [key, value] of Object.entries(lens)) {
+      if (key === 'hitRate' || key === 'uncachedShare') continue
       assert.ok(Number.isFinite(value), `${key} 必须是有限数字，实际 ${value}`)
     }
-    assert.equal(lens.hitRate, 0)
+    // 没有输入时是 null（页面写「—」），不是 0%
+    assert.equal(lens.hitRate, null)
     assert.equal(lens.partsTotal, 0)
-    assert.equal(lens.uncachedShare, 0)
+    assert.equal(lens.uncachedShare, null)
   }
   assert.equal(cacheHitRate({}), null)
   assert.equal(cacheHitRate(undefined), null)
@@ -86,7 +90,7 @@ test('deriveLens：百分比列除以全部输入，命中 + 写入 + 未缓存�
 test('tokenParts / formatTokens：中文单位按一位小数，亿 / 万不出现 10000.0 万', () => {
   const { tokenParts, formatTokens } = loadClientHelpers({
     ...withLocale,
-    functions: ['toNumber', 'tokenParts', 'formatTokens'],
+    functions: NUMBER_HELPERS,
   })
   assert.deepEqual(tokenParts(0), { value: '0', unit: '' })
   assert.deepEqual(tokenParts(-100), { value: '0', unit: '' })
@@ -100,13 +104,27 @@ test('tokenParts / formatTokens：中文单位按一位小数，亿 / 万不出�
   assert.equal(formatTokens(0), '0')
 })
 
+test('tokenParts / formatTokens：英文界面用 K / M / B，紧挨着数字，不出现 1000.0K', () => {
+  const { tokenParts, formatTokens } = loadClientHelpers({ ...withEnglish, functions: NUMBER_HELPERS })
+  assert.deepEqual(tokenParts(9999), { value: '9,999', unit: '' })
+  assert.deepEqual(tokenParts(10000), { value: '10.0', unit: 'K' })
+  assert.deepEqual(tokenParts(999950), { value: '1.0', unit: 'M' })
+  assert.deepEqual(tokenParts(16500000), { value: '16.5', unit: 'M' })
+  assert.deepEqual(tokenParts(3.33e9), { value: '3.3', unit: 'B' })
+  assert.equal(formatTokens(16500000), '16.5M')
+  assert.equal(formatTokens(3.33e9), '3.3B')
+})
+
 test('formatAxis：纵轴刻度去掉多余的 .0', () => {
-  const { formatAxis } = loadClientHelpers({ ...withLocale, functions: ['toNumber', 'tokenParts', 'formatTokens', 'formatAxis'] })
+  const { formatAxis } = loadClientHelpers({ ...withLocale, functions: [...NUMBER_HELPERS, 'formatAxis'] })
   assert.equal(formatAxis(0), '0')
   assert.equal(formatAxis(1e8), '1 亿')
   assert.equal(formatAxis(2e4), '2 万')
   assert.equal(formatAxis(149490), '14.9 万')
   assert.equal(formatAxis(999), '999')
+  const english = loadClientHelpers({ ...withEnglish, functions: [...NUMBER_HELPERS, 'formatAxis'] }).formatAxis
+  assert.equal(english(1e9), '1B')
+  assert.equal(english(2.5e6), '2.5M')
 })
 
 test('formatPercent：极小值写 <0.1%，不足 100 不会被凑成 100%', () => {
@@ -750,12 +768,13 @@ test('summarizeDaily：按项目与子代理部分累加', () => {
 
 /* ------------------------------------------------------------ 费用 */
 
-const costHelpers = () =>
+const costHelpers = (locale = withLocale) =>
   loadClientHelpers({
+    ...locale,
     constants: ['OFFICIAL_PRICES', 'CN_HOLIDAYS', 'OFFICIAL_PROVIDERS', 'holidayKeys'],
     functions: [
-      'computeCosts', 'officialRate', 'customPrices', 'isPeakHour', 'priceFamily', 'holidaySet', 'billingOf', 'daysInMonth',
-      'moneyParts', 'formatMoney', 'indexDaily', 'parseDateKey', 'localDateKey', 'addDays', 'toNumber',
+      'computeCosts', 'officialRate', 'customPrices', 'isPeakHour', 'priceFamily', 'holidaySet', 'billingOf', 'daysInMonth', 'validDateKey',
+      'moneyParts', 'formatMoney', 'bigNumberParts', 'unitGap', 'indexDaily', 'parseDateKey', 'localDateKey', 'addDays', 'toNumber',
     ],
   })
 // 北京时间 → UTC 小时序号
@@ -850,7 +869,10 @@ test('computeCosts：官方价折算与五种计费方式；包月按天摊；�
   near(day.spend, 10.04 + 0.1 + 10 + 12.5, '花费合计不含未设置的')
   near(day.value, 10.04 + 1 + 1 + 1 + 1, '官方价折算：所有有官方价的用量')
   near(day.peakValue, 10.04, '高峰部分')
-  assert.equal(day.unpricedTokens, M + 3 * M, 'claude 与 x-model 没有官方价')
+  // 「没有官方价、没算进花费」只算花费要按官方价算的那部分：打折那家的 claude-x 算；x-model 自己填了单价，不算
+  assert.equal(day.unpricedTokens, M, '只有打折那家的 claude-x')
+  assert.deepEqual(day.byProvider.relay.unpriced, ['claude-x'])
+  assert.deepEqual(day.byProvider.own.unpriced, [], '自己填了单价的模型不需要官方价')
   near(day.byProject.p1, 10.04 + 10, '包月费摊到当天有用量的项目')
   near(day.byProject.p2, 0.1 + 12.5, 'p2')
 
@@ -876,6 +898,81 @@ test('moneyParts / formatMoney：100 元以下两位小数、以上一位，千�
   assert.equal(formatMoney(0.001), '<¥0.01')
   assert.equal(formatMoney(0), '¥0')
   assert.deepEqual(moneyParts(5.5), [{ prefix: '¥', value: '5.50', unit: '' }])
+  // 先取整再选格式：不会出现 ¥100.00、¥10,000
+  assert.equal(formatMoney(99.996), '¥100')
+  assert.equal(formatMoney(99.994), '¥99.99')
+  assert.equal(formatMoney(9999.96), '¥1.0 万')
+  assert.equal(formatMoney(9999.94), '¥9,999.9')
+  assert.equal(formatMoney(1.2e8), '¥1.2 亿')
+  const english = costHelpers(withEnglish).formatMoney
+  assert.equal(english(12345), '¥12.3K')
+  assert.equal(english(2.5e6), '¥2.5M')
+})
+
+test('computeCosts：包月、不计入、自己填了价的用量不算「没有官方价」；单价里没填、也没有「其他模型」的才算', () => {
+  const { computeCosts } = costHelpers()
+  const M = 1e6
+  const daily = [{ date: '2026-11-06', slots: [[0, 'a', 'mystery', 'p', M, 0, 0, M], [0, 'b', 'mystery', 'p', M, 0, 0, M], [0, 'c', 'mystery', 'p', M, 0, 0, M], [0, 'd', 'mystery', 'p', M, 0, 0, M], [0, 'e', 'mystery', 'p', M, 0, 0, M], [0, 'f', 'mystery', 'p', M, 0, 0, M]] }]
+  const settings = {
+    a: { mode: 'custom', prices: { '*': { miss: 2, hit: 1, write: 2, output: 8 } } },
+    b: { mode: 'plan', monthly: 300 },
+    c: { mode: 'free' },
+    d: { mode: 'official' },
+    e: { mode: 'custom', prices: { other: { miss: 1, hit: 1, write: 1, output: 1 } } },
+  }
+  const result = computeCosts(daily, '', '2026-11-06', settings, '2026-11-06', { table: {} })
+  assert.equal(result.unpricedTokens, 4 * M, '只有 official（d）和单价里没填（e）的')
+  assert.deepEqual(['a', 'b', 'c', 'd', 'e', 'f'].map((id) => result.byProvider[id].unpriced.length), [0, 0, 0, 1, 1, 1], '未设置（f）的格子显示官方价，悬停也要写出来')
+  near(result.byProvider.a.spend, 10, '其他模型的价')
+  near(result.byProvider.b.spend, 10, '月费')
+})
+
+test('computeCosts：包月没填开始日期、又从没用过时不收；范围里没有用量也照样有一行（能看到、能改）', () => {
+  const { computeCosts } = costHelpers()
+  const daily = [{ date: '2026-11-02', slots: [[0, 'other', 'deepseek-v4-1-flash', 'p', 1e6, 0, 0, 0]] }, { date: '2026-10-05', slots: [[0, 'old-plan', 'deepseek-v4-1-flash', 'p', 1e6, 0, 0, 0]] }]
+  const settings = { ghost: { mode: 'plan', monthly: 300 }, 'old-plan': { mode: 'plan', monthly: 310 } }
+  for (const [start, end] of [['2026-11-02', '2026-11-08'], ['', '2026-11-08'], ['2026-11-01', '2026-11-08']]) {
+    const result = computeCosts(daily, start, end, settings, '2026-11-08')
+    assert.equal(result.byProvider.ghost, undefined, `从没用过、没有开始日期：不收（${start || 'all'}）`)
+  }
+  // 只在范围之前用过：范围内照样收月费，这一家也有一行（没有模型）
+  const week = computeCosts(daily, '2026-11-02', '2026-11-08', settings, '2026-11-08')
+  near(week.byProvider['old-plan'].spend, 7 * 310 / 30, '11 月 7 天')
+  assert.deepEqual(week.byProvider['old-plan'].models, [])
+  // 开始日期在范围之后：不收
+  const later = computeCosts(daily, '2026-11-02', '2026-11-08', { ghost: { mode: 'plan', monthly: 300, since: '2026-11-20' } }, '2026-11-08')
+  assert.equal(later.byProvider.ghost, undefined)
+  // 不存在的开始日期当没填（从第一次用起）
+  const bad = computeCosts(daily, '', '2026-11-08', { 'old-plan': { mode: 'plan', monthly: 310, since: '2026-02-31' } }, '2026-11-08')
+  near(bad.byProvider['old-plan'].spend, 27 * 310 / 31 + 8 * 310 / 30, '10-05 起')
+})
+
+test('computeCosts：包月费按官方价比例摊到项目；没有官方价的项目不分（那天全都没有官方价时按 token 比例）', () => {
+  const { computeCosts } = costHelpers()
+  const table = { priced: [1, 1, 1, 1] }
+  const settings = { plan: { mode: 'plan', monthly: 300, since: '2026-11-01' } }
+  const mixed = [{ date: '2026-11-06', slots: [[0, 'plan', 'priced', 'A', 1e6, 0, 0, 0], [0, 'plan', 'mystery', 'B', 1e6, 0, 0, 0]] }]
+  const one = computeCosts(mixed, '2026-11-06', '2026-11-06', settings, '2026-11-06', { table, usdCny: 7 })
+  near(one.byProject.A, 10, 'A 有官方价，月费全给它')
+  assert.equal(one.byProject.B, undefined)
+  const unpriced = [{ date: '2026-11-06', slots: [[0, 'plan', 'mystery', 'A', 3e6, 0, 0, 0], [0, 'plan', 'mystery', 'B', 1e6, 0, 0, 0]] }]
+  const two = computeCosts(unpriced, '2026-11-06', '2026-11-06', settings, '2026-11-06', { table, usdCny: 7 })
+  near(two.byProject.A, 7.5, '全都没有官方价：按 token 3 : 1')
+  near(two.byProject.B, 2.5, 'B')
+})
+
+test('computeCosts：用量全部来自未设置 / 不计入的项目不出现在 byProject（页面写「—」）', () => {
+  const { computeCosts } = costHelpers()
+  const daily = [{ date: '2026-11-06', slots: [[0, 'deepseek-official', 'deepseek-v4-1-flash', 'P1', 1e6, 0, 0, 0], [0, 'work', 'deepseek-v4-1-flash', 'P2', 1e6, 0, 0, 0], [0, 'mystery', 'deepseek-v4-1-flash', 'P3', 1e6, 0, 0, 0]] }]
+  const result = computeCosts(daily, '', '2026-11-06', { work: { mode: 'free' } }, '2026-11-06')
+  assert.deepEqual(Object.keys(result.byProject), ['P1'])
+})
+
+test('officialRate：价格表里输入输出都是 0 的行——四项全 0 是免费，缓存是 null 的是还没定价', () => {
+  const { officialRate } = costHelpers()
+  assert.equal(officialRate('placeholder', 0, { placeholder: [0, 0, null, null] }), null)
+  assert.deepEqual(officialRate('free', 0, { free: [0, 0, 0, 0] }), { currency: 'USD', miss: 0, hit: 0, write: 0, output: 0, peak: false, timed: false })
+  assert.equal(officialRate('constructor', 0, {}), null, '原型上的名字不算')
 })
 
 test('computeCosts：外国模型按价格表美元价换算人民币；缓存写入单独计价；高峰占比只看有峰谷价的模型', () => {
@@ -931,7 +1028,10 @@ test('computeCosts：自定义单价按模型分开、可选美元；没填的�
 })
 
 test('billingDraft：按模型的单价行——全空跳过、必填项不全或写入不合法时不能保存', () => {
-  const { billingDraft } = loadClientHelpers({ functions: ['billingDraft', 'billingNumber'], constants: ['PRICE_FIELDS'] })
+  const { billingDraft } = loadClientHelpers({
+    functions: ['billingDraft', 'billingNumber', 'validDateKey', 'parseDateKey', 'localDateKey'],
+    constants: ['PRICE_FIELDS', 'BILLING_LIMIT', 'BILLING_MAX_MODELS'],
+  })
   const row = (miss, hit, write, output) => ({ miss, hit, write, output })
   assert.deepEqual(billingDraft('custom', { currency: 'USD', prices: { '*': row('1', '0.1', '', '2'), 'gpt-5-5': row('', '', '', '') } }), {
     mode: 'custom',
@@ -945,4 +1045,76 @@ test('billingDraft：按模型的单价行——全空跳过、必填项不全�
   assert.equal(billingDraft('multiplier', { factor: '200' }), null)
   assert.deepEqual(billingDraft('plan', { monthly: '199', since: '2026-10-20' }), { mode: 'plan', monthly: 199, since: '2026-10-20' })
   assert.deepEqual(billingDraft('plan', { monthly: '199', since: '' }), { mode: 'plan', monthly: 199 })
+  // 和宿主同样的限制：超过 100000、超过 50 个模型、不存在的日子、不是普通小数写法都不能点确定
+  assert.equal(billingDraft('plan', { monthly: '100001' }), null)
+  assert.deepEqual(billingDraft('plan', { monthly: '100000' }), { mode: 'plan', monthly: 100000 })
+  assert.equal(billingDraft('plan', { monthly: '199', since: '2026-02-31' }), null)
+  assert.equal(billingDraft('plan', { monthly: '199', since: '0202-06-01' }), null)
+  for (const text of ['1e3', '0x10', 'Infinity', '-1', '1,000', '1.2.3', '']) assert.equal(billingDraft('plan', { monthly: text }), null, text)
+  assert.deepEqual(billingDraft('multiplier', { factor: '.5' }), { mode: 'multiplier', factor: 0.5 })
+  assert.deepEqual(billingDraft('multiplier', { factor: ' 0.12 ' }), { mode: 'multiplier', factor: 0.12 })
+  const many = Object.fromEntries(Array.from({ length: 51 }, (_, index) => [`m${index}`, row('1', '0.1', '', '2')]))
+  assert.equal(billingDraft('custom', { prices: many }), null, '51 个模型')
+  delete many.m50
+  assert.equal(Object.keys(billingDraft('custom', { prices: many }).prices).length, 50)
+  assert.equal(billingDraft('custom', { prices: { '*': row('100001', '0.1', '', '2') } }), null)
+})
+
+test('decodeSnapshot：slots 里的编号按 slotKeys 还原成名字；旧版宿主（没有 slotKeys）原样返回', () => {
+  const { decodeSnapshot } = loadClientHelpers({ functions: ['decodeSnapshot'] })
+  const encoded = {
+    ok: true,
+    slotKeys: { providers: ['alpha', 'gw|east'], models: ['deepseek-v4-1-flash'], projects: ['c:/a', ''] },
+    daily: [{ date: '2026-11-06', tokens: 3, slots: [[1, 0, 0, 0, 1, 0, 0, 0], [2, 1, 0, 1, 1, 1, 0, 0]] }, { date: '2026-11-07', tokens: 0 }],
+  }
+  const decoded = decodeSnapshot(encoded)
+  assert.deepEqual(decoded.daily[0].slots, [[1, 'alpha', 'deepseek-v4-1-flash', 'c:/a', 1, 0, 0, 0], [2, 'gw|east', 'deepseek-v4-1-flash', '', 1, 1, 0, 0]])
+  assert.deepEqual(decoded.daily[1], { date: '2026-11-07', tokens: 0 })
+  assert.equal(encoded.daily[0].slots[0][1], 0, '不改原对象')
+  const legacy = { daily: [{ slots: [[1, 'p', 'm', '', 1, 0, 0, 0]] }] }
+  assert.equal(decodeSnapshot(legacy), legacy)
+  assert.equal(decodeSnapshot(null), null)
+  // 编号越界：当空名字，不抛错
+  assert.deepEqual(decodeSnapshot({ slotKeys: {}, daily: [{ slots: [[1, 9, 9, 9, 1, 0, 0, 0]] }] }).daily[0].slots[0], [1, '', '', '', 1, 0, 0, 0])
+})
+
+test('settleEdits / sameValue：快照跟上的改动丢掉，没跟上的留着；键的顺序不算', () => {
+  const { settleEdits, sameValue } = loadClientHelpers({ functions: ['settleEdits', 'sameValue', 'dropKey', 'ownValue'] })
+  assert.equal(sameValue({ mode: 'plan', monthly: 1 }, { monthly: 1, mode: 'plan' }), true)
+  assert.equal(sameValue({ mode: 'plan', monthly: 1 }, { mode: 'plan', monthly: 2 }), false)
+  assert.equal(sameValue(null, undefined), true)
+  const edits = { a: { mode: 'free' }, b: null, c: { mode: 'official' } }
+  const saved = { a: { mode: 'free' }, c: { mode: 'multiplier', factor: 0.1 } }
+  const next = settleEdits(edits, (id) => (Object.prototype.hasOwnProperty.call(saved, id) ? saved[id] : null))
+  assert.deepEqual(next, { c: { mode: 'official' } }, 'a 已经存上、b 已经删掉；c 还在保存中')
+  assert.equal(settleEdits(next, () => 'nothing'), next, '没有可丢的就返回原对象（不触发重绘）')
+})
+
+test('tickPlan：最多 12 个刻度；按月超过一年时落在日历月上；跨年时年份变了的刻度带年份', () => {
+  const { tickPlan } = loadClientHelpers({ functions: ['tickPlan'] })
+  const months = (year, month, count) => Array.from({ length: count }, (_, index) => ({ start: new Date(year, month + index, 1) }))
+  const long = tickPlan(months(2020, 0, 83), 'month')
+  const shown = long.map((plan, index) => (plan.shown ? index : -1)).filter((index) => index >= 0)
+  assert.ok(shown.length <= 12, `${shown.length} 个刻度`)
+  assert.ok(shown.every((index) => index % 12 === 0), '83 个月：每 12 个月一个，都是 1 月')
+  assert.ok(shown.every((index) => long[index].withYear), '每个都换了年份')
+  const year = tickPlan(months(2026, 0, 12), 'month')
+  assert.ok(year.every((plan) => plan.shown && !plan.withYear), '一年以内：每个月都标，不带年份')
+  const crossing = tickPlan(months(2025, 9, 6), 'month')
+  assert.deepEqual(crossing.map((plan) => plan.withYear), [true, false, false, true, false, false], '25 年 10 月起：第一个和 26 年 1 月带年份')
+  const weeks = Array.from({ length: 94 }, (_, index) => ({ start: new Date(2026, 5, 1 + 7 * index) }))
+  const weekly = tickPlan(weeks, 'week')
+  assert.equal(weekly[weekly.length - 1].shown, true, '按周：最后一个总在')
+  assert.ok(weekly.filter((plan) => plan.shown).length <= 12)
+  assert.ok(weekly.some((plan) => plan.shown && plan.withYear))
+})
+
+test('deriveProviders：范围内有月费、没有用量的包月供应商排在最后单独一行，不占前 6 的名额', () => {
+  const { deriveProviders } = loadClientHelpers({ functions: ['toNumber', 'deriveProviders', 'cacheHitRate', 'addUsage', 'emptyUsage'] })
+  const byProvider = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [`p${index}`, 100 - index]))
+  const data = deriveProviders(byProvider, {}, ['plan-x', 'p0'])
+  assert.deepEqual(data.rows.map((row) => row.id), ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', '__other', 'plan-x'])
+  assert.equal(data.rows[7].tokens, 0)
+  assert.equal(data.rows[7].hitRate, null)
+  assert.equal(data.total, Object.values(byProvider).reduce((sum, value) => sum + value, 0), '合计不变')
 })

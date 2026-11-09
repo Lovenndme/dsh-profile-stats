@@ -139,14 +139,89 @@ test('createController：会话被删掉后从缓存里剔除，总量同步下�
   await controller.scan('first')
   assert.equal(controller.snapshotBody().totals.tokens, 350)
 
-  host.setSessions([])
+  host.setSessions(makeSessions().slice(1))
   await controller.scan('second')
 
-  assert.deepEqual(Object.keys(controller.state.cache.sessions), [])
+  assert.deepEqual(Object.keys(controller.state.cache.sessions), ['s2'])
   const body = controller.snapshotBody()
-  assert.equal(body.totals.tokens, 0)
-  assert.equal(body.daily.length, 0)
-  assert.equal(body.totals.sessions, 0)
+  assert.equal(body.totals.tokens, 200)
+  assert.equal(body.daily.length, 1)
+  assert.equal(body.totals.sessions, 1)
+})
+
+test('createController：会话列表突然空了先不清缓存，持续一分钟还是空的才当真', async (t) => {
+  const { host, controller } = await boot(t)
+  await controller.scan('first')
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
+  host.setSessions([])
+  await controller.scan('blip')
+  assert.deepEqual(Object.keys(controller.state.cache.sessions).sort(), ['s1', 's2'], '空一下多半是宿主还没准备好')
+  assert.equal(controller.snapshotBody().totals.tokens, 350)
+  // 恢复了：计时清零
+  host.setSessions(makeSessions())
+  await controller.scan('back')
+  host.setSessions([])
+  await controller.scan('empty-starts')
+  t.mock.timers.tick(59000)
+  await controller.scan('still-grace')
+  assert.equal(Object.keys(controller.state.cache.sessions).length, 2)
+  t.mock.timers.tick(2000)
+  await controller.scan('really-empty')
+  assert.equal(Object.keys(controller.state.cache.sessions).length, 0)
+  t.mock.timers.tick(3000)
+  assert.equal(controller.snapshotBody().totals.tokens, 0)
+})
+
+test('createController：扫描时还活着的会话结束后再读一次，补上最后一次扫描之后写下的那段', async (t) => {
+  const sessions = makeSessions()
+  sessions[0].live = true
+  const { host, controller } = await boot(t, { sessions })
+  await controller.scan('first')
+  assert.equal(controller.snapshotBody().totals.tokens, 350)
+  assert.equal(controller.state.cache.sessions.s1.live, true)
+
+  // 两次扫描之间：又写了一步，然后会话结束
+  host.sessions[0].events.push(assistantEvent({ seq: 3, time: at(11, 5, 13), input: 6000, output: 200, provider: 'alpha', model: 'deepseek-v4-1-flash' }))
+  host.sessions[0].live = false
+  host.reads.length = 0
+  await controller.scan('ended')
+  assert.deepEqual(host.reads, ['s1'], '结束后补读一次')
+  assert.equal(controller.snapshotBody().totals.tokens, 6550)
+  assert.equal(controller.state.cache.sessions.s1.live, false)
+
+  // 之后不再重读，重启后也是完整的
+  host.reads.length = 0
+  await controller.scan('after')
+  assert.deepEqual(host.reads, [])
+  assert.equal(readCache().sessions.s1.tokens, 6350)
+})
+
+test('createController：删掉的坏会话不再一直算「读失败」', async (t) => {
+  const sessions = makeSessions()
+  sessions.push({ header: { id: 'broken', createdAt: at(11, 6) }, live: false, broken: true })
+  const { host, controller } = await boot(t, { sessions })
+  await controller.scan('first')
+  assert.equal(controller.snapshotBody().failedSessions, 1)
+  host.setSessions(makeSessions())
+  await controller.scan('second')
+  assert.equal(controller.snapshotBody().failedSessions, 0)
+})
+
+test('createController：会话 id 叫 __proto__、事件里有 __proto__ 供应商也不会改到对象原型', async (t) => {
+  const sessions = makeSessions()
+  sessions.push({ header: { id: '__proto__' }, live: false, events: [assistantEvent({ seq: 0, time: at(11, 6), input: 1, output: 1 })] })
+  sessions.push({
+    header: { id: 'p', cwd: '__proto__' },
+    live: false,
+    events: [assistantEvent({ seq: 0, time: at(11, 6), input: 100, output: 10, provider: '__proto__', model: '__proto__' })],
+  })
+  const { controller } = await boot(t, { sessions })
+  await controller.scan('first')
+  assert.equal({}.inputTokens, undefined)
+  assert.equal(Object.getPrototypeOf(controller.state.cache.sessions), Object.prototype)
+  const body = controller.snapshotBody()
+  assert.equal(body.totals.tokens, 460, '__proto__ 会话跳过；__proto__ 供应商照常计数')
+  assert.equal(body.totals.byProvider['(__proto__)'], 110)
 })
 
 test('createController：单个会话读失败不影响其它会话，且下次扫描会重试', async (t) => {
@@ -346,7 +421,8 @@ test('apply：GET 快照在扫描完成后给出完整数据，缓存落在 $DSH
   const first = await host.request(SNAPSHOT, 'GET')
   assert.equal(first.status, 200)
   assert.match(first.headers['content-type'], /application\/json/)
-  assert.equal(first.headers['cache-control'], 'no-store')
+  assert.equal(first.headers['cache-control'], 'no-cache')
+  assert.match(first.headers.etag, /^"[\w-]+"$/)
   assert.equal(first.json.ok, true)
 
   // 首次 GET 会顺带在后台起一次扫描；等它落盘后再取一次快照。
@@ -558,7 +634,64 @@ test('改名接口：名字存在本机 aliases.json，快照带出来；名字�
   assert.equal((await host.request(ALIAS, 'POST', { name: 'x' })).json.error, 'invalid-provider')
   assert.equal((await host.request(ALIAS, 'POST', { provider: 'a', name: 42 })).json.error, 'invalid-name')
   assert.equal((await host.request(ALIAS, 'POST', { provider: 'a', name: 'y'.repeat(20000) })).status, 413)
+  // 字段拼错（没带 name）不能当成「删掉」；__proto__ 不能当 id
+  assert.equal((await host.request(ALIAS, 'POST', { provider: 'beta', nmae: 'x' })).json.error, 'invalid-name')
+  assert.equal((await host.request(ALIAS, 'POST', { provider: '__proto__', name: 'x' })).json.error, 'invalid-provider')
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { providers: { beta: 'x'.repeat(40) } })
+  // 按字符截断，不把 emoji 切成半个
+  const emoji = await host.request(ALIAS, 'POST', { provider: 'gamma', name: `${'a'.repeat(39)}\u{1F600}\u{1F600}` })
+  assert.equal(emoji.json.aliases.providers.gamma, `${'a'.repeat(39)}\u{1F600}`)
+})
+
+test('POST 只接受同源请求；带请求体的只接受 JSON', async (t) => {
+  const home = withTemporaryHome(t)
+  const host = createFakeHost({ sessions: makeSessions() })
+  apply(host.ctx)
+  t.after(() => host.dispose())
+  const file = path.join(home, 'dsh-profile-stats', 'billing.json')
+  const body = { provider: 'relay-x', billing: { mode: 'free' } }
+  const crossSite = { 'sec-fetch-site': 'cross-site', origin: 'https://evil.example', host: '127.0.0.1:4100' }
+  for (const route of [BILLING, ALIAS, REFRESH, UPDATE]) {
+    const response = await host.request(route, 'POST', body, crossSite)
+    assert.equal(response.status, 403, route)
+    assert.equal(response.json.error, 'cross-origin')
+  }
+  // 没有 Sec-Fetch-Site 的老浏览器：看 Origin 和 Host
+  assert.equal((await host.request(BILLING, 'POST', body, { origin: 'https://evil.example', host: '127.0.0.1:4100' })).status, 403)
+  assert.equal((await host.request(BILLING, 'POST', body, { origin: 'null', host: '127.0.0.1:4100' })).status, 403)
+  // 跨站表单发得出的 text/plain 不收
+  assert.equal((await host.request(BILLING, 'POST', JSON.stringify(body), { 'content-type': 'text/plain' })).status, 415)
+  assert.equal(fs.existsSync(file), false, '上面这些都不能写文件')
+  // 同源（页面自己）照常
+  assert.equal((await host.request(BILLING, 'POST', body, { 'sec-fetch-site': 'same-origin' })).status, 200)
+  assert.equal((await host.request(BILLING, 'POST', body, { origin: 'http://127.0.0.1:4100', host: '127.0.0.1:4100' })).status, 200)
+  assert.equal((await host.request(REFRESH, 'POST', undefined, { 'sec-fetch-site': 'same-origin' })).status, 200)
+})
+
+test('快照：带 ETag，内容没变时回 304；slots 里的名字换成编号，对照表在 slotKeys', async (t) => {
+  withTemporaryHome(t)
+  const sessions = makeSessions()
+  sessions[0].header.cwd = 'C:\\code\\atlas'
+  const host = createFakeHost({ sessions })
+  const controller = createController(host.ctx)
+  t.after(() => host.dispose())
+  await controller.scan('first')
+  const body = controller.snapshotBody()
+  assert.deepEqual(body.slotKeys, { providers: ['alpha', 'bravo'], models: ['deepseek-v4-1-flash', 'deepseek-v4-pro'], projects: ['c:/code/atlas', ''] })
+  const decoded = body.daily.flatMap((entry) => entry.slots.map(([hour, p, m, project, ...parts]) => [hour, body.slotKeys.providers[p], body.slotKeys.models[m], body.slotKeys.projects[project], ...parts]))
+  assert.deepEqual(decoded.map((row) => row.slice(1, 4)), [['alpha', 'deepseek-v4-1-flash', 'c:/code/atlas'], ['bravo', 'deepseek-v4-pro', '']])
+  assert.ok(controller.snapshotBody().daily === body.daily, '聚合没变就不重新编码')
+
+  apply(host.ctx)
+  await waitFor(async () => (await host.request(SNAPSHOT, 'GET')).json.totals.tokens === 350, { label: '扫描完成' })
+  const first = await host.request(SNAPSHOT, 'GET')
+  const again = await host.request(SNAPSHOT, 'GET', undefined, { 'if-none-match': first.headers.etag })
+  assert.equal(again.status, 304)
+  assert.equal(again.body, '')
+  assert.equal(again.headers.etag, first.headers.etag)
+  const stale = await host.request(SNAPSHOT, 'GET', undefined, { 'if-none-match': '"old"' })
+  assert.equal(stale.status, 200)
+  assert.equal(stale.json.ok, true)
 })
 
 test('aliases.json 被手改坏也不影响快照：非对象、非字符串、空名字都被丢掉', async (t) => {
@@ -591,9 +724,15 @@ test('计费接口：每家的计费方式存在本机 billing.json，快照带�
   // 新写法：按模型分开填、美元
   const perModel = await host.request(BILLING, 'POST', {
     provider: 'relay-us',
-    billing: { mode: 'custom', currency: 'USD', prices: { 'claude-sonnet-5-5': { miss: 3, hit: 0.3, write: 3.75, output: 15 }, bad: { miss: 'x' } } },
+    billing: { mode: 'custom', currency: 'USD', prices: { 'claude-sonnet-5-5': { miss: 3, hit: 0.3, write: 3.75, output: 15 } } },
   })
   assert.deepEqual(perModel.json.billing.providers['relay-us'], { mode: 'custom', currency: 'USD', prices: { 'claude-sonnet-5-5': { miss: 3, hit: 0.3, write: 3.75, output: 15 } } })
+  // 写的时候有一行不合法就整条拒绝（读文件时才静默丢掉），免得页面以为存上了
+  const partlyBad = await host.request(BILLING, 'POST', {
+    provider: 'relay-us',
+    billing: { mode: 'custom', currency: 'USD', prices: { 'claude-sonnet-5-5': { miss: 3, hit: 0.3, write: 3.75, output: 15 }, bad: { miss: 'x' } } },
+  })
+  assert.equal(partlyBad.json.error, 'invalid-billing')
   await host.request(BILLING, 'POST', { provider: 'relay-us', billing: null })
   assert.deepEqual((await host.request(SNAPSHOT, 'GET')).json.billing.providers, {
     'relay-x': { mode: 'multiplier', factor: 0.12 },
@@ -613,7 +752,19 @@ test('计费接口：每家的计费方式存在本机 billing.json，快照带�
   assert.equal((await host.request(BILLING, 'POST', { provider: 'a', billing: { mode: 'plan', monthly: 'x' } })).json.error, 'invalid-billing')
   assert.equal((await host.request(BILLING, 'POST', { billing: { mode: 'free' } })).json.error, 'invalid-provider')
   assert.equal((await host.request(BILLING, 'POST', '{oops')).status, 400)
+  // 字段拼错（没带 billing）不能当成「删掉」
+  assert.equal((await host.request(BILLING, 'POST', { provider: 'relay-x', biling: { mode: 'free' } })).json.error, 'invalid-billing')
+  // 包月起始日：不存在的日子、离谱的年份都拒绝
+  for (const since of ['2026-02-31', '2026-13-01', '0202-06-01', '0000-00-00', 'yesterday']) {
+    assert.equal((await host.request(BILLING, 'POST', { provider: 'p', billing: { mode: 'plan', monthly: 99, since } })).json.error, 'invalid-since', since)
+  }
+  // 超过上限的单价、超过 50 个模型
+  assert.equal((await host.request(BILLING, 'POST', { provider: 'p', billing: { mode: 'plan', monthly: 100001 } })).json.error, 'invalid-billing')
+  const many = Object.fromEntries(Array.from({ length: 51 }, (_, index) => [`m${index}`, { miss: 1, hit: 0.1, output: 2 }]))
+  assert.equal((await host.request(BILLING, 'POST', { provider: 'p', billing: { mode: 'custom', prices: many } })).json.error, 'too-many-models')
+  assert.equal((await host.request(BILLING, 'POST', { provider: '__proto__', billing: { mode: 'free' } })).json.error, 'invalid-provider')
   assert.equal(fs.readFileSync(file, 'utf8'), before)
+  assert.equal(JSON.parse(before).providers['relay-x'].mode, 'multiplier')
 })
 
 test('billing.json 被手改坏也不影响快照：只留合法条目', async (t) => {
@@ -654,6 +805,14 @@ test('价格表：快照只带用到的模型；名字带 -thinking / -high 之�
   assert.equal(priceRowOf('gpt-6-astra-turbo', table), null, '不认识的后缀不乱猜')
   assert.equal(priceRowOf('broken', table), null)
   assert.equal(priceRowOf('nobody', table), null)
+  // 上游还没定价的占位行（输入输出都是 0、缓存是 null）当未定价；四项全 0 才是官方标明的免费
+  const zeros = { models: { placeholder: [0, 0, null, null], free: [0, 0, 0, 0], 'claude-opus-4-6': [5, 25, 0.5, 6.25] } }
+  assert.equal(priceRowOf('placeholder', zeros), null)
+  assert.deepEqual(priceRowOf('free', zeros), [0, 0, 0, 0])
+  // -fast / -free 是另一档价格，不退回基础模型
+  assert.equal(priceRowOf('claude-opus-4-6-fast', zeros), null)
+  assert.equal(priceRowOf('claude-opus-4-6-free', zeros), null)
+  assert.equal(priceRowOf('constructor', zeros), null, '原型上的名字不算价格表里的模型')
   const daily = [{ slots: [[1, 'p', 'claude-sonnet-5-5-thinking', '', 1, 0, 0, 0], [1, 'p', 'nobody', '', 1, 0, 0, 0]] }]
   assert.deepEqual(pricesFor(daily, table).models, { 'claude-sonnet-5-5-thinking': [2, 10, 0.1, 2.5] })
 
@@ -663,4 +822,7 @@ test('价格表：快照只带用到的模型；名字带 -thinking / -high 之�
     assert.ok(Array.isArray(real.models[id]), `${id} 应该在 prices.json 里`)
   }
   assert.match(real.license, /MIT/)
+  for (const [id, row] of Object.entries(real.models)) {
+    assert.ok(row[0] > 0 || row[1] > 0 || (row[2] === 0 && row[3] === 0), `${id}：不能有输入输出都是 0 的占位行`)
+  }
 })
