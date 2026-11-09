@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.4.17 — 2026-11-09
+
+- docs: add CONTRIBUTING.md
+
+
 ## 2.4.16 — 2026-11-09
 
 - docs: projects card, daily cache hit rate and the model share view
