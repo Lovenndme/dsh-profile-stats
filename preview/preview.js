@@ -202,15 +202,17 @@
       var key = dayKey(entry.date)
       var tokens = amounts[key]
       var late = entry.offset < 45
+      // 近一周更偏向 Claude / GPT，更早的更偏向 DeepSeek（只看 offset，不耗随机数）：这样 7 天 / 4 周 / 6 个月的模型占比各不相同
+      var recent = entry.offset < 7 ? 1 : entry.offset < 21 ? 0.5 : 0
       var models = late
         ? {
-            'deepseek-v4-1-flash': 82,
-            'deepseek-v4-1-pro': 9,
-            'claude-sonnet-5-5': 3,
-            'gpt-6-astra': 2,
-            'claude-opus-5-5': 1.5,
-            'claude-haiku-5-5': 1,
-            'claude-fable-5-1': 0.8,
+            'deepseek-v4-1-flash': 82 - 36 * recent,
+            'deepseek-v4-1-pro': 9 + 5 * recent,
+            'claude-sonnet-5-5': 3 + 15 * recent,
+            'gpt-6-astra': 2 + 8 * recent,
+            'claude-opus-5-5': 1.5 + 6 * recent,
+            'claude-haiku-5-5': 1 + 2 * recent,
+            'claude-fable-5-1': 0.8 + 0.2 * recent,
           }
         : { 'deepseek-v4-1-flash': 70, 'deepseek-v4-1-pro': 20, 'claude-sonnet-5-5': 10 }
       // 预览数据只用公开的供应商 id（宿主内置的 deepseek-*）加一个虚构的未知 id，演示「未知 id 原样显示」

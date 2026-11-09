@@ -1140,3 +1140,24 @@ test('pieArc：扇区路径——四分之一、半圈、超过半圈用大弧�
   assert.equal(pieArc(100, 100, 50, 0, Math.PI * 2), 'M 100 50 A 50 50 0 1 1 100 150 A 50 50 0 1 1 100 50 Z', '只有一个家族：整圆')
   for (const [start, end] of [[0, 0.001], [1, 2], [3, 6.2], [0, 6.283]]) assert.ok(!/NaN|Infinity/.test(pieArc(140, 120, 84, start, end)), `${start}-${end}`)
 })
+
+test('buildModelSeries：不同粒度窗口里模型的占比各算各的（窗口大了，早期的配比也算进来）', () => {
+  const { buildModelSeries } = modelSeriesHelpers()
+  const today = new Date(2026, 10, 4, 12)
+  // 最近 7 天几乎全是 flash；更早的三周里 pro 很多
+  const daily = [
+    { date: '2026-11-03', tokens: 100, byModel: { 'deepseek-v4-1-flash': 95, 'deepseek-v4-pro': 5 } },
+    { date: '2026-10-20', tokens: 100, byModel: { 'deepseek-v4-1-flash': 40, 'deepseek-v4-pro': 60 } },
+  ]
+  const share = (series, key) => {
+    const item = series.series.find((entry) => entry.key === key)
+    return item ? (item.total / series.total) * 100 : 0
+  }
+  const byDay = buildModelSeries(daily, 'day', today)
+  const byWeek = buildModelSeries(daily, 'week', today)
+  const proKey = byWeek.series.find((item) => item.name.includes('Pro')).key
+  assert.equal(byDay.total, 100, '7 天窗口只含 11/3')
+  assert.equal(byWeek.total, 200, '4 周窗口含两天')
+  assert.ok(Math.abs(share(byDay, proKey) - 5) < 1e-9, `7 天：pro ${share(byDay, proKey)}%`)
+  assert.ok(Math.abs(share(byWeek, proKey) - 32.5) < 1e-9, `4 周：pro ${share(byWeek, proKey)}%`)
+})
