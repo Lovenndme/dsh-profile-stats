@@ -95,7 +95,7 @@ window.__ModuleLoader__.load({
       'billing.since': 'Since',
       'billing.reset': 'Default',
       'billing.cancel': 'Cancel',
-      'billing.listValue': 'List price {value}',
+      'billing.listValue': 'At list price {value}',
       'billing.excluded': 'Excluded',
       'billing.planCell': '{value} / month',
       'billing.write': 'Cache write',
@@ -106,8 +106,6 @@ window.__ModuleLoader__.load({
       'billing.unpriced': 'No list price: {models}',
       'billing.saveFailed': 'Not saved: {reason}',
       'billing.tagUnsaved': 'not saved',
-      'billing.rate': '$1 = ¥{value}',
-      'billing.rateLabel': 'CNY per USD',
       'stat.rangeTokens': '{range} tokens',
       'action.export': 'Export',
       'action.exportCsv': 'CSV (daily)',
@@ -231,7 +229,7 @@ window.__ModuleLoader__.load({
       'billing.since': '开始日期',
       'billing.reset': '恢复默认',
       'billing.cancel': '取消',
-      'billing.listValue': '官方价 {value}',
+      'billing.listValue': '按官方价算 {value}',
       'billing.excluded': '不计入',
       'billing.planCell': '{value} / 月',
       'billing.write': '缓存写入',
@@ -242,8 +240,6 @@ window.__ModuleLoader__.load({
       'billing.unpriced': '没有官方价：{models}',
       'billing.saveFailed': '没有存上：{reason}',
       'billing.tagUnsaved': '未保存',
-      'billing.rate': '$1 = ¥{value}',
-      'billing.rateLabel': '美元兑人民币',
       'stat.rangeTokens': '{range} Token',
       'action.export': '导出',
       'action.exportCsv': 'CSV（按天）',
@@ -2975,96 +2971,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /**
-     * 美元兑人民币的汇率：供应商卡标题栏的小按钮，点开填数字；只在有美元计价的用量时出现。
-     * 点外面、按 Esc 关闭；上一次没存上时按钮带 data-error（悬停写原因）。
-     */
-    function RateControl(props) {
-      const [open, setOpen] = useState(false)
-      const [draft, setDraft] = useState('')
-      const wrapRef = useRef(null)
-      useDismiss(open, wrapRef, (reason) => {
-        setOpen(false)
-        if (reason === 'escape') focusWithin(wrapRef, '[data-dps-action="usd-rate"]')
-      })
-      const value = billingNumber(draft)
-      const valid = value !== null && value >= 0.1 && value <= 100
-      const shown = Number(props.rate).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
-      return h(
-        'div',
-        { ref: wrapRef, className: 'dps-menu dps-rate', 'data-dps-control': 'usd-rate' },
-        h(
-          'button',
-          {
-            type: 'button',
-            className: 'dps-ghost',
-            'data-dps-action': 'usd-rate',
-            'data-error': props.error ? 'true' : undefined,
-            title: props.error ? t('billing.saveFailed', { reason: props.error }) : undefined,
-            'aria-expanded': open ? 'true' : 'false',
-            onClick: () => {
-              setDraft(shown)
-              setOpen(!open)
-            },
-          },
-          t('billing.rate', { value: shown }),
-        ),
-        open
-          ? h(
-              'div',
-              { className: 'dps-menu-pop dps-range-pop', role: 'dialog', 'aria-label': t('billing.rateLabel') },
-              h(
-                'label',
-                { className: 'dps-date-field' },
-                h('span', null, t('billing.rateLabel')),
-                h('input', {
-                  className: 'dps-date dps-bill-input',
-                  'data-dps-field': 'usd-rate',
-                  inputMode: 'decimal',
-                  value: draft,
-                  autoFocus: true,
-                  onChange: (event) => setDraft(event.target.value),
-                  onKeyDown: (event) => {
-                    if (event.key === 'Enter' && valid) {
-                      setOpen(false)
-                      props.onSave(value)
-                    } else if (event.key === 'Escape') setOpen(false)
-                  },
-                }),
-              ),
-              h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'dps-btn',
-                  'data-dps-action': 'usd-rate-reset',
-                  onClick: () => {
-                    setOpen(false)
-                    props.onSave(null)
-                  },
-                },
-                t('billing.reset'),
-              ),
-              h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'dps-btn',
-                  'data-primary': 'true',
-                  'data-dps-action': 'usd-rate-save',
-                  disabled: !valid,
-                  onClick: () => {
-                    setOpen(false)
-                    props.onSave(value)
-                  },
-                },
-                t('action.apply'),
-              ),
-            )
-          : null,
-      )
-    }
-
     /** 费用格前面的小标签：打折写倍数（×0.12），包月、自定义单价各写一个词；官方价不写。 */
     function billingTag(bill) {
       if (!bill) return ''
@@ -3248,7 +3154,6 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { className: 'dps-panel-tools' },
-            costs && costs.usdValue > 0 ? h(RateControl, { rate: props.usdCny, onSave: props.onRate, error: props.rateError }) : null,
             h(
             'button',
             {
@@ -3727,8 +3632,7 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
 .dps-prov-cost[data-mode="unset"]{color:var(--dps-accent);font-weight:600}
 .dps-prov-cost[data-mode="free"]{color:var(--dps-muted)}
 .dps-proj .dps-prov-row{grid-template-columns:minmax(0,1fr) 60px 44px 62px var(--dps-cost-w,68px)}
-.dps-prov-cost[data-error="true"] .dps-cost-tag{background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 14%,transparent);color:var(--dsw-alias-state-error-primary)}
-.dps-ghost[data-error="true"]{color:var(--dsw-alias-state-error-primary);border-color:color-mix(in srgb,var(--dsw-alias-state-error-primary) 40%,var(--dps-line))}
+.dps-prov-cost[data-error="true"] .dps-cost-tag{background:var(--dsw-alias-state-error-primary)}
 .dps-bill{grid-column:1 / -1;display:flex;flex-direction:column;gap:10px;margin-top:2px;padding:12px;border:1px solid var(--dps-line);border-radius:10px;background:var(--dps-hover)}
 .dps-bill .dps-seg{align-self:flex-start}
 .dps-bill-fields{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px}
@@ -3741,7 +3645,7 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
 .dps-bill-gridhead span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dps-bill-model{min-width:0;font-size:12px;color:var(--dps-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dps-bill-price{width:100%;height:28px;padding:0 6px;font-size:12px;font-variant-numeric:tabular-nums}
-.dps-cost-tag{display:inline-block;margin-right:5px;padding:0 4px;border-radius:4px;background:var(--dps-track);color:var(--dps-muted);font-size:10.5px;font-weight:600;line-height:16px;vertical-align:1px}
+.dps-cost-tag{display:inline-block;margin-right:6px;padding:0 5px;border-radius:4px;background:var(--dps-accent);color:var(--dps-card);font-size:10.5px;font-weight:600;line-height:16px;vertical-align:1px}
 .dps-bill-foot{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
 .dps-bill-meta{margin-right:auto;font-size:12px;color:var(--dps-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .dps-bill .dps-btn{height:28px;padding:0 12px}
@@ -4523,7 +4427,6 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
       const [billingEdits, setBillingEdits] = useState({})
       // 没存上的计费方式 / 汇率：id → 宿主给的原因（费用格的标签换成「未保存」，悬停写原因）
       const [billingErrors, setBillingErrors] = useState({})
-      const [rateError, setRateError] = useState('')
 
       // 打开页面不再强制重扫：宿主在后台定时保鲜，读快照时数据旧了也会自己静默补扫。
       // 连点两下时第一下先结束：等所有这次点出来的请求都回来才停转，否则图标会在宿主还在扫的时候停下
@@ -4597,18 +4500,14 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
       const snapshotRate = snapshot && snapshot.billing && typeof snapshot.billing.usdCny === 'number' ? snapshot.billing.usdCny : null
       // 页面先显示刚改的值（保存中 / 刚存上还没拉到新快照）；快照里已经是这个值了就丢掉这条改动，之后以快照为准，
       // 否则别的窗口、手改的 billing.json 在这一页上永远看不到
-      const latest = useRef({ billing: null, aliases: null, rate: null })
-      latest.current = { billing: snapshotBilling || {}, aliases: snapshotAliases || {}, rate: snapshotRate }
+      const latest = useRef({ billing: null, aliases: null })
+      latest.current = { billing: snapshotBilling || {}, aliases: snapshotAliases || {} }
       useEffect(() => {
         setBillingEdits((current) => settleEdits(current, (id) => ownValue(snapshotBilling, id)))
       }, [snapshotBilling])
       useEffect(() => {
         setAliasEdits((current) => settleEdits(current, (id) => ownValue(snapshotAliases, id) || ''))
       }, [snapshotAliases])
-      const [rateEdit, setRateEdit] = useState(undefined)
-      useEffect(() => {
-        setRateEdit((current) => (current !== undefined && current === snapshotRate ? undefined : current))
-      }, [snapshotRate])
       const billingSettings = useMemo(() => {
         const merged = { ...(snapshotBilling || {}) }
         for (const [id, entry] of Object.entries(billingEdits)) {
@@ -4617,36 +4516,16 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
         }
         return merged
       }, [snapshotBilling, billingEdits])
-      // 价格表（宿主只带用到的模型，美元）与汇率：这次刚改的优先，其次是本机设置的，最后是宿主给的默认值
+      // 价格表（宿主只带用到的模型，美元）与汇率：本机 billing.json 里写了 usdCny 就用它，否则用宿主给的默认值（页面上不显示、不改）
       const priceTable = (snapshot && snapshot.prices && snapshot.prices.models) || null
       const defaultRate = snapshot && snapshot.prices && typeof snapshot.prices.defaultUsdCny === 'number' ? snapshot.prices.defaultUsdCny : 7
-      const usdCny = rateEdit !== undefined ? (rateEdit === null ? defaultRate : rateEdit) : snapshotRate !== null ? snapshotRate : defaultRate
+      const usdCny = snapshotRate !== null ? snapshotRate : defaultRate
       const priceOptions = useMemo(() => ({ table: priceTable, usdCny }), [priceTable, usdCny])
       const costs = useMemo(
         () => computeCosts(daily, rangeWin.startKey, rangeWin.endKey, billingSettings, todayKey, priceOptions),
         [daily, rangeWin.startKey, rangeWin.endKey, billingSettings, todayKey, priceOptions],
       )
       const todayCosts = useMemo(() => computeCosts(daily, todayKey, todayKey, billingSettings, todayKey, priceOptions), [daily, billingSettings, todayKey, priceOptions])
-      const saveRate = useCallback(
-        async (value) => {
-          setRateEdit(value)
-          setRateError('')
-          try {
-            const result = await postJson(BILLING_URL, { usdCny: value })
-            // 换成宿主实际存下的值；快照跟上之后这条改动就丢掉（见上面的 effect）
-            const saved = result.billing && typeof result.billing.usdCny === 'number' ? result.billing.usdCny : null
-            if (mounted.current) setRateEdit(saved === latest.current.rate ? undefined : saved)
-            reload()
-          } catch (error) {
-            console.warn('[dsh-profile-stats] 保存汇率失败：', error && error.message ? error.message : error)
-            if (mounted.current) {
-              setRateEdit(undefined)
-              setRateError(errorReason(error))
-            }
-          }
-        },
-        [reload, mounted],
-      )
       const saveBilling = useCallback(
         async (id, entry) => {
           setBillingEdits((current) => ({ ...current, [id]: entry }))
@@ -4851,9 +4730,6 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
               billingSettings,
               billingErrors,
               onBilling: saveBilling,
-              usdCny,
-              onRate: saveRate,
-              rateError,
             }),
           ),
         ),
