@@ -290,9 +290,9 @@ test('buildActivity：空数据也能画出 53 列空白', () => {
   assert.equal(activity.weeks.at(-1).cumulative, 0)
 })
 
-test('modelBucketFrames：日 / 周 / 月三档各 12 个桶，连续且本周（月）终点截到今天', () => {
+test('modelBucketFrames：按日 7 个、按周 4 个、按月 6 个桶，连续且本周（月）终点截到今天', () => {
   const { modelBucketFrames, modelBucketKeyOf, localDateKey, startOfWeek, startOfDay, addDays } = loadClientHelpers({
-    extraCode: ['const MODEL_WINDOW = 12'],
+    extraCode: ['const MODEL_COUNTS = { day: 7, week: 4, month: 6 }'],
     functions: ['modelBucketFrames', 'modelBucketKeyOf', 'localDateKey', 'startOfWeek', 'startOfDay', 'addDays', 'toNumber'],
   })
 
@@ -301,14 +301,14 @@ test('modelBucketFrames：日 / 周 / 月三档各 12 个桶，连续且本周�
   const todayStart = startOfDay(today)
 
   const days = modelBucketFrames('day', today)
-  assert.equal(days.length, 12)
+  assert.equal(days.length, 7)
   assert.equal(days.at(-1).key, localDateKey(todayStart))
   for (let index = 1; index < days.length; index += 1) {
-    assert.equal(days[index].key, localDateKey(addDays(todayStart, index - 11)))
+    assert.equal(days[index].key, localDateKey(addDays(todayStart, index - 6)))
   }
 
   const weeks = modelBucketFrames('week', today)
-  assert.equal(weeks.length, 12)
+  assert.equal(weeks.length, 4)
   assert.equal(weeks.at(-1).start.getTime(), startOfWeek(todayStart).getTime())
   assert.equal(weeks.at(-1).end.getTime(), todayStart.getTime(), '本周截到今天')
   for (const frame of weeks) assert.equal(frame.start.getDay(), 1, `${frame.key} 必须是周一`)
@@ -317,10 +317,10 @@ test('modelBucketFrames：日 / 周 / 月三档各 12 个桶，连续且本周�
   }
 
   const months = modelBucketFrames('month', today)
-  assert.equal(months.length, 12)
+  assert.equal(months.length, 6)
   assert.equal(months.at(-1).key, '2026-03')
   assert.equal(months.at(-1).end.getTime(), todayStart.getTime())
-  assert.equal(months[0].key, '2025-04')
+  assert.equal(months[0].key, '2025-10')
   for (const frame of months) assert.match(frame.key, /^\d{4}-\d{2}$/)
 
   // 任意日期归桶：周口径用周一，月口径用 YYYY-MM，日口径当天。
@@ -492,31 +492,10 @@ test('durationParts：毫秒 → 时/分，0 与负数返回 null', () => {
 
 /* ------------------------------------------------------------ 顶部时间范围 */
 
-test('granularitiesFor：每个范围的粒度选项固定，不随星期几 / 月初月末变化；本日、本周只看日', () => {
-  const { granularitiesFor } = loadClientHelpers({ functions: ['toNumber', 'granularitiesFor'] })
-  for (const days of [1, 3, 7, 30]) assert.deepEqual(granularitiesFor('day', days), ['day'], `本日（${days}）`)
-  for (const days of [1, 3, 7, 30]) assert.deepEqual(granularitiesFor('week', days), ['day'], `本周（${days}）`)
-  for (const days of [1, 8, 31]) assert.deepEqual(granularitiesFor('month', days), ['day', 'week'], `本月（${days}）`)
-  // 累计：按数据跨度分档，第一项是默认
-  assert.deepEqual(granularitiesFor('all', 10), ['day', 'week'])
-  assert.deepEqual(granularitiesFor('all', 31), ['day', 'week'])
-  assert.deepEqual(granularitiesFor('all', 82), ['week', 'month'])
-  assert.deepEqual(granularitiesFor('all', 730), ['week', 'month'])
-  assert.deepEqual(granularitiesFor('all', 731), ['month'])
-  assert.deepEqual(granularitiesFor('all', 0), ['week', 'month'], '没有数据时按周 / 月画空图')
-  // 自定义：按所选天数分档，第一项是默认
-  assert.deepEqual(granularitiesFor('custom', 5), ['day'])
-  assert.deepEqual(granularitiesFor('custom', 31), ['day', 'week'])
-  assert.deepEqual(granularitiesFor('custom', 82), ['week', 'month'])
-  assert.deepEqual(granularitiesFor('custom', 730), ['week', 'month'])
-  assert.deepEqual(granularitiesFor('custom', 731), ['month'])
-  assert.deepEqual(granularitiesFor('custom', 0), ['week', 'month'], '没有数据时按周 / 月画空图')
-})
-
 const modelSeriesHelpers = () =>
   loadClientHelpers({
     extraCode: [
-      'const MODEL_WINDOW = 12',
+      'const MODEL_COUNTS = { day: 7, week: 4, month: 6 }',
       'const MODEL_TOP = 6',
       "const SERIES_COLORS = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6']",
       "const OTHER_COLOR = 'c0'",
@@ -527,47 +506,58 @@ const modelSeriesHelpers = () =>
       'function monthLabel(date) { return localDateKey(date).slice(0, 7) }',
     ],
     functions: [
-      'buildModelSeries', 'modelBucketFrames', 'modelBucketKeyOf', 'calendarBucketCount', 'bucketTitle', 'indexDaily',
+      'buildModelSeries', 'modelBucketFrames', 'modelBucketKeyOf', 'bucketTitle', 'indexDaily',
       'parseDateKey', 'localDateKey', 'startOfDay', 'startOfWeek', 'addDays', 'toNumber', 'niceScale', 'niceStep',
       'modelFamily', 'familyLabel', 'prettyModelName',
     ],
   })
 
-test('buildModelSeries + 范围窗口：第一个桶截到窗口起点，总计恰好等于窗口内的日明细之和', () => {
-  const { buildModelSeries, calendarBucketCount, bucketTitle, parseDateKey } = modelSeriesHelpers()
+test('buildModelSeries：每档有自己的固定窗口，只看日期不看顶部范围；窗口外的日子不进来', () => {
+  const { buildModelSeries } = modelSeriesHelpers()
   const today = new Date(2026, 10, 4, 12) // 周三
-  const window = { startKey: '2026-10-06', endKey: '2026-11-04' } // 近 30 天，起点是周二
   const daily = [
-    { date: '2026-10-05', tokens: 999, byModel: { 'deepseek-v4-1-flash': 999 } }, // 窗口前一天：同一周，但不该算进来
-    { date: '2026-10-06', tokens: 100, byModel: { 'deepseek-v4-1-flash': 100 } },
-    { date: '2026-10-11', tokens: 50, byModel: { 'deepseek-v4-pro': 50 } },
-    { date: '2026-11-04', tokens: 7, byModel: { 'deepseek-v4-1-flash': 7 } },
+    { date: '2026-11-04', tokens: 7, byModel: { 'deepseek-v4-1-flash': 7 } }, // 今天
+    { date: '2026-11-02', tokens: 5, byModel: { 'deepseek-v4-pro': 5 } }, // 本周一
+    { date: '2026-10-29', tokens: 100, byModel: { 'deepseek-v4-1-flash': 100 } }, // 7 天窗口的第一天（10/29 ~ 11/4）
+    { date: '2026-10-28', tokens: 999, byModel: { 'deepseek-v4-1-flash': 999 } }, // 按日窗口之前一天
+    { date: '2026-10-11', tokens: 40, byModel: { 'deepseek-v4-pro': 40 } }, // 4 周窗口（10/12 起）之前
+    { date: '2026-10-12', tokens: 30, byModel: { 'deepseek-v4-pro': 30 } },
+    { date: '2026-05-31', tokens: 8, byModel: { 'deepseek-v4-pro': 8 } }, // 6 个月窗口（2026-06 起）之前
+    { date: '2026-06-01', tokens: 9, byModel: { 'deepseek-v4-pro': 9 } },
   ]
-  const count = calendarBucketCount('week', parseDateKey(window.startKey), parseDateKey(window.endKey))
-  assert.equal(count, 5, '10/5、10/12、10/19、10/26、11/2 五个自然周')
-  const series = buildModelSeries(daily, 'week', today, count, window)
-  assert.equal(series.buckets.length, 5)
-  assert.equal(series.total, 157, '窗口外的 999 不进来')
-  const first = series.buckets[0]
-  assert.equal(first.key, '2026-10-05', '桶键仍是这一周的周一，和日明细的归桶方式一致')
-  assert.equal(first.clipped, true)
-  assert.equal(bucketTitle(first, 'week'), '2026-10-06~2026-10-11', '浮层只写真正包含的日期')
-  assert.equal(first.total, 150)
-
-  // 按月：第一个月截成 10/6 起
-  const months = buildModelSeries(daily, 'month', today, calendarBucketCount('month', parseDateKey(window.startKey), today), window)
-  assert.equal(months.buckets.length, 2)
-  assert.equal(bucketTitle(months.buckets[0], 'month'), '2026-10-06~2026-10-31')
-  assert.equal(months.total, 157)
+  const byDay = buildModelSeries(daily, 'day', today)
+  assert.equal(byDay.buckets.length, 7)
+  assert.equal(byDay.buckets[0].key, '2026-10-29')
+  assert.equal(byDay.total, 7 + 5 + 100, '窗口外的 10/28 不进来')
+  const byWeek = buildModelSeries(daily, 'week', today)
+  assert.equal(byWeek.buckets.length, 4)
+  assert.equal(byWeek.buckets[0].key, '2026-10-12')
+  assert.equal(byWeek.buckets.at(-1).key, '2026-11-02', '最后一个桶是今天所在的这一周')
+  assert.equal(byWeek.total, 7 + 5 + 100 + 999 + 30, '10/11 在第一周之前，不进来；10/28 在窗口内')
+  const byMonth = buildModelSeries(daily, 'month', today)
+  assert.equal(byMonth.buckets.length, 6)
+  assert.equal(byMonth.buckets[0].key, '2026-06')
+  assert.equal(byMonth.buckets.at(-1).key, '2026-11')
+  assert.equal(byMonth.total, 7 + 5 + 100 + 999 + 40 + 30 + 9, '5/31 在 6 个月窗口之前，不进来')
+  // 家族合计 = 桶合计之和 = 头部总计（同一批整数）
+  for (const series of [byDay, byWeek, byMonth]) {
+    assert.equal(series.series.reduce((sum, item) => sum + item.total, 0), series.total)
+    assert.equal(series.buckets.reduce((sum, bucket) => sum + bucket.total, 0), series.total)
+  }
+  // 数据变空也画满桶，卡片形状不变
+  assert.equal(buildModelSeries([], 'week', today).buckets.length, 4)
+  assert.equal(buildModelSeries([], 'day', today).total, 0)
 })
 
-test('bucketTitle：截断后只剩一天时写单个日期', () => {
+test('bucketTitle：本周只过了一天（今天是周一）时写单个日期；整月写年月；整周写起止', () => {
   const { buildModelSeries, bucketTitle } = modelSeriesHelpers()
-  const today = new Date(2026, 10, 6, 12) // 周五：近 90 天从 8/9（周日）开始
-  const window = { startKey: '2026-08-09', endKey: '2026-11-06' }
-  const series = buildModelSeries([{ date: '2026-08-09', tokens: 5, byModel: { x: 5 } }], 'week', today, 14, window)
-  assert.equal(series.buckets[0].key, '2026-08-03')
-  assert.equal(bucketTitle(series.buckets[0], 'week'), '2026-08-09', '不写「8/9 ~ 8/9」')
+  const monday = new Date(2026, 10, 9, 12)
+  const series = buildModelSeries([{ date: '2026-11-09', tokens: 5, byModel: { x: 5 } }], 'week', monday)
+  assert.equal(series.buckets.at(-1).key, '2026-11-09')
+  assert.equal(bucketTitle(series.buckets.at(-1), 'week'), '2026-11-09', '不写「11/9 ~ 11/9」')
+  assert.equal(bucketTitle(series.buckets[0], 'week'), '2026-10-19~2026-10-25', '整周写起止')
+  const months = buildModelSeries([], 'month', monday)
+  assert.equal(bucketTitle(months.buckets[0], 'month'), '2026-06-01')
 })
 
 test('deltaWindows：本期已过完的天（不含今天）对上一期的前同样天数；没有起点的范围没有上一期', () => {
@@ -1104,6 +1094,9 @@ test('tickPlan：最多 12 个刻度；按月超过一年时落在日历月上�
   assert.ok(year.every((plan) => plan.shown && !plan.withYear), '一年以内：每个月都标，不带年份')
   const crossing = tickPlan(months(2025, 9, 6), 'month')
   assert.deepEqual(crossing.map((plan) => plan.withYear), [true, false, false, true, false, false], '25 年 10 月起：第一个和 26 年 1 月带年份')
+  // 26 年 12 月起的 6 个月：12 月和紧挨着的 1 月都带年份（6 个桶每列够宽，不会叠；浏览器里逐月量过）
+  const december = tickPlan(months(2026, 11, 6), 'month')
+  assert.deepEqual(december.map((plan) => plan.withYear), [true, true, false, false, false, false])
   const weeks = Array.from({ length: 94 }, (_, index) => ({ start: new Date(2026, 5, 1 + 7 * index) }))
   const weekly = tickPlan(weeks, 'week')
   assert.equal(weekly[weekly.length - 1].shown, true, '按周：最后一个总在')

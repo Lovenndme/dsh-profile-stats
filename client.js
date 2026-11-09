@@ -1936,16 +1936,21 @@ window.__ModuleLoader__.load({
 
     /* ------------------------------------------------------------ 模型分布数据 */
 
-    /** 模型分布自己的时间窗：日 / 周 / 月 各 12 个桶；前 6 个家族各自一段，其余合成「其他模型」。 */
-    const MODEL_WINDOW = 12
+    /**
+     * 模型分布自己的时间窗，不跟顶部范围走：按日看最近 7 天、按周看最近 4 周、按月看最近 6 个月（都含今天所在的桶）；
+     * 默认按周。前 6 个家族各自一段，其余合成「其他模型」。
+     */
+    const MODEL_GRAINS = ['day', 'week', 'month']
+    const MODEL_COUNTS = { day: 7, week: 4, month: 6 }
+    const MODEL_DEFAULT_GRAIN = 'week'
     const MODEL_TOP = 6
     const SERIES_COLORS = ['var(--dps-s1)', 'var(--dps-s2)', 'var(--dps-s3)', 'var(--dps-s4)', 'var(--dps-s5)', 'var(--dps-s6)']
     const OTHER_COLOR = 'var(--dps-other)'
 
     /** 窗口内的桶（含没有活动的桶）：key + 起止日期。周一起算；本周/本月的终点截到今天。 */
-    function modelBucketFrames(granularity, today, count = MODEL_WINDOW) {
+    function modelBucketFrames(granularity, today, count = MODEL_COUNTS[granularity] || MODEL_COUNTS.week) {
       const todayStart = startOfDay(today)
-      const total = Math.max(1, Math.round(toNumber(count) || MODEL_WINDOW))
+      const total = Math.max(1, Math.round(toNumber(count) || MODEL_COUNTS.week))
       const frames = []
       for (let offset = total - 1; offset >= 0; offset -= 1) {
         if (granularity === 'month') {
@@ -1972,65 +1977,13 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 窗口覆盖多少个日历桶（周一起算 / 按月从 1 号起）。
-     * 不能用「天数 ÷ 单位」：30 天跨两个月可能落在 2 个自然月里，90 天常常是 4 个自然月，
-     * 用除法会把第一个残月漏掉，图里的总计就比顶部合计小。
+     * count 个桶 × 模型家族。全程原始整数：桶合计、家族合计、头部总计都是同一批整数相加，
+     * 纵轴按最高的那根堆叠柱取整齐刻度。桶按日历对齐（周一起算、按月从 1 号起），最后一个桶是今天所在的那一周 / 那个月。
      */
-    function calendarBucketCount(granularity, startDate, endDate) {
-      if (!startDate || !endDate) return 1
-      if (granularity === 'month') {
-        return (endDate.getFullYear() * 12 + endDate.getMonth()) - (startDate.getFullYear() * 12 + startDate.getMonth()) + 1
-      }
-      if (granularity === 'week') {
-        return Math.round((startOfWeek(endDate).getTime() - startOfWeek(startDate).getTime()) / (7 * 86400000)) + 1
-      }
-      return Math.round((endDate.getTime() - startDate.getTime()) / 86400000) + 1
-    }
-
-    /**
-     * 每个范围可选的粒度是固定的，第一项是默认值。
-     * 不按「桶数在 2–92 之间」动态判断：那样「本周」也能选按月（一根残柱），
-     * 「按周」每到周日消失、「按月」只在每月头几天出现，选项天天变。
-     * 本日、本周只看日；本月看日 / 周；累计按数据跨度、自定义按所选天数分档：一周以内（仅自定义）看日，
-     * 一个月以内看日 / 周，两年以内看周 / 月，再长只看月。
-     */
-    function granularitiesFor(range, spanDays) {
-      if (range === 'day' || range === 'week') return ['day']
-      if (range === 'month') return ['day', 'week']
-      const span = toNumber(spanDays)
-      // 自定义范围按所选天数分档，一周以内只看日
-      if (range === 'custom' && span > 0 && span <= 7) return ['day']
-      if (span > 0 && span <= 31) return ['day', 'week']
-      if (span > 730) return ['month']
-      return ['week', 'month']
-    }
-
-    /**
-     * 12 个桶 × 模型家族。全程原始整数：桶合计、家族合计、头部总计都是同一批整数相加，
-     * 纵轴按最高的那根堆叠柱取整齐刻度。
-     *
-     * 桶按日历对齐（周一起算、按月从 1 号起），但只统计落在窗口内的天：窗口的第一/最后一个
-     * 桶可能是不完整的，这样图里的总计恒等于顶部范围的合计，不会因为边界溢出对不上。
-     */
-    function buildModelSeries(daily, granularity, today, count = MODEL_WINDOW, window = null) {
+    function buildModelSeries(daily, granularity, today, count = MODEL_COUNTS[granularity]) {
       const buckets = modelBucketFrames(granularity, today, count).map((frame) => ({ ...frame, values: {}, total: 0 }))
       const index = new Map(buckets.map((bucket) => [bucket.key, bucket]))
-      const startKey = (window && window.startKey) || ''
-      const endKey = (window && window.endKey) || ''
-      // 第一个桶若从窗口起点之前开始，只统计窗口内的天，所以把它的起点也截到窗口起点：
-      // 浮层 / 横轴写的日期就是这根柱子真正包含的日期（否则「10月5日 – 10月11日」里其实只有 4 天）。
-      const windowStart = parseDateKey(startKey)
-      if (windowStart) {
-        for (const bucket of buckets) {
-          if (bucket.start.getTime() < windowStart.getTime()) {
-            bucket.start = windowStart
-            bucket.clipped = true
-          }
-        }
-      }
       for (const entry of indexDaily(daily).values()) {
-        if (startKey && entry.date < startKey) continue
-        if (endKey && entry.date > endKey) continue
         const bucket = index.get(modelBucketKeyOf(parseDateKey(entry.date), granularity))
         if (!bucket) continue
         for (const [raw, amount] of Object.entries(entry.byModel || {})) {
@@ -2119,8 +2072,8 @@ window.__ModuleLoader__.load({
     }
 
     function bucketTitle(bucket, granularity) {
-      if (granularity === 'month' && !bucket.clipped) return formatDate(bucket.start, { year: 'numeric', month: 'long' })
-      // 截断后只剩一天（窗口起点正好是周日 / 月末）：写单个日期，不写「8月9日 – 8月9日」
+      if (granularity === 'month') return formatDate(bucket.start, { year: 'numeric', month: 'long' })
+      // 这一周只过了一天（今天是周一）：写单个日期，不写「11月9日 – 11月9日」
       if (localDateKey(bucket.start) === localDateKey(bucket.end)) return formatDate(bucket.start, { month: 'long', day: 'numeric', weekday: 'short' })
       if (granularity === 'week' || granularity === 'month') {
         const short = { month: 'short', day: 'numeric' }
@@ -2133,36 +2086,18 @@ window.__ModuleLoader__.load({
 
     function ModelCard(props) {
       const today = props.today
-      const range = props.range || 'all'
-      const spanDays = props.spanDays || 0
-      const rangeWin = props.rangeWin || null
-      // 图表的窗口起点：固定范围用范围内的第一天；累计范围用数据的第一天
-      const spanStartKey =
-        rangeWin && rangeWin.startKey ? rangeWin.startKey : spanDays > 0 ? localDateKey(addDays(today, -(spanDays - 1))) : ''
-      const startDate = parseDateKey(spanStartKey)
-      const endDate = (rangeWin && parseDateKey(rangeWin.endKey)) || startOfDay(today)
-      const endKey = localDateKey(endDate)
-      const rangeKey = props.rangeKey || range
-      const available = granularitiesFor(range, spanDays)
-      // 用户在当前范围里点过的粒度。换了范围就清掉（在渲染中直接重置，React 支持的「上一次渲染的信息」写法），
-      // 点过的那档不再可选（跨过午夜、累计跨度变长）也回到默认——都不靠 effect 事后纠正，
-      // 否则会先用旧粒度画一帧，开关高亮的那档也可能和图对不上。
-      const [picked, setPicked] = useState({ range: rangeKey, value: null })
-      if (picked.range !== rangeKey) setPicked({ range: rangeKey, value: null })
-      const granularity = picked.range === rangeKey && picked.value && available.includes(picked.value) ? picked.value : available[0]
+      const endDate = startOfDay(today)
+      // 模型分布有自己的时间窗，不跟顶部范围走：显示什么只由卡片右上角的粒度开关决定
+      const [granularity, setGranularity] = useState(MODEL_DEFAULT_GRAIN)
       const barsRef = useRef(null)
       const pointer = usePointer()
-      // 没有数据的累计范围也画 12 个空桶，卡片形状不变
-      const bucketCount = startDate ? calendarBucketCount(granularity, startDate, endDate) : MODEL_WINDOW
-      const data = useMemo(
-        () => buildModelSeries(props.daily, granularity, endDate, bucketCount, rangeWin),
-        [props.daily, granularity, bucketCount, rangeWin ? rangeWin.startKey : '', rangeWin ? rangeWin.endKey : '', endKey],
-      )
+      const todayKey = localDateKey(endDate)
+      const data = useMemo(() => buildModelSeries(props.daily, granularity, endDate, MODEL_COUNTS[granularity]), [props.daily, granularity, todayKey])
       const count = data.buckets.length
       const empty = data.total <= 0
-      // 悬浮 / 键盘选中的桶只在同一范围、同一粒度下有效，换了就自然失效
-      const scope = `${rangeKey}|${granularity}`
-      // 用量（堆叠高度 = token 数）/ 占比（每根柱子铺满 100%，看各模型的比例怎么变）；换范围不重置
+      // 悬浮 / 键盘选中的桶只在同一粒度下有效，换了就自然失效
+      const scope = granularity
+      // 用量（堆叠高度 = token 数）/ 占比（每根柱子铺满 100%，看各模型的比例怎么变）
       const [mode, setMode] = useState('tokens')
       const share = mode === 'share'
       const [activeState, setActiveState] = useState(null)
@@ -2332,18 +2267,16 @@ window.__ModuleLoader__.load({
                 { id: 'share', label: t('model.modeShare') },
               ],
             }),
-            available.length > 1
-              ? h(Segmented, {
-                  control: 'model-grain',
-                  label: t('section.model'),
-                  value: granularity,
-                  onChange: (next) => {
-                    setPicked({ range: rangeKey, value: next })
-                    setActive(null)
-                  },
-                  options: available.map((id) => ({ id, label: t(`grain.${id}`) })),
-                })
-              : null,
+            h(Segmented, {
+              control: 'model-grain',
+              label: t('section.model'),
+              value: granularity,
+              onChange: (next) => {
+                setGranularity(next)
+                setActive(null)
+              },
+              options: MODEL_GRAINS.map((id) => ({ id, label: t(`grain.${id}`) })),
+            }),
           ),
         ),
         h(
@@ -4488,14 +4421,6 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
         },
         [reload, mounted],
       )
-      // 累计范围的模型图没固定天数：用「首日 → 今天」的跨度决定桶数
-      const spanDays = useMemo(() => {
-        const start = parseDateKey(firstKey)
-        const end = parseDateKey(todayKey)
-        if (!start || !end) return 0
-        return Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1)
-      }, [firstKey, todayKey])
-
       // 导出文件名带上范围：自定义写起止日期，本月写年月
       const exportName =
         range === 'custom'
@@ -4622,15 +4547,8 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
           h(
             'div',
             { className: 'dps-grid', 'data-row': 'charts' },
-            h(ModelCard, {
-              daily,
-              today,
-              range,
-              rangeWin,
-              // 换范围（含改自定义日期）时模型图的粒度回到默认
-              rangeKey: `${range}:${rangeWin.startKey}:${rangeWin.endKey}`,
-              spanDays: range === 'custom' ? rangeWin.days : spanDays,
-            }),
+            // 模型分布不跟顶部范围走
+            h(ModelCard, { daily, today }),
             h(LensCard, { totals: lensTotals, hitSeries }),
           ),
           h(
