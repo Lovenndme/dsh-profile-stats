@@ -91,7 +91,7 @@ window.__ModuleLoader__.load({
       'billing.cancel': 'Cancel',
       'billing.listValue': 'At list price {value}',
       'billing.excluded': 'Excluded',
-      'billing.planMonth': 'This month {used} / fee {fee}',
+      'billing.planMonth': 'Since {start} {used} / fee {fee}',
       'billing.tagPlan': 'plan',
       'billing.unpriced': 'No list price: {models}',
       'billing.saveFailed': 'Not saved: {reason}',
@@ -215,7 +215,7 @@ window.__ModuleLoader__.load({
       'billing.cancel': '取消',
       'billing.listValue': '按官方价算 {value}',
       'billing.excluded': '不计入',
-      'billing.planMonth': '本月已用 {used} / 月费 {fee}',
+      'billing.planMonth': '{start} 起已用 {used} / 月费 {fee}',
       'billing.tagPlan': '包月',
       'billing.unpriced': '没有官方价：{models}',
       'billing.saveFailed': '没有存上：{reason}',
@@ -2939,7 +2939,7 @@ window.__ModuleLoader__.load({
           { className: 'dps-bill-foot' },
           // 已经设成包月、编辑器也停在包月：左下角写这个订阅月用了多少（换算成钱）对比月费；否则写按官方价算多少
           mode === 'plan' && current.mode === 'plan' && props.planMonth
-            ? h('span', { className: 'dps-bill-meta', 'data-dps-field': 'billing-plan-month' }, t('billing.planMonth', { used: formatMoney(props.planMonth.used), fee: formatMoney(props.planMonth.monthly) }))
+            ? h('span', { className: 'dps-bill-meta', 'data-dps-field': 'billing-plan-month' }, planMonthText(props.planMonth))
             : h('span', { className: 'dps-bill-meta', 'data-dps-field': 'billing-list-value' }, t('billing.listValue', { value: formatMoney(props.listValue) })),
           h('button', { type: 'button', className: 'dps-btn', 'data-dps-action': 'billing-reset', onClick: () => props.onSave(null) }, t('billing.reset')),
           h('button', { type: 'button', className: 'dps-btn', 'data-dps-action': 'billing-cancel', onClick: props.onClose }, t('billing.cancel')),
@@ -2950,6 +2950,19 @@ window.__ModuleLoader__.load({
           ),
         ),
       )
+    }
+
+    /**
+     * 包月这一期用了多少：「10/20 起已用 ¥23.02 / 月费 ¥49」。起算日直接写出来——填了开始日期时这一期是从续费日算的，
+     * 叫「本月」会被当成自然月。
+     */
+    function planMonthText(month) {
+      const start = parseDateKey(month && month.startKey)
+      return t('billing.planMonth', {
+        start: start ? formatDate(start, { month: 'numeric', day: 'numeric' }) : '',
+        used: formatMoney(month ? month.used : 0),
+        fee: formatMoney(month ? month.monthly : 0),
+      })
     }
 
     /** 费用格前面的小标签：打折写倍数（×0.12），包月写「包月」；官方价不写。 */
@@ -3020,7 +3033,7 @@ window.__ModuleLoader__.load({
         // 而且它跟着顶部范围走、本月已用不跟，两个数挨在一起会被当成两种算法
         const month = bill && bill.mode === 'plan' && props.planMonths ? ownValue(props.planMonths, row.id) : null
         const titleParts = month
-          ? [t('billing.planMonth', { used: formatMoney(month.used), fee: formatMoney(month.monthly) })]
+          ? [planMonthText(month)]
           : [t('billing.listValue', { value: formatMoney(cost ? cost.value : 0) })]
         if (cost && cost.unpriced.length) titleParts.push(t('billing.unpriced', { models: listJoin(cost.unpriced) }))
         // 上一次改计费方式没存上：标签换成「未保存」，悬停写原因
