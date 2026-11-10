@@ -232,6 +232,7 @@ TZ=Asia/Shanghai npm test
 | `test/cache.test.mjs` | 缓存文件的健壮性（损坏、版本不符…） |
 | `test/host.test.mjs` | 路由与更新流程（用假宿主 + 假 registry） |
 | `test/client.test.mjs` | 浏览器半区的纯函数（占比、分桶、范围窗口、导出、费用折算…，从 `client.js` 源码切出来求值）与几条源码级守卫 |
+| `test/fuzz.test.mjs` | 随机输入（固定种子）下费用折算与日期窗口的不变量；失败时打印种子和场景序号，便于复现 |
 | `test/time.test.mjs`、`streak.test.mjs`、`version.test.mjs` | 日期工具、连续天数、版本比较 |
 
 规则：
