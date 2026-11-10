@@ -91,7 +91,7 @@ window.__ModuleLoader__.load({
       'billing.cancel': 'Cancel',
       'billing.listValue': 'At list price {value}',
       'billing.excluded': 'Excluded',
-      'billing.planCell': '{value} / month',
+      'billing.planMonth': 'This month {used} / fee {fee}',
       'billing.tagPlan': 'plan',
       'billing.unpriced': 'No list price: {models}',
       'billing.saveFailed': 'Not saved: {reason}',
@@ -215,7 +215,7 @@ window.__ModuleLoader__.load({
       'billing.cancel': '取消',
       'billing.listValue': '按官方价算 {value}',
       'billing.excluded': '不计入',
-      'billing.planCell': '{value} / 月',
+      'billing.planMonth': '本月已用 {used} / 月费 {fee}',
       'billing.tagPlan': '包月',
       'billing.unpriced': '没有官方价：{models}',
       'billing.saveFailed': '没有存上：{reason}',
@@ -758,11 +758,13 @@ window.__ModuleLoader__.load({
      * 以及 2026-08-13、2026-09-10 两份调价公告里的价格表。空闲时段是高峰价的一半（见 isPeakHour）。
      * 2026-08-17 00:00（北京时间）之前的价格官方文档里查不到，那段用量算「未定价」，不硬编。
      * 旧模型名 deepseek-v4-flash / -vision 已由 V4.1 Flash 提供、按 Flash 价计费；中转站的 deepseek-v4-1-flash* 同属 Flash。
+     * 火山方舟独有的 deepseek-v4-1-flash 经济版（-economy）单独一档，按方舟模型价格页的按量价（2026-11）：比 Flash 便宜两成。
      */
     const OFFICIAL_PRICES = [
       { family: 'flash', from: Date.UTC(2026, 7, 16, 16), peak: { hit: 0.1, miss: 3, output: 9 }, offPeak: { hit: 0.05, miss: 1.5, output: 4.5 } },
       { family: 'flash', from: Date.UTC(2026, 8, 10, 4), peak: { hit: 0.04, miss: 2, output: 8 }, offPeak: { hit: 0.02, miss: 1, output: 4 } },
       { family: 'pro', from: Date.UTC(2026, 7, 16, 16), peak: { hit: 0.3, miss: 9, output: 27 }, offPeak: { hit: 0.15, miss: 4.5, output: 13.5 } },
+      { family: 'flash-economy', from: Date.UTC(2026, 7, 16, 16), peak: { hit: 0.032, miss: 1.6, output: 6.4 }, offPeak: { hit: 0.016, miss: 0.8, output: 3.2 } },
     ]
 
     /** 2026 年法定节假日（国务院办公厅 2025-11-04 通知）：这些天全天按空闲时段计价。周末本来就是空闲时段。 */
@@ -792,11 +794,28 @@ window.__ModuleLoader__.load({
 
     /** 模型 → 价格系列（flash / pro）；不是 DeepSeek 模型时返回 ''（没有内置官方价）。 */
     function priceFamily(model) {
-      const id = String(model || '').toLowerCase()
+      const id = modelBaseId(model)
       if (!id.startsWith('deepseek-')) return ''
       if (/(^|-)pro(-|$)/.test(id)) return 'pro'
-      if (/(^|-)flash(-|$)/.test(id)) return 'flash'
+      if (/(^|-)flash(-|$)/.test(id)) return /(^|-)economy(-|$)/.test(id) ? 'flash-economy' : 'flash'
       return ''
+    }
+
+    /**
+     * 去掉 Ollama 的「名字:标签」里的标签（宿主已经把点、下划线换成了「-」）：
+     *   云端（:cloud、:671b-cloud）跑的就是官方那个模型，标签整个去掉，和官方的算同一个模型；
+     *   本地的参数量（:14b、:1-5b）留成名字的一部分（deepseek-r1:14b 是蒸馏的小模型，和官方 R1 不是一个东西）；
+     *   :latest、量化格式（q4-k-m、fp16）这类去掉。
+     */
+    function modelBaseId(model) {
+      const text = String(model || '').toLowerCase()
+      const colon = text.indexOf(':')
+      if (colon <= 0) return text
+      const name = text.slice(0, colon)
+      const tag = text.slice(colon + 1)
+      if (/(^|-)cloud$/.test(tag)) return name
+      const size = tag.match(/^(\d+(?:-\d+)?[bm])(?:-|$)/)
+      return size ? `${name}-${size[1].replace('-', '.')}` : name
     }
 
     /** UTC 小时序号 → 是否 DeepSeek 高峰时段：北京时间周一至周五 9–12、14–18 点，法定节假日除外。 */
@@ -812,11 +831,13 @@ window.__ModuleLoader__.load({
 
     /**
      * 某个模型在某个小时的官方单价（每百万 token）：{ currency, miss, hit, write, output, peak, timed }；没有已知价格时返回 null。
+     * flat 为 true 时不分峰谷，一律按空闲时段价（高峰价是在它基础上翻倍加价）：只有直连 DeepSeek 官方、按官方价计费的
+     * 供应商才真的分峰谷；中转站、coding plan 这些按自己的方式收费，换算成钱时用统一价。
      *   DeepSeek 的 Flash / Pro：内置的人民币价表（按调用时间选调价、分高峰 / 空闲时段，timed = true），
      *     2026-08-17 之前没有已知价格（不退回价格表，免得用别家转售的旧价）；
      *   其他模型：宿主随快照发来的价格表（LiteLLM，美元），缓存读 / 写没有单独价格时按未缓存输入价。
      */
-    function officialRate(model, epochHour, table) {
+    function officialRate(model, epochHour, table, flat) {
       const family = priceFamily(model)
       if (family) {
         const at = toNumber(epochHour) * 3600000
@@ -825,9 +846,9 @@ window.__ModuleLoader__.load({
           if (candidate.family === family && candidate.from <= at && (!row || candidate.from > row.from)) row = candidate
         }
         if (!row) return null
-        const peak = isPeakHour(epochHour)
+        const peak = !flat && isPeakHour(epochHour)
         const price = peak ? row.peak : row.offPeak
-        return { currency: 'CNY', miss: price.miss, hit: price.hit, write: price.miss, output: price.output, peak, timed: true }
+        return { currency: 'CNY', miss: price.miss, hit: price.hit, write: price.miss, output: price.output, peak, timed: !flat }
       }
       const listed = table && Object.prototype.hasOwnProperty.call(table, model) && Array.isArray(table[model]) ? table[model] : null
       if (!listed) return null
@@ -856,16 +877,14 @@ window.__ModuleLoader__.load({
     /**
      * 一段日期内的费用（人民币）。slots 是宿主按小时记的 [小时序号, 供应商, 模型, 项目键, 未缓存输入, 缓存读, 缓存写, 输出]。
      * options：{ table（价格表：模型 → [输入, 输出, 缓存读, 缓存写] 美元 / 百万），usdCny（美元兑人民币） }
-     *   value     按官方价折算（所有人都有；美元价按汇率换算）
-     *   peakValue / peakBase  有高峰 / 空闲时段的模型（DeepSeek）里，高峰时段的部分 / 全部——高峰占比只看这些模型
-     *   spend     按各家计费方式：官方 = value，打折 = value × 倍数，
-     *             包月 = 月费按天摊（从 since 起，没填就从这一家第一次有用量那天起，到今天为止；从没用过又没填 since 就不收），
+     *   value     按官方价折算（所有人都有；美元价按汇率换算）。只有计费方式是「官方价」的供应商（直连 DeepSeek）分峰谷，
+     *             其余（打折、包月、不计入、未设置）一律按不分峰谷的统一价（空闲时段价）
+     *   peakValue / peakBase  分峰谷计价的那部分里，高峰时段的部分 / 全部——高峰占比只看这些
+     *   spend     按各家计费方式：官方 = value，打折 = value × 倍数，包月 = value（用量换算成钱；月费只用来对比，见 planCycleStart），
      *             不计入 = 0，未设置 = 不知道（不算进 spend，列在 unset 里）
-     *   unpricedTokens  花费要按官方价算、却没有已知官方价的用量（官方 / 打折）：这部分没算进 spend。
-     *             包月、不计入的用量不需要官方价，不算在里面
+     *   unpricedTokens  花费要按官方价算、却没有已知官方价的用量（官方 / 打折 / 包月）：这部分没算进 spend。
+     *             不计入的用量不需要官方价，不算在里面
      *   byProject 各项目的花费；用量全部来自未设置 / 不计入的供应商的项目不出现（页面写「—」，不是 ¥0）
-     * 包月费按当天各项目的官方价折算比例摊到项目上；那天这一家的用量全都没有官方价时按 token 比例摊（那天没用量就不摊）。
-     * 范围内有月费、却没有用量的包月供应商也会有一行（models 为空），页面要能看到、改掉它。
      */
     function computeCosts(daily, startKey, endKey, settings, todayKey, options) {
       const table = (options && options.table) || {}
@@ -883,14 +902,7 @@ window.__ModuleLoader__.load({
         result.byProject[key] = toNumber(result.byProject[key]) + amount
       }
       const entries = indexDaily(daily)
-      const firstUse = {}
-      // 包月要知道每天各项目的官方价折算（没有官方价时退回 token），才能把月费摊下去
-      const planShares = new Map()
       for (const entry of entries.values()) {
-        for (const slot of entry.slots || []) {
-          const id = slot[1]
-          if (!firstUse[id] || entry.date < firstUse[id]) firstUse[id] = entry.date
-        }
         if ((startKey && entry.date < startKey) || (endKey && entry.date > endKey)) continue
         for (const slot of entry.slots || []) {
           const [hour, id, model, project] = slot
@@ -902,7 +914,8 @@ window.__ModuleLoader__.load({
           const row = rowOf(id)
           if (!row.models.includes(model)) row.models.push(model)
           const bill = row.billing
-          const rate = officialRate(model, hour, table)
+          // 只有按官方价计费的（直连 DeepSeek）分峰谷；其余按统一价换算
+          const rate = officialRate(model, hour, table, bill.mode !== 'official')
           const value = rate ? toCny((input * rate.miss + read * rate.hit + write * rate.write + output * rate.output) / 1e6, rate.currency) : null
           if (value !== null) {
             row.value += value
@@ -913,8 +926,8 @@ window.__ModuleLoader__.load({
               if (rate.peak) result.peakValue += value
             }
           }
-          // 这一格的花费要不要用官方价：官方、打折要；未设置的格子显示的也是官方价
-          const needsList = bill.mode === 'official' || bill.mode === 'multiplier' || bill.mode === 'unset'
+          // 这一格的花费要不要用官方价：官方、打折、包月要；未设置的格子显示的也是官方价
+          const needsList = bill.mode === 'official' || bill.mode === 'multiplier' || bill.mode === 'plan' || bill.mode === 'unset'
           if (value === null && needsList) {
             row.unpricedTokens += tokens
             if (!row.unpriced.includes(model)) row.unpriced.push(model)
@@ -923,49 +936,37 @@ window.__ModuleLoader__.load({
           let spend = 0
           if (bill.mode === 'official') spend = value === null ? 0 : value
           else if (bill.mode === 'multiplier') spend = value === null ? 0 : value * toNumber(bill.factor)
-          else if (bill.mode === 'plan') {
-            const dayKey = `${id}\u0000${entry.date}`
-            const day = planShares.get(dayKey) || { value: 0, tokens: 0, byValue: {}, byTokens: {} }
-            if (value !== null) {
-              day.value += value
-              day.byValue[project] = toNumber(day.byValue[project]) + value
-            }
-            day.tokens += tokens
-            day.byTokens[project] = toNumber(day.byTokens[project]) + tokens
-            planShares.set(dayKey, day)
-          }
-          if (bill.mode === 'unset' || bill.mode === 'plan' || bill.mode === 'free') continue
+          else if (bill.mode === 'plan') spend = value === null ? 0 : value
+          if (bill.mode === 'unset' || bill.mode === 'free') continue
           row.spend += spend
           result.spend += spend
           addProject(project, spend)
         }
       }
-      // 包月：范围内每一天摊 月费 ÷ 当月天数
-      for (const [id, entry] of Object.entries(settings || {})) {
-        if (!entry || entry.mode !== 'plan') continue
-        const since = validDateKey(entry.since) ? entry.since : ''
-        // 没填开始日期、又从没用过：不知道从哪天开始收，不收
-        if (!since && !firstUse[id]) continue
-        const from = [since || firstUse[id], startKey || ''].filter(Boolean).sort().pop()
-        const to = [endKey || todayKey, todayKey].filter(Boolean).sort()[0]
-        const first = parseDateKey(from)
-        const last = parseDateKey(to)
-        if (!first || !last || first.getTime() > last.getTime()) continue
-        const row = rowOf(id)
-        for (let date = first; date.getTime() <= last.getTime(); date = addDays(date, 1)) {
-          const fee = toNumber(entry.monthly) / daysInMonth(date)
-          row.spend += fee
-          result.spend += fee
-          const share = planShares.get(`${id}\u0000${localDateKey(date)}`)
-          if (!share) continue
-          // 按官方价折算的比例摊；那天全都没有官方价时按 token 比例
-          const [weights, total] = share.value > 0 ? [share.byValue, share.value] : [share.byTokens, share.tokens]
-          if (total > 0) for (const [project, weight] of Object.entries(weights)) addProject(project, (fee * weight) / total)
-        }
-      }
       for (const [id, row] of Object.entries(result.byProvider)) if (row.mode === 'unset') result.unset.push(id)
       result.unset.sort()
       return result
+    }
+
+    /**
+     * 包月这一个订阅月从哪天开始：开始日期是几号，每个月就从几号续费（那个月没有这一天时取月末）；
+     * 没填开始日期按自然月（1 号）。开始日期在今天之后时返回开始日期（还没开始，本月已用是 0）。
+     */
+    function planCycleStart(since, todayKey) {
+      const today = parseDateKey(todayKey)
+      if (!today) return ''
+      const start = validDateKey(since) ? parseDateKey(since) : null
+      if (!start) return localDateKey(new Date(today.getFullYear(), today.getMonth(), 1))
+      if (start.getTime() > today.getTime()) return since
+      const day = start.getDate()
+      const anchorIn = (year, month) => {
+        const first = new Date(year, month, 1)
+        return new Date(first.getFullYear(), first.getMonth(), Math.min(day, daysInMonth(first)))
+      }
+      let anchor = anchorIn(today.getFullYear(), today.getMonth())
+      if (anchor.getTime() > today.getTime()) anchor = anchorIn(today.getFullYear(), today.getMonth() - 1)
+      if (anchor.getTime() < start.getTime()) anchor = start
+      return localDateKey(anchor)
     }
 
     /** 真实存在的日历日 YYYY-MM-DD（2026-02-31 不算），年份在 2000 ~ 2100 之间。 */
@@ -1357,7 +1358,7 @@ window.__ModuleLoader__.load({
      * 「DeepSeek V4.1 Pro」、glm-4-flash 被并进「DeepSeek V4.1 Flash」、deepseek-prover-v2 成了「V2 Pro」。
      */
     function modelFamily(id) {
-      const text = String(id || '').toLowerCase()
+      const text = modelBaseId(id)
       if (MODEL_ALIASES[text]) return MODEL_ALIASES[text]
       if (!/^deepseek(-|$)/.test(text)) return text
       const tier = /(^|-)pro(-|$)/.test(text) ? 'pro' : /(^|-)flash(-|$)/.test(text) ? 'flash' : ''
@@ -1398,6 +1399,11 @@ window.__ModuleLoader__.load({
         if (/^\d+$/.test(piece) && index + 1 < parts.length && /^\d+$/.test(parts[index + 1])) {
           out.push(`${piece}.${parts[index + 1]}`)
           index += 1
+          continue
+        }
+        // 参数量写大写：14b → 14B、1.5b → 1.5B
+        if (/^\d+(\.\d+)?[bm]$/.test(piece)) {
+          out.push(piece.toUpperCase())
           continue
         }
         out.push(piece.charAt(0).toUpperCase() + piece.slice(1))
@@ -2815,10 +2821,8 @@ window.__ModuleLoader__.load({
      * byProvider（各家 token）+ providerUsage（各家四项用量）→ 降序行；前 6 个各一行，其余合成「其他」。
      * 占比的分母是这一档的全部合计；命中率按各家自己的四项算（「其他」用合并后的四项），
      * 这样每一行都能单独和那一家的后台对账。缺四项用量（旧版宿主）时命中率为 null。
-     * idleIds：这一档没有用量、但要单独占一行的供应商（范围内有月费的包月），排在最后、不占前 6 的名额，
-     * 否则这笔月费算进了花费，却没有地方看到、改掉它。
      */
-    function deriveProviders(byProvider, providerUsage, idleIds) {
+    function deriveProviders(byProvider, providerUsage) {
       const usageOf = providerUsage || {}
       const entries = Object.entries(byProvider || {})
         .map(([id, tokens]) => ({ id, tokens: toNumber(tokens), usage: usageOf[id] || null }))
@@ -2835,8 +2839,6 @@ window.__ModuleLoader__.load({
           usage: known.length > 0 ? known.reduce((sum, row) => addUsage(sum, row.usage), emptyUsage()) : null,
         })
       }
-      const listed = new Set(entries.map((row) => row.id))
-      for (const id of (idleIds || []).slice().sort()) if (!listed.has(id)) rows.push({ id, tokens: 0, usage: null })
       return {
         total,
         rows: rows.map((row) => ({
@@ -2935,7 +2937,10 @@ window.__ModuleLoader__.load({
         h(
           'div',
           { className: 'dps-bill-foot' },
-          h('span', { className: 'dps-bill-meta', 'data-dps-field': 'billing-list-value' }, t('billing.listValue', { value: formatMoney(props.listValue) })),
+          // 已经设成包月、编辑器也停在包月：左下角写这个订阅月用了多少（换算成钱）对比月费；否则写按官方价算多少
+          mode === 'plan' && current.mode === 'plan' && props.planMonth
+            ? h('span', { className: 'dps-bill-meta', 'data-dps-field': 'billing-plan-month' }, t('billing.planMonth', { used: formatMoney(props.planMonth.used), fee: formatMoney(props.planMonth.monthly) }))
+            : h('span', { className: 'dps-bill-meta', 'data-dps-field': 'billing-list-value' }, t('billing.listValue', { value: formatMoney(props.listValue) })),
           h('button', { type: 'button', className: 'dps-btn', 'data-dps-action': 'billing-reset', onClick: () => props.onSave(null) }, t('billing.reset')),
           h('button', { type: 'button', className: 'dps-btn', 'data-dps-action': 'billing-cancel', onClick: props.onClose }, t('billing.cancel')),
           h(
@@ -2992,15 +2997,7 @@ window.__ModuleLoader__.load({
       const todayOnly = Boolean(props.todayOnly)
       const summary = (todayOnly ? props.today : props.summary) || emptySummary()
       const costs = (todayOnly ? props.todayCosts : props.costs) || null
-      // 范围内有月费、却没有用量的包月供应商：也给一行，月费算进了花费，就得能看到、改掉
-      const idleKey = costs
-        ? Object.entries(costs.byProvider)
-            .filter(([id, row]) => row.mode === 'plan' && row.spend > 0 && !(toNumber(summary.byProvider && summary.byProvider[id]) > 0))
-            .map(([id]) => id)
-            .sort()
-            .join('\u0000')
-        : ''
-      const data = useMemo(() => deriveProviders(summary.byProvider, summary.providerUsage, idleKey ? idleKey.split('\u0000') : []), [summary, idleKey])
+      const data = useMemo(() => deriveProviders(summary.byProvider, summary.providerUsage), [summary])
       const aliases = props.aliases || {}
       const errors = props.billingErrors || {}
       // 正在设置计费方式的那一行；那一行不在表里了（切到「今日」后没有用量）就收起，免得切回来时自己又打开
@@ -3020,7 +3017,9 @@ window.__ModuleLoader__.load({
         const cost = costs.byProvider[row.id] || null
         const bill = cost ? cost.billing : billingOf(row.id, props.billingSettings)
         const titleParts = [t('billing.listValue', { value: formatMoney(cost ? cost.value : 0) })]
-        if (bill && bill.mode === 'plan') titleParts.push(t('billing.planCell', { value: formatMoney(bill.monthly) }))
+        // 包月：这个订阅月里用量换算成的钱，和月费放在一起比
+        const month = bill && bill.mode === 'plan' && props.planMonths ? ownValue(props.planMonths, row.id) : null
+        if (month) titleParts.push(t('billing.planMonth', { used: formatMoney(month.used), fee: formatMoney(month.monthly) }))
         if (cost && cost.unpriced.length) titleParts.push(t('billing.unpriced', { models: listJoin(cost.unpriced) }))
         // 上一次改计费方式没存上：标签换成「未保存」，悬停写原因
         const failed = errors[row.id]
@@ -3214,6 +3213,7 @@ window.__ModuleLoader__.load({
                         label: providerLabel(row.id, aliases),
                         billing: (costs && costs.byProvider[row.id] && costs.byProvider[row.id].billing) || billingOf(row.id, props.billingSettings),
                         listValue: costs && costs.byProvider[row.id] ? costs.byProvider[row.id].value : 0,
+                        planMonth: props.planMonths ? ownValue(props.planMonths, row.id) : null,
                         onClose: () => setBillingOpen(null),
                         onSave: (entry) => {
                           setBillingOpen(null)
@@ -4537,6 +4537,17 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
         [daily, rangeWin.startKey, rangeWin.endKey, billingSettings, todayKey, priceOptions],
       )
       const todayCosts = useMemo(() => computeCosts(daily, todayKey, todayKey, billingSettings, todayKey, priceOptions), [daily, billingSettings, todayKey, priceOptions])
+      // 包月：这一个订阅月（开始日期的几号续费；没填按自然月）里用量换算成的钱，不跟顶部范围走
+      const planMonths = useMemo(() => {
+        const months = {}
+        for (const [id, entry] of Object.entries(billingSettings)) {
+          if (!entry || entry.mode !== 'plan') continue
+          const startKey = planCycleStart(entry.since, todayKey)
+          const cost = computeCosts(daily, startKey, todayKey, { [id]: entry }, todayKey, priceOptions).byProvider[id]
+          months[id] = { startKey, used: cost && cost.spend !== null ? cost.spend : 0, monthly: toNumber(entry.monthly) }
+        }
+        return months
+      }, [daily, billingSettings, todayKey, priceOptions])
       const saveBilling = useCallback(
         async (id, entry) => {
           setBillingEdits((current) => ({ ...current, [id]: entry }))
@@ -4725,6 +4736,7 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
               todayCosts,
               billingSettings,
               billingErrors,
+              planMonths,
               onBilling: saveBilling,
             }),
           ),

@@ -506,7 +506,7 @@ const modelSeriesHelpers = () =>
       'function monthLabel(date) { return localDateKey(date).slice(0, 7) }',
     ],
     functions: [
-      'buildModelSeries', 'modelBucketFrames', 'modelBucketKeyOf', 'bucketTitle', 'indexDaily',
+      'buildModelSeries', 'modelBucketFrames', 'modelBucketKeyOf', 'bucketTitle', 'indexDaily', 'modelBaseId',
       'parseDateKey', 'localDateKey', 'startOfDay', 'startOfWeek', 'addDays', 'toNumber', 'niceScale', 'niceStep',
       'modelFamily', 'familyLabel', 'prettyModelName',
     ],
@@ -793,7 +793,7 @@ const costHelpers = (locale = withLocale) =>
     ...locale,
     constants: ['OFFICIAL_PRICES', 'CN_HOLIDAYS', 'OFFICIAL_PROVIDERS', 'BILLING_MODES', 'holidayKeys'],
     functions: [
-      'computeCosts', 'officialRate', 'isPeakHour', 'priceFamily', 'holidaySet', 'billingOf', 'daysInMonth', 'validDateKey',
+      'computeCosts', 'officialRate', 'isPeakHour', 'priceFamily', 'modelBaseId', 'planCycleStart', 'holidaySet', 'billingOf', 'daysInMonth', 'validDateKey',
       'moneyParts', 'formatMoney', 'bigNumberParts', 'unitGap', 'indexDaily', 'parseDateKey', 'localDateKey', 'addDays', 'toNumber',
     ],
   })
@@ -802,13 +802,24 @@ const bjHour = (year, month, day, hour) => Date.UTC(year, month - 1, day, hour -
 const near = (actual, expected, label) => assert.ok(Math.abs(actual - expected) < 1e-9, `${label}: ${actual} ≠ ${expected}`)
 const rateOf = (rate) => (rate ? { hit: rate.hit, miss: rate.miss, output: rate.output, peak: rate.peak } : rate)
 
-test('priceFamily：DeepSeek 的 Flash / Pro 各种写法归到两个价格系列；其他厂商没有内置价', () => {
-  const { priceFamily } = costHelpers()
-  for (const id of ['deepseek-flash', 'deepseek-v4-1-flash', 'deepseek-v4-1-flash-economy', 'deepseek-v4-flash', 'deepseek-v4-flash-vision']) assert.equal(priceFamily(id), 'flash', id)
+test('priceFamily / modelBaseId：DeepSeek 的 Flash / Pro / 经济版各归一档；Ollama 云端去掉标签，本地保留参数量；其他厂商没有内置价', () => {
+  const { priceFamily, modelBaseId } = costHelpers()
+  for (const id of ['deepseek-flash', 'deepseek-v4-1-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision', 'deepseek-v4-flash:cloud', 'deepseek-v4-flash:q4-k-m']) assert.equal(priceFamily(id), 'flash', id)
+  assert.equal(priceFamily('deepseek-v4-1-flash-economy'), 'flash-economy', '方舟经济版单独一档')
   assert.equal(priceFamily('deepseek-v4-pro'), 'pro')
-  assert.equal(priceFamily('deepseek-chat'), '')
-  assert.equal(priceFamily('claude-sonnet-5-5'), '')
-  assert.equal(priceFamily(undefined), '')
+  assert.equal(priceFamily('deepseek-v4-pro:cloud'), 'pro')
+  for (const id of ['deepseek-chat', 'deepseek-r1:14b', 'deepseek-r1-14b', 'claude-sonnet-5-5', undefined]) assert.equal(priceFamily(id), '', String(id))
+  // Ollama 的「名字:标签」
+  assert.equal(modelBaseId('deepseek-v4-flash:cloud'), 'deepseek-v4-flash', '云端就是官方那个模型')
+  assert.equal(modelBaseId('deepseek-v3-1:671b-cloud'), 'deepseek-v3-1')
+  assert.equal(modelBaseId('deepseek-r1:14b'), 'deepseek-r1-14b', '本地的蒸馏小模型：参数量留下')
+  assert.equal(modelBaseId('deepseek-r1:1-5b'), 'deepseek-r1-1.5b')
+  assert.equal(modelBaseId('qwen3:8b-q4-k-m'), 'qwen3-8b', '参数量留下、量化去掉')
+  assert.equal(modelBaseId('qwen3:latest'), 'qwen3')
+  assert.equal(modelBaseId('llama3:fp16'), 'llama3')
+  assert.equal(modelBaseId('deepseek-flash'), 'deepseek-flash', '没有标签的原样')
+  assert.equal(modelBaseId(':odd'), ':odd')
+  assert.equal(modelBaseId(undefined), '')
 })
 
 test('isPeakHour：北京时间工作日 9–12、14–18 点；周末、法定节假日全天空闲', () => {
@@ -851,9 +862,18 @@ test('officialRate：按调用时间选价格行；8 月 17 日前没有已知�
   assert.equal(officialRate('broken', 0, table), null)
   // DeepSeek 的 Flash / Pro 只认内置价表，不退回价格表里别家转售的旧价
   assert.equal(officialRate('deepseek-v4-pro', bjHour(2026, 8, 1, 10), { 'deepseek-v4-pro': [1, 1, 1, 1] }), null)
+  // flat：不分峰谷，一律按空闲时段价（不是按官方价计费的供应商用这个）
+  assert.deepEqual(rateOf(officialRate('deepseek-flash', bjHour(2026, 11, 6, 10), {}, true)), { hit: 0.02, miss: 1, output: 4, peak: false })
+  assert.equal(officialRate('deepseek-flash', bjHour(2026, 11, 6, 10), {}, true).timed, false, '统一价不算进高峰占比')
+  assert.deepEqual(rateOf(officialRate('deepseek-v4-pro', bjHour(2026, 11, 6, 10), {}, true)), { hit: 0.15, miss: 4.5, output: 13.5, peak: false })
+  // 方舟经济版：比 Flash 便宜两成，高峰翻倍
+  assert.deepEqual(rateOf(officialRate('deepseek-v4-1-flash-economy', bjHour(2026, 11, 6, 10))), { hit: 0.032, miss: 1.6, output: 6.4, peak: true })
+  assert.deepEqual(rateOf(officialRate('deepseek-v4-1-flash-economy', bjHour(2026, 11, 6, 10), {}, true)), { hit: 0.016, miss: 0.8, output: 3.2, peak: false })
+  // 美元价格表本来就不分峰谷：flat 不影响
+  assert.deepEqual(officialRate('claude-sonnet-5-5', 0, table, true), officialRate('claude-sonnet-5-5', 0, table))
 })
 
-test('computeCosts：官方价折算与四种计费方式；包月按天摊；未设置的不算进花费；不认识的写法当没设置', () => {
+test('computeCosts：官方价折算与四种计费方式；包月 = 用量换算成钱；未设置的不算进花费；不认识的写法当没设置', () => {
   const { computeCosts } = costHelpers()
   const peak = bjHour(2026, 11, 6, 10)
   const off = bjHour(2026, 11, 6, 21)
@@ -866,7 +886,7 @@ test('computeCosts：官方价折算与四种计费方式；包月按天摊；�
         [off, 'relay', 'deepseek-v4-1-flash', 'p2', M, 0, 0, 0],
         [off, 'relay', 'claude-x', 'p2', M, 0, 0, 0],
         [off, 'mystery', 'deepseek-v4-1-flash', 'p1', M, 0, 0, 0],
-        [off, 'plan', 'deepseek-v4-1-flash', 'p1', M, 0, 0, 0],
+        [off, 'plan', 'deepseek-v4-1-flash', 'p1', M, 0, 0, M],
         [off, 'work', 'deepseek-v4-1-flash', 'p2', M, 0, 0, 0],
         [off, 'old', 'deepseek-v4-1-flash', 'p2', M, 0, 0, 0],
       ],
@@ -882,31 +902,44 @@ test('computeCosts：官方价折算与四种计费方式；包月按天摊；�
   const day = computeCosts(daily, '2026-11-06', '2026-11-06', settings, '2026-11-06')
   near(day.byProvider['deepseek-official'].spend, 2 + 0.04 + 8, '官方直连（自动识别）：高峰价')
   near(day.byProvider.relay.spend, 0.1, '打折：官方价 1 元 × 0.1；没有官方价的 claude 那条不算')
-  near(day.byProvider.plan.spend, 10, '包月：300 ÷ 11 月 30 天')
+  near(day.byProvider.plan.spend, 1 + 4, '包月：用量按统一价换算（输入 1 元 + 输出 4 元），不是月费')
   near(day.byProvider.work.spend, 0, '不计入')
   assert.equal(day.byProvider.mystery.spend, null, '未设置：不知道花了多少')
   assert.equal(day.byProvider.old.mode, 'unset', '不认识的写法')
   assert.equal(day.byProvider.old.spend, null)
   assert.deepEqual(day.unset, ['mystery', 'old'])
-  near(day.spend, 10.04 + 0.1 + 10, '花费合计不含未设置的')
-  near(day.value, 10.04 + 1 + 1 + 1 + 1 + 1, '官方价折算：所有有官方价的用量')
+  near(day.spend, 10.04 + 0.1 + 5, '花费合计不含未设置的')
+  near(day.value, 10.04 + 1 + 1 + 5 + 1 + 1, '官方价折算：所有有官方价的用量')
   near(day.peakValue, 10.04, '高峰部分')
   // 「没有官方价、没算进花费」只算花费要按官方价算的那部分：打折那家的 claude-x
   assert.equal(day.unpricedTokens, M, '只有打折那家的 claude-x')
   assert.deepEqual(day.byProvider.relay.unpriced, ['claude-x'])
-  near(day.byProject.p1, 10.04 + 10, '包月费摊到当天有用量的项目')
+  near(day.byProject.p1, 10.04 + 5, '包月的钱直接算在用它的项目上')
   near(day.byProject.p2, 0.1, 'p2')
-
-  // 累计：包月从 11-01 摊到今天（6 天）
-  const all = computeCosts(daily, '', '2026-11-06', settings, '2026-11-06')
-  near(all.byProvider.plan.spend, 60, '包月 6 天')
-  // 没填 since 时从第一次有用量那天起
-  const fromFirstUse = computeCosts(daily, '', '2026-11-06', { plan: { mode: 'plan', monthly: 300 } }, '2026-11-06')
-  near(fromFirstUse.byProvider.plan.spend, 10, '只有 11-06 一天')
+  // 累计：包月只看用量，没有用量的日子不收钱
+  const all = computeCosts(daily, '', '2026-11-08', settings, '2026-11-08')
+  near(all.byProvider.plan.spend, 5, '只有 11-06 有用量')
   // 空数据不出 NaN
   const empty = computeCosts([], '', '2026-11-06', {}, '2026-11-06')
   assert.equal(empty.spend, 0)
   assert.equal(empty.value, 0)
+})
+
+test('computeCosts：只有计费方式是「官方价」的才分峰谷；同一个高峰小时，中转站、包月、不计入、未设置都按统一价（空闲价）', () => {
+  const { computeCosts } = costHelpers()
+  const peak = bjHour(2026, 11, 6, 10)
+  const M = 1e6
+  const ids = ['deepseek-official', 'relay', 'plan', 'work', 'mystery', 'manual']
+  const daily = [{ date: '2026-11-06', slots: ids.map((id) => [peak, id, 'deepseek-v4-1-flash', 'p', M, 0, 0, 0]) }]
+  const settings = { relay: { mode: 'multiplier', factor: 1 }, plan: { mode: 'plan', monthly: 199 }, work: { mode: 'free' }, manual: { mode: 'official' } }
+  const result = computeCosts(daily, '', '2026-11-06', settings, '2026-11-06')
+  near(result.byProvider['deepseek-official'].value, 2, '官方直连：高峰价')
+  near(result.byProvider.manual.value, 2, '手动设成官方价的也按高峰价')
+  for (const id of ['relay', 'plan', 'work', 'mystery']) near(result.byProvider[id].value, 1, `${id}：统一价`)
+  near(result.byProvider.relay.spend, 1)
+  near(result.byProvider.plan.spend, 1)
+  near(result.peakBase, 4, '只有两家官方价进高峰占比的分母')
+  near(result.peakValue, 4)
 })
 
 test('moneyParts / formatMoney：100 元以下两位小数、以上一位，千分位；一万起写万；极小值写 <¥0.01', () => {
@@ -930,7 +963,7 @@ test('moneyParts / formatMoney：100 元以下两位小数、以上一位，千�
   assert.equal(english(2.5e6), '¥2.5M')
 })
 
-test('computeCosts：包月、不计入的用量不算「没有官方价」；官方价、打折的才算', () => {
+test('computeCosts：不计入的用量不算「没有官方价」；官方价、打折、包月的才算（它们的钱要按官方价换算）', () => {
   const { computeCosts } = costHelpers()
   const M = 1e6
   const daily = [{ date: '2026-11-06', slots: [[0, 'a', 'mystery', 'p', M, 0, 0, M], [0, 'b', 'mystery', 'p', M, 0, 0, M], [0, 'c', 'mystery', 'p', M, 0, 0, M], [0, 'd', 'mystery', 'p', M, 0, 0, M], [0, 'f', 'mystery', 'p', M, 0, 0, M]] }]
@@ -941,43 +974,39 @@ test('computeCosts：包月、不计入的用量不算「没有官方价」；�
     d: { mode: 'official' },
   }
   const result = computeCosts(daily, '', '2026-11-06', settings, '2026-11-06', { table: {} })
-  assert.equal(result.unpricedTokens, 4 * M, '只有打折（a）和官方价（d）的')
-  assert.deepEqual(['a', 'b', 'c', 'd', 'f'].map((id) => result.byProvider[id].unpriced.length), [1, 0, 0, 1, 1], '未设置（f）的格子显示官方价，悬停也要写出来')
-  near(result.byProvider.b.spend, 10, '月费')
+  assert.equal(result.unpricedTokens, 6 * M, '打折（a）、包月（b）、官方价（d）')
+  assert.deepEqual(['a', 'b', 'c', 'd', 'f'].map((id) => result.byProvider[id].unpriced.length), [1, 1, 0, 1, 1], '未设置（f）的格子显示官方价，悬停也要写出来')
+  near(result.byProvider.b.spend, 0, '没有官方价的用量换算不了，包月这家是 0')
 })
 
-test('computeCosts：包月没填开始日期、又从没用过时不收；范围里没有用量也照样有一行（能看到、能改）', () => {
-  const { computeCosts } = costHelpers()
-  const daily = [{ date: '2026-11-02', slots: [[0, 'other', 'deepseek-v4-1-flash', 'p', 1e6, 0, 0, 0]] }, { date: '2026-10-05', slots: [[0, 'old-plan', 'deepseek-v4-1-flash', 'p', 1e6, 0, 0, 0]] }]
-  const settings = { ghost: { mode: 'plan', monthly: 300 }, 'old-plan': { mode: 'plan', monthly: 310 } }
-  for (const [start, end] of [['2026-11-02', '2026-11-08'], ['', '2026-11-08'], ['2026-11-01', '2026-11-08']]) {
-    const result = computeCosts(daily, start, end, settings, '2026-11-08')
-    assert.equal(result.byProvider.ghost, undefined, `从没用过、没有开始日期：不收（${start || 'all'}）`)
-  }
-  // 只在范围之前用过：范围内照样收月费，这一家也有一行（没有模型）
-  const week = computeCosts(daily, '2026-11-02', '2026-11-08', settings, '2026-11-08')
-  near(week.byProvider['old-plan'].spend, 7 * 310 / 30, '11 月 7 天')
-  assert.deepEqual(week.byProvider['old-plan'].models, [])
-  // 开始日期在范围之后：不收
-  const later = computeCosts(daily, '2026-11-02', '2026-11-08', { ghost: { mode: 'plan', monthly: 300, since: '2026-11-20' } }, '2026-11-08')
-  assert.equal(later.byProvider.ghost, undefined)
-  // 不存在的开始日期当没填（从第一次用起）
-  const bad = computeCosts(daily, '', '2026-11-08', { 'old-plan': { mode: 'plan', monthly: 310, since: '2026-02-31' } }, '2026-11-08')
-  near(bad.byProvider['old-plan'].spend, 27 * 310 / 31 + 8 * 310 / 30, '10-05 起')
+test('planCycleStart：开始日期是几号，每个月就从几号算起（那个月没有这一天取月末）；没填按自然月；还没开始时返回开始日期', () => {
+  const { planCycleStart } = costHelpers()
+  assert.equal(planCycleStart('', '2026-11-10'), '2026-11-01', '没填：自然月')
+  assert.equal(planCycleStart(undefined, '2026-11-10'), '2026-11-01')
+  assert.equal(planCycleStart('2026-02-31', '2026-11-10'), '2026-11-01', '不存在的日子当没填')
+  assert.equal(planCycleStart('2026-10-20', '2026-11-10'), '2026-10-20', '10-20 起：本订阅月从 10-20 开始')
+  assert.equal(planCycleStart('2026-10-20', '2026-11-20'), '2026-11-20', '续费当天就是新的一个月')
+  assert.equal(planCycleStart('2026-10-20', '2026-11-25'), '2026-11-20')
+  assert.equal(planCycleStart('2026-10-20', '2026-10-20'), '2026-10-20', '第一天')
+  assert.equal(planCycleStart('2026-10-31', '2026-11-30'), '2026-11-30', '11 月没有 31 号：取月末')
+  assert.equal(planCycleStart('2026-10-31', '2026-11-29'), '2026-10-31')
+  assert.equal(planCycleStart('2026-01-31', '2026-03-01'), '2026-02-28', '2 月取 28 号')
+  assert.equal(planCycleStart('2025-12-15', '2026-01-10'), '2025-12-15', '跨年')
+  assert.equal(planCycleStart('2026-12-01', '2026-11-10'), '2026-12-01', '还没开始')
+  assert.equal(planCycleStart('2026-10-20', 'nope'), '')
 })
 
-test('computeCosts：包月费按官方价比例摊到项目；没有官方价的项目不分（那天全都没有官方价时按 token 比例）', () => {
+test('computeCosts：包月的钱就是各项目自己的用量换算，没有官方价的用量记 0', () => {
   const { computeCosts } = costHelpers()
   const table = { priced: [1, 1, 1, 1] }
   const settings = { plan: { mode: 'plan', monthly: 300, since: '2026-11-01' } }
-  const mixed = [{ date: '2026-11-06', slots: [[0, 'plan', 'priced', 'A', 1e6, 0, 0, 0], [0, 'plan', 'mystery', 'B', 1e6, 0, 0, 0]] }]
+  const hour = bjHour(2026, 11, 6, 10) // 高峰时段：包月照样按统一价
+  const mixed = [{ date: '2026-11-06', slots: [[hour, 'plan', 'priced', 'A', 1e6, 0, 0, 0], [hour, 'plan', 'mystery', 'B', 1e6, 0, 0, 0], [hour, 'plan', 'deepseek-v4-1-flash-economy', 'C', 1e6, 0, 0, 0]] }]
   const one = computeCosts(mixed, '2026-11-06', '2026-11-06', settings, '2026-11-06', { table, usdCny: 7 })
-  near(one.byProject.A, 10, 'A 有官方价，月费全给它')
-  assert.equal(one.byProject.B, undefined)
-  const unpriced = [{ date: '2026-11-06', slots: [[0, 'plan', 'mystery', 'A', 3e6, 0, 0, 0], [0, 'plan', 'mystery', 'B', 1e6, 0, 0, 0]] }]
-  const two = computeCosts(unpriced, '2026-11-06', '2026-11-06', settings, '2026-11-06', { table, usdCny: 7 })
-  near(two.byProject.A, 7.5, '全都没有官方价：按 token 3 : 1')
-  near(two.byProject.B, 2.5, 'B')
+  near(one.byProject.A, 7, 'A：1 美元 × 7')
+  assert.equal(one.byProject.B, 0, 'B 没有官方价：换算不了，记 0（和官方价、打折一样）')
+  near(one.byProject.C, 0.8, 'C：方舟经济版统一价 0.8 元')
+  near(one.byProvider.plan.spend, 7.8)
 })
 
 test('computeCosts：用量全部来自未设置 / 不计入的项目不出现在 byProject（页面写「—」）', () => {
@@ -1102,16 +1131,6 @@ test('tickPlan：最多 12 个刻度；按月超过一年时落在日历月上�
   assert.equal(weekly[weekly.length - 1].shown, true, '按周：最后一个总在')
   assert.ok(weekly.filter((plan) => plan.shown).length <= 12)
   assert.ok(weekly.some((plan) => plan.shown && plan.withYear))
-})
-
-test('deriveProviders：范围内有月费、没有用量的包月供应商排在最后单独一行，不占前 6 的名额', () => {
-  const { deriveProviders } = loadClientHelpers({ functions: ['toNumber', 'deriveProviders', 'cacheHitRate', 'addUsage', 'emptyUsage'] })
-  const byProvider = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [`p${index}`, 100 - index]))
-  const data = deriveProviders(byProvider, {}, ['plan-x', 'p0'])
-  assert.deepEqual(data.rows.map((row) => row.id), ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', '__other', 'plan-x'])
-  assert.equal(data.rows[7].tokens, 0)
-  assert.equal(data.rows[7].hitRate, null)
-  assert.equal(data.total, Object.values(byProvider).reduce((sum, value) => sum + value, 0), '合计不变')
 })
 
 test('pieSlices：从 12 点钟顺时针排，占比之和 = 1，角度首尾相接；总量为 0（或没有数据）时没有扇区；脏值当 0', () => {

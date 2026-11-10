@@ -22,7 +22,7 @@ const helpers = loadClientHelpers({
   extraCode: ['const isChineseLocale = () => true'],
   constants: ['OFFICIAL_PRICES', 'CN_HOLIDAYS', 'OFFICIAL_PROVIDERS', 'BILLING_MODES', 'holidayKeys'],
   functions: [
-    'computeCosts', 'officialRate', 'isPeakHour', 'priceFamily', 'holidaySet', 'billingOf', 'daysInMonth', 'validDateKey',
+    'computeCosts', 'officialRate', 'isPeakHour', 'priceFamily', 'modelBaseId', 'holidaySet', 'billingOf', 'daysInMonth', 'validDateKey',
     'indexDaily', 'parseDateKey', 'localDateKey', 'addDays', 'startOfDay', 'toNumber', 'rangeWindow', 'deltaWindows', 'daysBetween', 'startOfWeek',
   ],
 })
@@ -97,9 +97,7 @@ test('fuzz computeCosts：不出 NaN；各家之和 = 合计；没有包月时�
     assert.ok(all.peakValue <= all.peakBase + 1e-9 && all.peakBase <= all.value + 1e-9, `${where} 高峰 ≤ 有峰谷价的 ≤ 全部`)
     const projectSum = Object.values(all.byProject).reduce((sum, value) => sum + value, 0)
     for (const value of Object.values(all.byProject)) assert.ok(finite(value) && value >= 0, `${where} 项目费用`)
-    const hasPlan = Object.values(settings).some((entry) => entry.mode === 'plan')
-    if (hasPlan) assert.ok(projectSum <= all.spend + 1e-6, `${where} 项目之和不超过合计`)
-    else close(projectSum, all.spend, `${where} 没有包月时项目之和 = 合计`)
+    close(projectSum, all.spend, `${where} 项目之和 = 合计（包月的钱也直接算在项目上）`)
     // 相邻两段：[first, mid] + [mid+1, todayKey] = [first, todayKey]
     const first = keys[0]
     const mid = keys[int(rand, keys.length)]
@@ -128,25 +126,22 @@ test('fuzz computeCosts：倍数与汇率是线性的', () => {
   }
 })
 
-test('fuzz computeCosts：整月包月正好等于月费；只包一部分的月份按天数摊', () => {
+test('fuzz computeCosts：包月 = 用量按统一价换算，和设成「打折 ×1」完全一样（不分峰谷）；只有官方价分峰谷', () => {
   const rand = mulberry32(11)
-  for (let scenario = 0; scenario < 120; scenario += 1) {
-    const year = 2026 + int(rand, 3)
-    const month = int(rand, 12)
-    const firstDay = new Date(year, month, 1)
-    const lastDay = new Date(year, month + 1, 0)
-    const monthly = 1 + int(rand, 500)
-    const settings = { plan: { mode: 'plan', monthly, since: localDateKey(addDays(firstDay, -int(rand, 40))) } }
-    const daily = [{ date: localDateKey(firstDay), slots: [[0, 'plan', 'deepseek-flash', '', 1, 0, 0, 0]] }]
-    const todayKey = localDateKey(addDays(lastDay, int(rand, 30)))
-    const full = computeCosts(daily, localDateKey(firstDay), localDateKey(lastDay), settings, todayKey, {})
-    close(full.byProvider.plan.spend, monthly, `${year}-${month + 1} 整月`)
-    const cut = 1 + int(rand, lastDay.getDate() - 1)
-    const part = computeCosts(daily, localDateKey(firstDay), localDateKey(new Date(year, month, cut)), settings, todayKey, {})
-    close(part.byProvider.plan.spend, (monthly * cut) / lastDay.getDate(), `${year}-${month + 1} 前 ${cut} 天`)
+  for (let scenario = 0; scenario < 150; scenario += 1) {
+    const daily = randomDaily(rand)
+    if (!daily.length) continue
+    const todayKey = daily[daily.length - 1].date
+    const options = { table: TABLE, usdCny: 7 }
+    const asPlan = computeCosts(daily, '', todayKey, Object.fromEntries(PROVIDERS.map((id) => [id, { mode: 'plan', monthly: 199 }])), todayKey, options)
+    const asFactor = computeCosts(daily, '', todayKey, Object.fromEntries(PROVIDERS.map((id) => [id, { mode: 'multiplier', factor: 1 }])), todayKey, options)
+    const asOfficial = computeCosts(daily, '', todayKey, Object.fromEntries(PROVIDERS.map((id) => [id, { mode: 'official' }])), todayKey, options)
+    close(asPlan.spend, asFactor.spend, `scenario ${scenario} 包月 = 打折 ×1`)
+    for (const id of PROVIDERS) if (asPlan.byProvider[id]) close(asPlan.byProvider[id].spend, asFactor.byProvider[id].spend, `scenario ${scenario} ${id}`)
+    assert.equal(asPlan.peakBase, 0, `scenario ${scenario} 包月不进高峰占比`)
+    assert.ok(asOfficial.spend >= asPlan.spend - 1e-9, `scenario ${scenario} 官方价（有高峰）不低于统一价`)
   }
 })
-
 test('fuzz rangeWindow / deltaWindows：窗口在今天以内、天数对得上；上一期在本期之前且不更长', () => {
   const rand = mulberry32(3)
   const base = new Date(2026, 0, 1)
