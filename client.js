@@ -3423,7 +3423,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-seg button{appearance:none;position:relative;border:0;background:transparent;color:var(--dps-muted);font-size:12px;line-height:1;padding:7px 12px;border-radius:7px;cursor:pointer;white-space:nowrap;transition:color .15s ease}
 .dps-seg button:hover{color:var(--dps-ink)}
 .dps-seg button[aria-pressed="true"]{color:var(--dps-ink);font-weight:600}
-.dps-kpis{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1.25fr) repeat(4,minmax(0,1fr));gap:12px}
+.dps-kpis{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1.15fr) repeat(4,minmax(0,1fr));gap:12px}
 .dps-kpi{min-width:0;display:flex;flex-direction:column;justify-content:space-between;gap:16px;padding:16px 18px 18px;border:1px solid var(--dps-line);border-radius:var(--dps-radius);background:var(--dps-card)}
 .dps-kpi[data-hero="true"]{border-color:color-mix(in srgb,var(--dps-accent) 30%,var(--dps-line));background:color-mix(in srgb,var(--dps-accent) 5%,var(--dps-card))}
 .dps-kpi-label{display:flex;flex-wrap:wrap;align-items:center;gap:4px 7px;min-width:0;font-size:12.5px;color:var(--dps-muted)}
@@ -3433,12 +3433,18 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-kpi-body{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;min-width:0}
 .dps-kpi-main{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;flex:0 0 auto;max-width:100%}
 .dps-kpi-main > *{flex:0 0 auto}
+.dps-kpi[data-hero="true"] .dps-kpi-main{flex:1 1 auto}
+.dps-kpi[data-hero="true"] .dps-delta{margin-left:auto}
+.dps-kpi-slot{display:inline-grid;justify-items:start;align-items:baseline}
+.dps-kpi-slot > *{grid-area:1 / 1}
+.dps-kpi-ghost{display:flex;align-items:baseline;white-space:nowrap;font-variant-numeric:tabular-nums;visibility:hidden;pointer-events:none}
+.dps-kpi-ghost [data-ghost]::before{content:attr(data-ghost)}
 .dps-kpi-value{display:flex;align-items:baseline;flex-wrap:nowrap;white-space:nowrap;min-width:0;font-variant-numeric:tabular-nums}
 .dps-num{font-size:28px;font-weight:650;line-height:1;letter-spacing:-.02em}
 .dps-num-empty{color:var(--dps-faint);font-weight:500}
 .dps-unit{font-size:13px;font-weight:500;color:var(--dps-muted);margin:0 7px 0 3px}
 .dps-unit:last-child{margin-right:0}
-.dps-kpi[data-hero="true"] .dps-num{font-size:34px}
+.dps-kpi[data-hero="true"] .dps-num{font-size:32px}
 .dps-spark-wrap{position:relative;display:block}
 .dps-spark{width:100%;height:32px;display:block}
 .dps-spark-line{fill:none;stroke:var(--dps-accent);stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
@@ -3454,8 +3460,8 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
 .dps-btn[data-primary="true"]{background:var(--dps-accent);border-color:transparent;color:var(--dps-on-accent);font-weight:600}
 .dps-btn[data-primary="true"]:hover{background:var(--dps-accent);filter:brightness(1.06)}
 .dps-btn:disabled{opacity:.45;cursor:default}
-.dps-delta{display:inline-flex;align-items:center;gap:3px;align-self:center;padding:4px 8px 4px 6px;border-radius:999px;font-size:12px;font-weight:600;line-height:1;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--dps-muted);background:color-mix(in srgb,var(--dps-muted) 12%,transparent)}
-.dps-delta svg{width:12px;height:12px;flex:0 0 auto}
+.dps-delta{display:inline-flex;align-items:center;gap:3px;align-self:center;padding:3px 7px 3px 5px;border-radius:999px;font-size:11.5px;font-weight:600;line-height:1;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--dps-muted);background:color-mix(in srgb,var(--dps-muted) 12%,transparent)}
+.dps-delta svg{width:11px;height:11px;flex:0 0 auto}
 .dps-delta[data-dir="up"]{color:var(--dsw-alias-state-error-primary)}
 .dps-delta[data-dir="down"]{color:var(--dsw-alias-state-success-primary)}
 .dps-delta[data-dir="up"]{background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 12%,transparent)}
@@ -4071,7 +4077,21 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
           h(
             'div',
             { className: 'dps-kpi-main' },
-            h('div', { className: 'dps-kpi-value', 'data-dps-field': 'value' }, h(ValueParts, { parts: props.parts })),
+            props.reserve
+              ? // 数字格按最宽的写法占位（不可见、和数字叠在同一格）：数字滚动时位数和单位在变，
+                // 放不放得下、环比在哪都按最宽的数算，滚到哪一帧都不跳。占位的字由 CSS 画，不进页面文本
+                h(
+                  'div',
+                  { className: 'dps-kpi-slot' },
+                  h('div', { className: 'dps-kpi-value', 'data-dps-field': 'value' }, h(ValueParts, { parts: props.parts })),
+                  h(
+                    'div',
+                    { className: 'dps-kpi-ghost', 'aria-hidden': true },
+                    h('span', { className: 'dps-num', 'data-ghost': props.reserve.value }),
+                    h('span', { className: 'dps-unit', 'data-ghost': props.reserve.unit }),
+                  ),
+                )
+              : h('div', { className: 'dps-kpi-value', 'data-dps-field': 'value' }, h(ValueParts, { parts: props.parts })),
             props.extra || null,
           ),
         ),
@@ -4134,8 +4154,9 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
           label: rangeLabel,
           raw: ready ? summary.tokens : undefined,
           parts: ready ? tokenValue(shownRange) : null,
-          // 环比紧跟在数字右边
+          // 环比贴在这一行的右边，位置不随数字的位数变；最宽的写法：一亿以下是四位整数的「万」，英文是三位整数的 M
           extra: deltaChip,
+          reserve: isChineseLocale() ? { value: '8888.8', unit: '万' } : { value: '888.8', unit: 'M' },
         }),
         // 所选范围的花费（按各家计费方式；未设置的不计入，悬停写出来）
         h(Kpi, {
