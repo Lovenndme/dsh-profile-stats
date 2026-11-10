@@ -3487,12 +3487,12 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-seg button{appearance:none;position:relative;border:0;background:transparent;color:var(--dps-muted);font-size:12px;line-height:1;padding:7px 12px;border-radius:7px;cursor:pointer;white-space:nowrap;transition:color .15s ease}
 .dps-seg button:hover{color:var(--dps-ink)}
 .dps-seg button[aria-pressed="true"]{color:var(--dps-ink);font-weight:600}
-.dps-kpis{display:grid;grid-template-columns:minmax(0,1.8fr) repeat(4,minmax(0,1fr));gap:12px}
+.dps-kpis{display:grid;grid-template-columns:minmax(0,1.2fr) repeat(4,minmax(0,1fr));gap:12px}
 .dps-kpi{min-width:0;display:flex;flex-direction:column;justify-content:space-between;gap:16px;padding:16px 18px 18px;border:1px solid var(--dps-line);border-radius:var(--dps-radius);background:var(--dps-card)}
 .dps-kpi[data-hero="true"]{border-color:color-mix(in srgb,var(--dps-accent) 30%,var(--dps-line));background:color-mix(in srgb,var(--dps-accent) 5%,var(--dps-card))}
 .dps-kpi-label{display:flex;flex-wrap:wrap;align-items:center;gap:4px 7px;min-width:0;font-size:12.5px;color:var(--dps-muted)}
 .dps-kpi-label svg{width:15px;height:15px;flex:0 0 auto}
-.dps-kpi-label span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dps-kpi-label > span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dps-kpi[data-hero="true"] .dps-kpi-label svg{color:var(--dps-accent)}
 .dps-kpi-body{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;min-width:0}
 .dps-kpi-main{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;flex:0 0 auto;max-width:100%}
@@ -3501,11 +3501,14 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-kpi-slot > *{grid-area:1 / 1}
 .dps-kpi-ghost{display:flex;align-items:baseline;white-space:nowrap;font-variant-numeric:tabular-nums;visibility:hidden;pointer-events:none}
 .dps-kpi-ghost [data-ghost]::before{content:attr(data-ghost)}
-.dps-kpi[data-hero="true"]{container:dps-hero / inline-size}
+.dps-kpi[data-hero="true"]{container:dps-hero / inline-size;--dps-trend-w:84px}
+.dps-kpi[data-hero="true"] .dps-kpi-label{flex-wrap:nowrap}
+.dps-kpi[data-hero="true"] .dps-kpi-label > span{flex:0 1 auto;min-width:0}
 .dps-kpi[data-hero="true"] .dps-kpi-body{gap:14px}
-.dps-kpi-dslot{display:flex;align-items:center;align-self:center;min-width:80px}
-.dps-kpi-aside{flex:0 1 120px;min-width:0;margin-left:auto;margin-bottom:3px}
-@container dps-hero (max-width:250px){.dps-kpi-aside{display:none}}
+.dps-kpi-dslot{flex:0 1 var(--dps-trend-w);display:flex;justify-content:center;margin-left:auto;min-width:0}
+.dps-kpi-dslot .dps-delta{margin:-3px 0}
+.dps-kpi-aside{flex:0 1 var(--dps-trend-w);min-width:0;margin-left:auto;margin-bottom:3px}
+@container dps-hero (max-width:170px){.dps-kpi-aside{display:none}}
 .dps-spark-area{fill:color-mix(in srgb,var(--dps-accent) 14%,transparent)}
 .dps-spark-bars{display:flex;align-items:flex-end;justify-content:space-between;gap:3px;height:32px}
 .dps-spark-bar{flex:1 1 0;min-width:0;max-width:20px;border-radius:2px 2px 0 0;background:color-mix(in srgb,var(--dps-accent) 38%,transparent);transition:background-color .12s ease}
@@ -3551,6 +3554,7 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
 .dps-kpis{grid-template-columns:repeat(6,minmax(0,1fr))}
 .dps-kpi{grid-column:span 2}
 .dps-kpi[data-hero="true"],.dps-kpi[data-dps-kpi="cost"]{grid-column:span 3}
+.dps-kpi[data-hero="true"]{--dps-trend-w:128px}
 .dps-grid[data-row="lists"]{grid-template-columns:minmax(0,1fr)}
 .dps-grid{grid-template-columns:minmax(0,1fr)}
 }
@@ -4288,7 +4292,7 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
           'data-hero': props.hero ? 'true' : 'false',
           title: props.title || undefined,
         },
-        h('div', { className: 'dps-kpi-label' }, h(Icon, { name: props.icon }), h('span', null, props.label)),
+        h('div', { className: 'dps-kpi-label' }, h(Icon, { name: props.icon }), h('span', null, props.label), props.badge || null),
         h(
           'div',
           { className: 'dps-kpi-body' },
@@ -4372,9 +4376,9 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
           label: rangeLabel,
           raw: ready ? summary.tokens : undefined,
           parts: ready ? tokenValue(shownRange) : null,
-          // 环比排在数字格后面；数字格按最宽的写法占位，环比的位置不随数字的位数变。最宽的写法：一亿以下是四位整数的「万」，英文是三位整数的 M。
-          // 环比放在固定宽度的槽里：没有环比的范围（本日、累计）槽也留着，右边趋势的宽度和位置不变
-          extra: h('span', { className: 'dps-kpi-dslot' }, deltaChip),
+          // 环比在标签行右边、趋势的正上方（两者同宽、居中对齐）。数字格按最宽的写法占位（一亿以下是四位整数的「万」，
+          // 英文是三位整数的 M）：数字滚动时位数在变，放不放得下趋势按最宽的数算，趋势不跟着伸缩
+          badge: deltaChip ? h('div', { className: 'dps-kpi-dslot' }, deltaChip) : null,
           aside: h(TokenTrend, { trend: ready ? props.trend : null }),
           reserve: isChineseLocale() ? { value: '8888.8', unit: '万' } : { value: '888.8', unit: 'M' },
         }),

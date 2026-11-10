@@ -594,10 +594,11 @@ test('指标卡：数字与环比不被压缩；卡片放不下时环比换到�
   assert.match(source, /\.dps-kpi-main\{[^}]*max-width:100%/)
   assert.match(source, /\.dps-kpi-main > \*\{flex:0 0 auto\}/)
   assert.match(source, /\.dps-delta\{[^}]*white-space:nowrap/)
-  // 环比槽宽度固定（没有环比时也占着），右边的趋势只在剩下的地方伸缩、不压数字和环比；卡片太窄时趋势不画
-  assert.match(source, /\.dps-kpi-dslot\{[^}]*min-width:80px/)
-  assert.match(source, /\.dps-kpi-aside\{[^}]*min-width:0[^}]*margin-left:auto/)
-  assert.match(source, /@container dps-hero \(max-width:250px\)\{\.dps-kpi-aside\{display:none\}\}/)
+  // 第一张卡：环比在标签行右边、和趋势同宽（居中在趋势正上方）；趋势只在剩下的地方伸缩、不压数字；卡片太窄时趋势不画
+  assert.match(source, /\.dps-kpi-dslot\{flex:0 1 var\(--dps-trend-w\)[^}]*justify-content:center[^}]*margin-left:auto/)
+  assert.match(source, /\.dps-kpi-aside\{flex:0 1 var\(--dps-trend-w\);min-width:0[^}]*margin-left:auto/)
+  assert.match(source, /\.dps-kpi\[data-hero="true"\] \.dps-kpi-label\{flex-wrap:nowrap\}/)
+  assert.match(source, /@container dps-hero \(max-width:170px\)\{\.dps-kpi-aside\{display:none\}\}/)
 })
 
 test('tokenTrend：本日最近 7 天日柱、本周最近 4 周周柱（周合计，本周算到今天）、本月每天折线、累计 90 天 7 日均线', () => {
