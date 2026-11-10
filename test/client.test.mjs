@@ -594,9 +594,8 @@ test('formatDelta：一位小数；四位数起不留小数、加千分位（上
   assert.equal(formatDelta(-1234.5), '-1,234%')
 })
 
-test('指标卡：数字与环比不被压缩；卡片放不下时环比换到下一行，不撑出卡片；第一张卡的环比贴在右边', () => {
+test('指标卡：数字与环比不被压缩；卡片放不下时环比换到下一行，不撑出卡片；第一张卡的环比排在按最宽写法占位的数字格后面', () => {
   const source = readClientSource()
-  assert.match(source, /\.dps-kpi\[data-hero="true"\] \.dps-delta\{margin-left:auto\}/)
   assert.match(source, /\.dps-kpi-slot > \*\{grid-area:1 \/ 1\}/)
   assert.match(source, /\.dps-kpi-ghost\{[^}]*visibility:hidden/)
   assert.match(source, /\.dps-kpi-main\{[^}]*flex:0 0 auto/)

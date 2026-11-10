@@ -3433,8 +3433,6 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-kpi-body{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;min-width:0}
 .dps-kpi-main{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;flex:0 0 auto;max-width:100%}
 .dps-kpi-main > *{flex:0 0 auto}
-.dps-kpi[data-hero="true"] .dps-kpi-main{flex:1 1 auto}
-.dps-kpi[data-hero="true"] .dps-delta{margin-left:auto}
 .dps-kpi-slot{display:inline-grid;justify-items:start;align-items:baseline}
 .dps-kpi-slot > *{grid-area:1 / 1}
 .dps-kpi-ghost{display:flex;align-items:baseline;white-space:nowrap;font-variant-numeric:tabular-nums;visibility:hidden;pointer-events:none}
@@ -4154,7 +4152,7 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
           label: rangeLabel,
           raw: ready ? summary.tokens : undefined,
           parts: ready ? tokenValue(shownRange) : null,
-          // 环比贴在这一行的右边，位置不随数字的位数变；最宽的写法：一亿以下是四位整数的「万」，英文是三位整数的 M
+          // 环比排在数字格后面；数字格按最宽的写法占位，环比的位置不随数字的位数变。最宽的写法：一亿以下是四位整数的「万」，英文是三位整数的 M
           extra: deltaChip,
           reserve: isChineseLocale() ? { value: '8888.8', unit: '万' } : { value: '888.8', unit: 'M' },
         }),
