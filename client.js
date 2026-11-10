@@ -37,7 +37,6 @@ window.__ModuleLoader__.load({
 
     const EN = {
       'panel.title': 'Profile',
-      'stat.today': 'Tokens today',
       'stat.longestTurn': 'Longest task',
       'stat.longestStreak': 'Longest streak',
       'stat.currentStreak': 'Current streak',
@@ -157,7 +156,6 @@ window.__ModuleLoader__.load({
 
     const ZH = {
       'panel.title': '个人主页',
-      'stat.today': '今日 Token 用量',
       'stat.longestTurn': '最长任务用时',
       'stat.longestStreak': '最长连续天数',
       'stat.currentStreak': '当前连续天数',
@@ -1061,14 +1059,10 @@ window.__ModuleLoader__.load({
     }
 
     /** 指标卡里不跟范围走的几个数。 */
-    function deriveKpis(snapshot, today) {
+    function deriveKpis(snapshot) {
       const totals = (snapshot && snapshot.totals) || {}
-      const byDate = indexDaily(snapshot && snapshot.daily)
-      const todayKey = localDateKey(today)
-      const todayEntry = byDate.get(todayKey)
       return {
         tokens: toNumber(totals.tokens),
-        today: todayEntry ? toNumber(todayEntry.tokens) : 0,
         longestTurnMs: toNumber(totals.longestTurnMs),
         longestStreak: toNumber(totals.longestStreak),
         currentStreak: toNumber(totals.currentStreak),
@@ -1265,7 +1259,6 @@ window.__ModuleLoader__.load({
     /** 小图标集（内联 SVG，currentColor 描边，随主题走）。 */
     const ICON_PATHS = {
       tokens: 'M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zM4.5 7.7L12 12l7.5-4.3M12 12v8.6',
-      today: 'M4 19V11m5.3 8V6m5.4 13v-7M20 19V9',
       clock: 'M12 7v5l3 2M12 3a9 9 0 100 18 9 9 0 000-18z',
       calendar: 'M4 7h16v13H4zM8 3v4m8-4v4M4 11h16',
       flame: 'M12 21c3.9 0 6-2.4 6-5.4 0-4.2-4.2-5.6-3.3-10.6-2.6.8-4.2 3.1-4.2 5 0 1.1.4 1.9.4 2.7 0 1.1-.8 1.8-1.7 1.8-1 0-1.9-.9-1.9-2.2-1 1.4-1.3 2.9-1.3 4.2C6 18.6 8.1 21 12 21z',
@@ -3423,7 +3416,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-seg button{appearance:none;position:relative;border:0;background:transparent;color:var(--dps-muted);font-size:12px;line-height:1;padding:7px 12px;border-radius:7px;cursor:pointer;white-space:nowrap;transition:color .15s ease}
 .dps-seg button:hover{color:var(--dps-ink)}
 .dps-seg button[aria-pressed="true"]{color:var(--dps-ink);font-weight:600}
-.dps-kpis{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1.15fr) repeat(4,minmax(0,1fr));gap:12px}
+.dps-kpis{display:grid;grid-template-columns:minmax(0,1.15fr) repeat(4,minmax(0,1fr));gap:12px}
 .dps-kpi{min-width:0;display:flex;flex-direction:column;justify-content:space-between;gap:16px;padding:16px 18px 18px;border:1px solid var(--dps-line);border-radius:var(--dps-radius);background:var(--dps-card)}
 .dps-kpi[data-hero="true"]{border-color:color-mix(in srgb,var(--dps-accent) 30%,var(--dps-line));background:color-mix(in srgb,var(--dps-accent) 5%,var(--dps-card))}
 .dps-kpi-label{display:flex;flex-wrap:wrap;align-items:center;gap:4px 7px;min-width:0;font-size:12.5px;color:var(--dps-muted)}
@@ -3474,12 +3467,13 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
 .dps-actions{flex:1 1 100%;margin-left:0;justify-content:flex-start}
 }
 @container dps (max-width:1040px){
-.dps-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
+.dps-kpis{grid-template-columns:repeat(6,minmax(0,1fr))}
+.dps-kpi{grid-column:span 2}
+.dps-kpi[data-hero="true"],.dps-kpi[data-dps-kpi="cost"]{grid-column:span 3}
 .dps-grid[data-row="lists"]{grid-template-columns:minmax(0,1fr)}
 .dps-grid{grid-template-columns:minmax(0,1fr)}
 }
 @container dps (max-width:720px){
-.dps-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
 .dps-grid[data-row="lists"]{grid-template-columns:minmax(0,1fr)}
 .dps-num{font-size:24px}
 .dps-kpi[data-hero="true"] .dps-num{font-size:30px}
@@ -4104,7 +4098,6 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
       const delta = props.delta === undefined ? null : props.delta
       // 首次拿到数据时从 0 计数到目标值，之后的变化做短过渡；未就绪时目标为 0（显示「—」）
       const shownRange = useTween(ready ? summary.tokens : 0, 900)
-      const shownToday = useTween(ready ? k.today : 0, 900)
       const shownTurn = useTween(ready ? k.longestTurnMs : 0, 900)
       const shownLongest = useTween(ready ? k.longestStreak : 0, 700)
       const shownCurrent = useTween(ready ? k.currentStreak : 0, 700)
@@ -4165,7 +4158,6 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
           parts: ready && costKnown ? moneyParts(shownCost) : null,
           title: costHints.join('\n'),
         }),
-        h(Kpi, { id: 'today', icon: 'today', label: t('stat.today'), raw: ready ? k.today : undefined, parts: ready ? tokenValue(shownToday) : null }),
         h(Kpi, {
           id: 'longestTurn',
           icon: 'clock',
@@ -4292,7 +4284,7 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
 
       const today = startOfDay(new Date())
       const todayKey = localDateKey(today)
-      const kpis = useMemo(() => deriveKpis(snapshot, today), [snapshot, todayKey])
+      const kpis = useMemo(() => deriveKpis(snapshot), [snapshot])
 
       // —— 时间范围：汇总卡都从日明细重算，宿主算好的全局 totals 只留给连续天数等全局指标 ——
       const rangeWin = useMemo(() => rangeWindow(range, todayKey, custom), [range, todayKey, custom])

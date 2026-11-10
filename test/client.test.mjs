@@ -330,32 +330,23 @@ test('modelBucketFrames：按日 7 个、按周 4 个、按月 6 个桶，连续
   assert.equal(modelBucketKeyOf(wednesday, 'day'), '2026-03-18')
 })
 
-test('deriveKpis：不跟范围走的几个指标（今日用量、最长任务、连续天数）', () => {
-  const { deriveKpis, localDateKey, addDays } = loadClientHelpers({
-    functions: ['toNumber', 'deriveKpis', 'indexDaily', 'parseDateKey', 'localDateKey', 'addDays'],
-  })
-  const today = new Date(2026, 10, 6, 12)
-  const todayKey = localDateKey(today)
-  const yesterdayKey = localDateKey(addDays(today, -1))
+test('deriveKpis：不跟范围走的几个指标（累计总量、最长任务、连续天数）；今天的用量看「本日」范围，不单独算', () => {
+  const { deriveKpis } = loadClientHelpers({ functions: ['toNumber', 'deriveKpis'] })
   const snapshot = {
     totals: { tokens: 1234, longestTurnMs: 60000, longestStreak: 3, currentStreak: 2 },
-    daily: [
-      { date: todayKey, tokens: 42 },
-      { date: yesterdayKey, tokens: 7 },
-      { date: 'not-a-date', tokens: 999 },
-    ],
+    daily: [{ date: '2026-11-06', tokens: 42 }],
   }
-  const kpis = deriveKpis(snapshot, today)
+  const kpis = deriveKpis(snapshot)
   assert.equal(kpis.tokens, 1234)
-  assert.equal(kpis.today, 42)
   assert.equal(kpis.longestTurnMs, 60000)
   assert.equal(kpis.longestStreak, 3)
   assert.equal(kpis.currentStreak, 2)
+  assert.equal('today' in kpis, false)
   assert.equal('spark' in kpis, false)
 
-  const empty = deriveKpis({}, today)
+  const empty = deriveKpis({})
   assert.equal(empty.tokens, 0)
-  assert.equal(empty.today, 0)
+  assert.equal(empty.currentStreak, 0)
 })
 
 const providerHelpers = () =>
