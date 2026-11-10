@@ -74,7 +74,6 @@ window.__ModuleLoader__.load({
       'stat.tokens': 'Total tokens',
       'stat.cost': '{range} spend',
       'stat.totalCost': 'Total spend',
-      'stat.peakShare': 'peak {value}',
       'cost.hintUnset': '{count} provider(s) without a billing method are not included',
       'cost.hintUnpriced': 'Usage without a known list price is not included',
       'cost.hintPeak': 'For models with peak pricing (DeepSeek), the share of the list-price value used in peak hours (Beijing time, weekdays 9–12 and 14–18)',
@@ -198,7 +197,6 @@ window.__ModuleLoader__.load({
       'stat.tokens': '累计 Token 数',
       'stat.cost': '{range}花费',
       'stat.totalCost': '累计花费',
-      'stat.peakShare': '高峰 {value}',
       'cost.hintUnset': '另有 {count} 家未设置计费方式，未计入',
       'cost.hintUnpriced': '部分用量没有已知的官方价，未计入',
       'cost.hintPeak': '有高峰 / 空闲时段的模型（DeepSeek）按官方价折算，高峰时段（北京时间工作日 9–12、14–18 点）的占比',
@@ -3480,11 +3478,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-spark-area{fill:color-mix(in srgb,var(--dps-accent) 14%,transparent)}
 .dps-spark-line{fill:none;stroke:var(--dps-accent);stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round;vector-effect:non-scaling-stroke}
 .dps-spark-end{position:absolute;width:8px;height:8px;border-radius:50%;background:var(--dps-accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--dps-accent) 5%,var(--dps-card));transform:translate(-50%,-50%);pointer-events:none}
-.dps-spark-bars{display:flex;align-items:flex-end;gap:2px;height:32px}
-.dps-spark-bars[data-dense="true"]{gap:1px}
-.dps-spark-bar{flex:1 1 0;min-width:0;max-width:24px;border-radius:2px 2px 0 0;background:color-mix(in srgb,var(--dps-accent) 42%,transparent);transition:background-color .12s ease}
-.dps-spark-bar[data-today="true"],.dps-spark-bar[data-active="true"]{background:var(--dps-accent)}
-.dps-spark-bars[data-hovering="true"] .dps-spark-bar[data-today="true"]:not([data-active="true"]){background:color-mix(in srgb,var(--dps-accent) 42%,transparent)}
+
 .dps-kpi-sub{font-size:12px;color:var(--dps-muted);white-space:nowrap;font-variant-numeric:tabular-nums}
 .dps-kpi-badge{margin-left:auto;flex:0 0 auto;font-size:11.5px;color:var(--dps-muted);white-space:nowrap;font-variant-numeric:tabular-nums}
 .dps-unit.dps-unit-pre{margin:0 2px 0 0}
@@ -4098,16 +4092,17 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
     /* -------------------------------------------------------------- 指标卡 */
 
     /**
-     * 指标卡里的趋势，按范围选画法：
-     *   - 近 7 / 30 天（mode = 'bars'）：每天的实际用量，一天一根小柱，今天那根用强调色；
-     *   - 近 90 天 / 累计（mode = 'average'）：7 日移动平均的面积线。天数多时日用量毛刺很大
-     *     （单日峰值可以是日常的 5–6 倍），画柱会把其余天压成一条线，所以只画趋势。
+     * 指标卡里的趋势，都是面积线，按范围选画什么：
+     *   - 一个月以内（mode = 'daily'）：每天的实际用量，一天一个点；
+     *   - 累计 / 更长的自定义范围（mode = 'average'）：7 日移动平均。
+     * 不画柱：一天用量特别大时，柱子会把其余天压成一排看不见的细条，本周只有两三天时又是两三块大方块；
+     * 线条在这两种情况下都还读得出走势。末端的圆点标最后一天（悬停时标悬停的那天）。
      * 悬停显示那一天的日期与用量（均线模式写「7 日均值」）。浮层跟随鼠标，和其他图一致。
      */
     function Sparkline(props) {
       const points = props.points || []
-      // daily：画每天的实际用量（柱子；放不下柱子时画折线）；否则画 7 日均线
-      const daily = props.mode === 'bars'
+      // daily：画每天的实际用量；否则画 7 日均线
+      const daily = props.mode === 'daily'
       const average =
         Array.isArray(props.average) && props.average.length === points.length && points.length > 0
           ? props.average
@@ -4117,24 +4112,7 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
       const [hover, setHover] = useState(null)
       const wrapRef = useRef(null)
       const pointer = usePointer()
-      // 卡片窄的时候（宽屏下第一张卡被数字和环比挤到只剩几十像素），每根柱子不到 2.5px，看起来只是一抹颜色：改画折线
-      const [narrow, setNarrow] = useState(false)
-      const bars = daily && !narrow
-      useLayoutEffect(() => {
-        const node = wrapRef.current
-        if (!daily || !node || typeof node.getBoundingClientRect !== 'function') return undefined
-        const measure = () => {
-          const width = node.getBoundingClientRect().width
-          const next = width > 0 && count > 0 && width / count < 2.5
-          setNarrow((current) => (current === next ? current : next))
-        }
-        measure()
-        if (typeof ResizeObserver !== 'function') return undefined
-        const observer = new ResizeObserver(measure)
-        observer.observe(node)
-        return () => observer.disconnect()
-      }, [daily, count, bars])
-      // 只有一天（本日）没有趋势可画：一根撑满的柱子没有意义
+      // 只有一天（本日）没有趋势可画
       if (count === 1) return null
       let max = 0
       for (const value of values) max = Math.max(max, value)
@@ -4145,8 +4123,8 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
         const rect = node.getBoundingClientRect()
         if (!(rect.width > 0)) return null
         const ratio = (clientX - rect.left) / rect.width
-        // 柱子：按等宽的格子取；均线：取离鼠标最近的点（点落在两端与等分处）
-        const index = bars ? Math.floor(ratio * count) : Math.round(ratio * (count - 1))
+        // 取离鼠标最近的点（点落在两端与等分处）
+        const index = Math.round(ratio * (count - 1))
         return Math.max(0, Math.min(count - 1, index))
       }
       const handlers = {
@@ -4173,7 +4151,7 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
         const value = values[hover]
         tip = h(
           Popover,
-          { pointer, anchor: { left: rect.left + ((hover + 0.5) / count) * rect.width, top: rect.top, width: 0, height: rect.height } },
+          { pointer, anchor: { left: rect.left + (count <= 1 ? 0.5 : hover / (count - 1)) * rect.width, top: rect.top, width: 0, height: rect.height } },
           h('div', { className: 'dps-pop-title' }, date ? formatDate(date, { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' }) : point.key),
           h(
             'div',
@@ -4184,40 +4162,6 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
                 : t('tip.none')
               : `${t('tip.average7')} ${t('tip.tokens', { value: formatTokens(Math.round(value)) })}`,
           ),
-        )
-      }
-
-      if (bars) {
-        return h(
-          'span',
-          {
-            ref: wrapRef,
-            className: 'dps-spark-wrap',
-            role: 'img',
-            'aria-label': t('aria.sparkDaily'),
-            ...handlers,
-          },
-          h(
-            'span',
-            {
-              className: 'dps-spark-bars',
-              'data-dps-field': 'daily-bars',
-              'data-dense': count > 14 ? 'true' : 'false',
-              'data-hovering': hover !== null ? 'true' : 'false',
-            },
-            points.map((point, index) =>
-              h('span', {
-                key: point.key,
-                className: 'dps-spark-bar',
-                'data-value': values[index],
-                'data-today': point.today ? 'true' : 'false',
-                'data-active': hover === index ? 'true' : 'false',
-                // 高度严格按比例；非零的天至少 2px，免得被峰值压成看不见
-                style: { height: `${max > 0 ? (values[index] / max) * 100 : 0}%`, minHeight: values[index] > 0 ? '2px' : '0px' },
-              }),
-            ),
-          ),
-          tip,
         )
       }
 
@@ -4242,10 +4186,19 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
             viewBox: `0 0 ${width} ${height}`,
             preserveAspectRatio: 'none',
             role: 'img',
-            'aria-label': t('aria.spark'),
+            'aria-label': daily ? t('aria.sparkDaily') : t('aria.spark'),
           },
           area ? h('path', { className: 'dps-spark-area', d: area }) : null,
-          count > 1 ? h('path', { className: 'dps-spark-line', d: line, 'data-dps-field': daily ? 'daily-line' : 'moving-average' }) : null,
+          count > 1
+            ? h('path', {
+                className: 'dps-spark-line',
+                d: line,
+                'data-dps-field': daily ? 'daily-line' : 'moving-average',
+                'data-points': count,
+                'data-values': daily ? values.join(',') : undefined,
+                'data-last': points.length ? points[points.length - 1].key : '',
+              })
+            : null,
         ),
         count > 0
           ? h('span', {
@@ -4302,7 +4255,6 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
       const shownCost = useTween(ready && costs ? costs.spend : 0, 900)
       // 所有有用量的供应商都没设置计费方式时，不知道花了多少：显示「—」
       const costKnown = Boolean(costs) && Object.values(costs.byProvider).some((row) => row.mode !== 'unset')
-      const peakShare = costs && costs.peakBase > 0 ? (costs.peakValue / costs.peakBase) * 100 : null
       const costHints = []
       if (costs && costs.unset.length) costHints.push(t('cost.hintUnset', { count: costs.unset.length }))
       if (costs && costs.unpricedTokens > 0) costHints.push(t('cost.hintUnpriced'))
@@ -4337,7 +4289,8 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
           label: rangeLabel,
           raw: ready ? summary.tokens : undefined,
           parts: ready ? tokenValue(shownRange) : null,
-          extra: deltaChip,
+          // 环比放在标签行右边：和数字、趋势图挤在一行时，窄卡片里趋势图只剩二三十像素
+          badge: deltaChip ? h('span', { className: 'dps-kpi-badge' }, deltaChip) : null,
           // 一个月以内画每天的实际用量；累计和更长的自定义范围画 7 日均线（天数多时柱子会被峰值压扁）
           aside: h(Sparkline, {
             mode: props.sparkMode || 'average',
@@ -4345,7 +4298,7 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
             average: ready ? props.average || [] : [],
           }),
         }),
-        // 所选范围的花费（按各家计费方式；未设置的不计入，悬停写出来）；标签行右侧是高峰时段占比
+        // 所选范围的花费（按各家计费方式；未设置的不计入，悬停写出来）
         h(Kpi, {
           id: 'cost',
           icon: 'wallet',
@@ -4353,10 +4306,6 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
           raw: ready && costKnown ? costs.spend : undefined,
           parts: ready && costKnown ? moneyParts(shownCost) : null,
           title: costHints.join('\n'),
-          badge:
-            ready && peakShare !== null
-              ? h('span', { className: 'dps-kpi-badge', 'data-dps-field': 'peak-share', 'data-value': peakShare, title: t('cost.hintPeak') }, t('stat.peakShare', { value: `${Math.round(peakShare)}%` }))
-              : null,
         }),
         h(Kpi, { id: 'today', icon: 'today', label: t('stat.today'), raw: ready ? k.today : undefined, parts: ready ? tokenValue(shownToday) : null }),
         h(Kpi, {
@@ -4518,7 +4467,7 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
         return points.map((point) => ({ ...point, today: point.key === todayKey }))
       }, [daily, rangeWin.startKey, rangeWin.endKey, todayKey])
       // 一个月以内画每天的实际用量；更长的范围画 7 日均线（柱子会被峰值压扁）
-      const sparkMode = rangeWin.days > 0 && rangeWin.days <= 31 ? 'bars' : 'average'
+      const sparkMode = rangeWin.days > 0 && rangeWin.days <= 31 ? 'daily' : 'average'
       const average = useMemo(() => movingAverage(daily, spark), [daily, spark])
       // 命中率小趋势：和第一张卡的趋势同一批日期
       const hitSeries = useMemo(() => {
