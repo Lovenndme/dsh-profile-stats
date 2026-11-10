@@ -3467,7 +3467,12 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-kpi-main{display:flex;align-items:baseline;gap:10px;flex:0 0 auto}
 .dps-kpi-main > *{flex:0 0 auto}
 .dps-kpi-aside{flex:0 1 150px;min-width:0;margin-left:auto;margin-bottom:3px}
-.dps-kpi-value{display:flex;align-items:baseline;flex-wrap:nowrap;white-space:nowrap;min-width:0;font-variant-numeric:tabular-nums}
+.dps-kpi-value,.dps-kpi-ghost{display:flex;align-items:baseline;flex-wrap:nowrap;white-space:nowrap;min-width:0;font-variant-numeric:tabular-nums}
+.dps-kpi-main[data-reserve="true"]{display:grid;justify-items:start;align-items:baseline}
+.dps-kpi-main[data-reserve="true"] > .dps-kpi-value,.dps-kpi-main[data-reserve="true"] > .dps-kpi-ghost{grid-area:1 / 1}
+.dps-kpi-ghost{visibility:hidden;pointer-events:none}
+.dps-kpi[data-hero="true"] .dps-kpi-body{gap:12px}
+.dps-kpi-ghost [data-ghost]::before{content:attr(data-ghost)}
 .dps-num{font-size:28px;font-weight:650;line-height:1;letter-spacing:-.02em}
 .dps-num-empty{color:var(--dps-faint);font-weight:500}
 .dps-unit{font-size:13px;font-weight:500;color:var(--dps-muted);margin:0 7px 0 3px}
@@ -4228,8 +4233,18 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
           { className: 'dps-kpi-body' },
           h(
             'div',
-            { className: 'dps-kpi-main' },
+            { className: 'dps-kpi-main', 'data-reserve': props.reserve ? 'true' : undefined },
             h('div', { className: 'dps-kpi-value', 'data-dps-field': 'value' }, h(ValueParts, { parts: props.parts })),
+            // 按最宽的写法给数字占位（和数字叠在同一格、不可见）：数字滚动时位数、单位在变，
+            // 不占位的话旁边的趋势图会被推得一伸一缩。字由 CSS 画，不进页面文本
+            props.reserve
+              ? h(
+                  'div',
+                  { className: 'dps-kpi-ghost', 'aria-hidden': true },
+                  h('span', { className: 'dps-num', 'data-ghost': props.reserve.value }),
+                  props.reserve.unit ? h('span', { className: 'dps-unit', 'data-ghost': props.reserve.unit }) : null,
+                )
+              : null,
             props.extra || null,
           ),
           props.aside ? h('div', { className: 'dps-kpi-aside' }, props.aside) : null,
@@ -4289,6 +4304,8 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
           label: rangeLabel,
           raw: ready ? summary.tokens : undefined,
           parts: ready ? tokenValue(shownRange) : null,
+          // 最宽的写法：一亿以下是四位整数的「万」，英文是三位整数的 M
+          reserve: isChineseLocale() ? { value: '8888.8', unit: '万' } : { value: '888.8', unit: 'M' },
           // 环比放在标签行右边：和数字、趋势图挤在一行时，窄卡片里趋势图只剩二三十像素
           badge: deltaChip ? h('span', { className: 'dps-kpi-badge' }, deltaChip) : null,
           // 一个月以内画每天的实际用量；累计和更长的自定义范围画 7 日均线（天数多时柱子会被峰值压扁）
