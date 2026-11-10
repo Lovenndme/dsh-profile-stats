@@ -17,7 +17,7 @@
 
 <p><a href="README.md">English</a> · <b>简体中文</b></p>
 
-<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/preview.png" alt="DSH 侧栏里的个人用量主页" width="900">
+<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/preview-2026-11.png" alt="DSH 侧栏里的个人用量主页" width="900">
 
 </div>
 
@@ -33,7 +33,7 @@ dsh-profile-stats
 
 | | 区块 | 说明 |
 |---|---|---|
-| 📊 | **五个核心数字** | 所选范围内的 Token（一周、一个月内画每日用量的趋势线，累计和更长的自定义范围画 7 日均线；与上一周期的对比写在标题右边）、今日用量、最长任务用时、连续天数（附最长纪录）、今日缓存命中率 |
+| 📊 | **五个核心数字** | 所选范围内的 Token（数字右边是与上一周期的对比）、今日用量、最长任务用时、连续天数（附最长纪录）、今日缓存命中率 |
 | 🗓️ | **Token 活动** | 近 12 个月日格热力图，可在「每天 / 每周 / 累计总量」之间切换 |
 | 🧩 | **模型分布** | 按模型家族堆叠（版本 + 档位分开，`v4-flash` 与 `v4.1-flash` 不会混在一起），不跟页头范围走，自己选按日（最近 7 天）/ 周（最近 4 周）/ 月（最近 6 个月），用量用堆叠柱，占比用饼图（各模型占这段时间总量的比例） |
 | 🎯 | **Token 构成（Cache Lens）** | 总 Token 与缓存命中率，以及「缓存命中 / 未缓存输入 / 输出」分段占比条（供应商报了缓存写入时多一段），可放大查看非缓存部分的构成；底部是每日缓存命中率 |

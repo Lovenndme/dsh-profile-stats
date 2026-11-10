@@ -17,7 +17,7 @@ all folded from this machine's own session logs.</p>
 
 <p><b>English</b> · <a href="README.zh.md">简体中文</a></p>
 
-<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/preview.png" alt="The profile page in the DSH sidebar" width="900">
+<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/preview-2026-11.png" alt="The profile page in the DSH sidebar" width="900">
 
 </div>
 
@@ -33,7 +33,7 @@ dsh-profile-stats
 
 | | Section | What it shows |
 |---|---|---|
-| 📊 | **Five headline numbers** | Tokens in the selected range (with a daily usage line for a week or a month, or a 7-day average line for all time and longer custom ranges, and the change against the previous period beside the label), today's tokens, longest task, the active-day streak with your best, today's cache hit rate |
+| 📊 | **Five headline numbers** | Tokens in the selected range (with the change against the previous period beside the number), today's tokens, longest task, the active-day streak with your best, today's cache hit rate |
 | 🗓️ | **Token activity** | A 12-month day grid, switchable between daily, weekly and running-total views |
 | 🧩 | **Model distribution** | Stacked columns by model family (version + tier, so `v4-flash` and `v4.1-flash` stay apart) by day (last 7 days), week (last 4 weeks) or month (last 6 months) — independent of the header range — as stacked columns of token amounts, or as a pie of each model's share of the window |
 | 🎯 | **Cache Lens** | Total tokens plus the cache hit rate, and the cache-hit / uncached-input / output split (plus cache write when a provider reports it) as a segmented bar, with a zoom into the uncached part and the daily cache hit rate underneath |
