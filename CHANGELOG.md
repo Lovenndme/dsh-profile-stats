@@ -1,5 +1,38 @@
 # Changelog
 
+## 2.4.18 — 2026-11-10
+
+- feat: token stats card — a ring chart of where tokens went: system prompt, tool definitions, user messages, injected context, skills, tool calls, reasoning, answers
+- fix: the first card's delta sits above the trend; the card is narrower
+- feat: the first card's trend is back, drawn per range
+- feat: drop the today's tokens card; five headline cards
+- fix: the first card's delta sits right after the number slot instead of the far right
+- fix: pin the first card's delta to the right of the number row
+- docs: recapture the README image (header ranges, spend card, projects, costs)
+- feat: drop the first card's trend; the delta is a pill right after the number
+- docs: list the fuzz test file in CONTRIBUTING
+- fix: keep the first card's trend in place while the number counts between ranges
+- fix: drop the peak share from the spend card; first card's trend is a line and gets the whole value row
+- fix: billing tags back to blue (a slightly darker blue in light mode for contrast), red only for not saved
+- fix: flat price for relays and coding plans is DeepSeek's peak price
+- fix: plan usage label names its start day instead of "this month"
+- fix: plan hover shows only this month's usage against the fee
+- feat: peak pricing only for list-price providers, coding plans valued by usage, Ollama tags
+- fix: clicking Custom moves the range highlight there while the date picker is open
+- fix(preview): vary the mock model mix by recency so the 7-day / 4-week / 6-month shares differ
+- feat: model distribution share view is a pie chart
+- feat: the model distribution no longer follows the header range
+- feat: header range gets today and this week, drops last 7 / 30 / 90 days
+- fix: put the billing tag (discount multiplier, plan, not saved) in its own column right of the spend
+- fix: leave the discount multiplier input empty instead of hinting 0.12
+- feat: drop the per-model unit-price billing mode, make every billing tag red
+- fix: drop the USD rate button, solid blue billing tags (red when not saved), clearer list-price label
+- fix: deep-test pass — host data integrity, cost engine edge cases, UI state and layout
+- feat: price other vendors' models from a bundled LiteLLM table, USD converted to CNY, per-model own prices
+- docs: spend card, billing methods and the built-in DeepSeek list prices
+- feat: cost estimate — list-price value by call time, per-provider billing methods, spend card and columns
+
+
 ## 2.4.17 — 2026-11-09
 
 - docs: add CONTRIBUTING.md
