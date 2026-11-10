@@ -3054,7 +3054,8 @@ window.__ModuleLoader__.load({
         return h(
           'span',
           { className: 'dps-prov-tagcell', role: 'cell' },
-          info && info.tag ? h('span', { className: 'dps-cost-tag', 'data-dps-field': 'billing-tag', title: info.title, onClick: () => toggleBilling(row.id) }, info.tag) : null,
+          // 计费方式的标签是蓝底；没存上的「未保存」是红底
+          info && info.tag ? h('span', { className: 'dps-cost-tag', 'data-dps-field': 'billing-tag', 'data-error': info.failed ? 'true' : undefined, title: info.title, onClick: () => toggleBilling(row.id) }, info.tag) : null,
         )
       }
       const costCell = (row) => {
@@ -3667,7 +3668,9 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
 .dps-bill-input{width:104px}
 .dps-prov-table[data-tags="true"] .dps-prov-row{grid-template-columns:minmax(0,1fr) 56px 42px 52px var(--dps-cost-w,50px) var(--dps-tag-w,34px);column-gap:7px}
 .dps-prov-tagcell{display:flex;align-items:center;min-width:0;margin-left:-2px}
-.dps-cost-tag{display:inline-block;padding:0 4px;border-radius:4px;background:var(--dsw-alias-state-error-primary);color:var(--dps-card);font-size:10.5px;font-weight:600;line-height:16px;white-space:nowrap;cursor:pointer}
+.dps-cost-tag{display:inline-block;padding:0 4px;border-radius:4px;background:color-mix(in srgb,var(--dps-accent) 90%,var(--dps-ink));color:var(--dps-card);font-size:10.5px;font-weight:600;line-height:16px;white-space:nowrap;cursor:pointer}
+body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(--dps-accent)}
+.dps-cost-tag[data-error="true"]{background:var(--dsw-alias-state-error-primary)}
 .dps-bill-foot{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
 .dps-bill-meta{margin-right:auto;font-size:12px;color:var(--dps-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .dps-bill .dps-btn{height:28px;padding:0 12px}
