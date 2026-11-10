@@ -3016,10 +3016,12 @@ window.__ModuleLoader__.load({
         if (!costs || row.id === '__other') return null
         const cost = costs.byProvider[row.id] || null
         const bill = cost ? cost.billing : billingOf(row.id, props.billingSettings)
-        const titleParts = [t('billing.listValue', { value: formatMoney(cost ? cost.value : 0) })]
-        // 包月：这个订阅月里用量换算成的钱，和月费放在一起比
+        // 包月：只写这个订阅月里用量换算成的钱和月费。不写「按官方价算」——包月的费用本来就等于它（费用格里那个数），
+        // 而且它跟着顶部范围走、本月已用不跟，两个数挨在一起会被当成两种算法
         const month = bill && bill.mode === 'plan' && props.planMonths ? ownValue(props.planMonths, row.id) : null
-        if (month) titleParts.push(t('billing.planMonth', { used: formatMoney(month.used), fee: formatMoney(month.monthly) }))
+        const titleParts = month
+          ? [t('billing.planMonth', { used: formatMoney(month.used), fee: formatMoney(month.monthly) })]
+          : [t('billing.listValue', { value: formatMoney(cost ? cost.value : 0) })]
         if (cost && cost.unpriced.length) titleParts.push(t('billing.unpriced', { models: listJoin(cost.unpriced) }))
         // 上一次改计费方式没存上：标签换成「未保存」，悬停写原因
         const failed = errors[row.id]
