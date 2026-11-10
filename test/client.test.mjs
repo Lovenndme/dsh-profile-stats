@@ -330,9 +330,8 @@ test('modelBucketFrames：按日 7 个、按周 4 个、按月 6 个桶，连续
   assert.equal(modelBucketKeyOf(wednesday, 'day'), '2026-03-18')
 })
 
-test('deriveKpis：五个指标 + 最近 14 天迷你柱（最后一根是今天）', () => {
+test('deriveKpis：不跟范围走的几个指标（今日用量、最长任务、连续天数）', () => {
   const { deriveKpis, localDateKey, addDays } = loadClientHelpers({
-    extraCode: ['const SPARK_DAYS = 14'],
     functions: ['toNumber', 'deriveKpis', 'indexDaily', 'parseDateKey', 'localDateKey', 'addDays'],
   })
   const today = new Date(2026, 10, 6, 12)
@@ -352,16 +351,11 @@ test('deriveKpis：五个指标 + 最近 14 天迷你柱（最后一根是今天
   assert.equal(kpis.longestTurnMs, 60000)
   assert.equal(kpis.longestStreak, 3)
   assert.equal(kpis.currentStreak, 2)
-  assert.equal(kpis.spark.length, 14)
-  assert.deepEqual(kpis.spark.at(-1), { key: todayKey, tokens: 42, today: true })
-  assert.deepEqual(kpis.spark.at(-2), { key: yesterdayKey, tokens: 7, today: false })
-  assert.equal(kpis.spark.filter((item) => item.today).length, 1)
+  assert.equal('spark' in kpis, false)
 
   const empty = deriveKpis({}, today)
   assert.equal(empty.tokens, 0)
   assert.equal(empty.today, 0)
-  assert.equal(empty.spark.length, 14)
-  for (const item of empty.spark) assert.equal(item.tokens, 0)
 })
 
 const providerHelpers = () =>
@@ -600,12 +594,15 @@ test('formatDelta：一位小数；四位数起不留小数、加千分位（上
   assert.equal(formatDelta(-1234.5), '-1,234%')
 })
 
-test('指标卡：数字与环比不被压缩（溢出会压在环比上），让出空间的是趋势线', () => {
+test('指标卡：数字与环比不被压缩；卡片放不下时环比换到下一行，不撑出卡片', () => {
   const source = readClientSource()
   assert.match(source, /\.dps-kpi-main\{[^}]*flex:0 0 auto/)
+  assert.match(source, /\.dps-kpi-main\{[^}]*flex-wrap:wrap/)
+  assert.match(source, /\.dps-kpi-main\{[^}]*max-width:100%/)
   assert.match(source, /\.dps-kpi-main > \*\{flex:0 0 auto\}/)
-  assert.match(source, /\.dps-kpi-aside\{[^}]*min-width:0/)
   assert.match(source, /\.dps-delta\{[^}]*white-space:nowrap/)
+  // 第一张卡不再画趋势图
+  assert.equal(/function Sparkline\b|dps-kpi-aside/.test(source), false)
 })
 
 test('环比颜色：增长红色、下降绿色（取宿主主题的状态色）', () => {
