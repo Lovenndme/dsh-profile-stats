@@ -862,13 +862,14 @@ test('officialRate：按调用时间选价格行；8 月 17 日前没有已知�
   assert.equal(officialRate('broken', 0, table), null)
   // DeepSeek 的 Flash / Pro 只认内置价表，不退回价格表里别家转售的旧价
   assert.equal(officialRate('deepseek-v4-pro', bjHour(2026, 8, 1, 10), { 'deepseek-v4-pro': [1, 1, 1, 1] }), null)
-  // flat：不分峰谷，一律按空闲时段价（不是按官方价计费的供应商用这个）
-  assert.deepEqual(rateOf(officialRate('deepseek-flash', bjHour(2026, 11, 6, 10), {}, true)), { hit: 0.02, miss: 1, output: 4, peak: false })
+  // flat：不分峰谷，任何时段都按高峰价（中转站、coding plan 用这个；中转站的「官方价」就是高峰价）
+  assert.deepEqual(rateOf(officialRate('deepseek-flash', bjHour(2026, 11, 6, 21), {}, true)), { hit: 0.04, miss: 2, output: 8, peak: false }, '空闲时段也按高峰价')
+  assert.deepEqual(rateOf(officialRate('deepseek-flash', bjHour(2026, 11, 7, 10), {}, true)), { hit: 0.04, miss: 2, output: 8, peak: false }, '周末也按高峰价')
   assert.equal(officialRate('deepseek-flash', bjHour(2026, 11, 6, 10), {}, true).timed, false, '统一价不算进高峰占比')
-  assert.deepEqual(rateOf(officialRate('deepseek-v4-pro', bjHour(2026, 11, 6, 10), {}, true)), { hit: 0.15, miss: 4.5, output: 13.5, peak: false })
+  assert.deepEqual(rateOf(officialRate('deepseek-v4-pro', bjHour(2026, 11, 6, 21), {}, true)), { hit: 0.3, miss: 9, output: 27, peak: false }, '等于方舟按量的 V4-Pro 一口价')
   // 方舟经济版：比 Flash 便宜两成，高峰翻倍
   assert.deepEqual(rateOf(officialRate('deepseek-v4-1-flash-economy', bjHour(2026, 11, 6, 10))), { hit: 0.032, miss: 1.6, output: 6.4, peak: true })
-  assert.deepEqual(rateOf(officialRate('deepseek-v4-1-flash-economy', bjHour(2026, 11, 6, 10), {}, true)), { hit: 0.016, miss: 0.8, output: 3.2, peak: false })
+  assert.deepEqual(rateOf(officialRate('deepseek-v4-1-flash-economy', bjHour(2026, 11, 6, 21), {}, true)), { hit: 0.032, miss: 1.6, output: 6.4, peak: false })
   // 美元价格表本来就不分峰谷：flat 不影响
   assert.deepEqual(officialRate('claude-sonnet-5-5', 0, table, true), officialRate('claude-sonnet-5-5', 0, table))
 })
@@ -901,45 +902,46 @@ test('computeCosts：官方价折算与四种计费方式；包月 = 用量换�
   }
   const day = computeCosts(daily, '2026-11-06', '2026-11-06', settings, '2026-11-06')
   near(day.byProvider['deepseek-official'].spend, 2 + 0.04 + 8, '官方直连（自动识别）：高峰价')
-  near(day.byProvider.relay.spend, 0.1, '打折：官方价 1 元 × 0.1；没有官方价的 claude 那条不算')
-  near(day.byProvider.plan.spend, 1 + 4, '包月：用量按统一价换算（输入 1 元 + 输出 4 元），不是月费')
+  near(day.byProvider.relay.spend, 0.2, '打折：统一价（高峰价）2 元 × 0.1，晚上也一样；没有官方价的 claude 那条不算')
+  near(day.byProvider.plan.spend, 2 + 8, '包月：用量按统一价（高峰价）换算（输入 2 元 + 输出 8 元），不是月费')
   near(day.byProvider.work.spend, 0, '不计入')
   assert.equal(day.byProvider.mystery.spend, null, '未设置：不知道花了多少')
   assert.equal(day.byProvider.old.mode, 'unset', '不认识的写法')
   assert.equal(day.byProvider.old.spend, null)
   assert.deepEqual(day.unset, ['mystery', 'old'])
-  near(day.spend, 10.04 + 0.1 + 5, '花费合计不含未设置的')
-  near(day.value, 10.04 + 1 + 1 + 5 + 1 + 1, '官方价折算：所有有官方价的用量')
+  near(day.spend, 10.04 + 0.2 + 10, '花费合计不含未设置的')
+  near(day.value, 10.04 + 2 + 2 + 10 + 2 + 2, '官方价折算：所有有官方价的用量')
   near(day.peakValue, 10.04, '高峰部分')
   // 「没有官方价、没算进花费」只算花费要按官方价算的那部分：打折那家的 claude-x
   assert.equal(day.unpricedTokens, M, '只有打折那家的 claude-x')
   assert.deepEqual(day.byProvider.relay.unpriced, ['claude-x'])
-  near(day.byProject.p1, 10.04 + 5, '包月的钱直接算在用它的项目上')
-  near(day.byProject.p2, 0.1, 'p2')
+  near(day.byProject.p1, 10.04 + 10, '包月的钱直接算在用它的项目上')
+  near(day.byProject.p2, 0.2, 'p2')
   // 累计：包月只看用量，没有用量的日子不收钱
   const all = computeCosts(daily, '', '2026-11-08', settings, '2026-11-08')
-  near(all.byProvider.plan.spend, 5, '只有 11-06 有用量')
+  near(all.byProvider.plan.spend, 10, '只有 11-06 有用量')
   // 空数据不出 NaN
   const empty = computeCosts([], '', '2026-11-06', {}, '2026-11-06')
   assert.equal(empty.spend, 0)
   assert.equal(empty.value, 0)
 })
 
-test('computeCosts：只有计费方式是「官方价」的才分峰谷；同一个高峰小时，中转站、包月、不计入、未设置都按统一价（空闲价）', () => {
+test('computeCosts：只有计费方式是「官方价」的才分峰谷；中转站、包月、不计入、未设置任何时段都按统一价（高峰价）', () => {
   const { computeCosts } = costHelpers()
-  const peak = bjHour(2026, 11, 6, 10)
   const M = 1e6
   const ids = ['deepseek-official', 'relay', 'plan', 'work', 'mystery', 'manual']
-  const daily = [{ date: '2026-11-06', slots: ids.map((id) => [peak, id, 'deepseek-v4-1-flash', 'p', M, 0, 0, 0]) }]
-  const settings = { relay: { mode: 'multiplier', factor: 1 }, plan: { mode: 'plan', monthly: 199 }, work: { mode: 'free' }, manual: { mode: 'official' } }
-  const result = computeCosts(daily, '', '2026-11-06', settings, '2026-11-06')
-  near(result.byProvider['deepseek-official'].value, 2, '官方直连：高峰价')
-  near(result.byProvider.manual.value, 2, '手动设成官方价的也按高峰价')
-  for (const id of ['relay', 'plan', 'work', 'mystery']) near(result.byProvider[id].value, 1, `${id}：统一价`)
-  near(result.byProvider.relay.spend, 1)
-  near(result.byProvider.plan.spend, 1)
-  near(result.peakBase, 4, '只有两家官方价进高峰占比的分母')
-  near(result.peakValue, 4)
+  for (const [hour, label, official] of [[bjHour(2026, 11, 6, 21), '空闲时段', 1], [bjHour(2026, 11, 6, 10), '高峰时段', 2]]) {
+    const daily = [{ date: '2026-11-06', slots: ids.map((id) => [hour, id, 'deepseek-v4-1-flash', 'p', M, 0, 0, 0]) }]
+    const settings = { relay: { mode: 'multiplier', factor: 1 }, plan: { mode: 'plan', monthly: 199 }, work: { mode: 'free' }, manual: { mode: 'official' } }
+    const result = computeCosts(daily, '', '2026-11-06', settings, '2026-11-06')
+    near(result.byProvider['deepseek-official'].value, official, `${label}：官方直连按真实时段价`)
+    near(result.byProvider.manual.value, official, `${label}：手动设成官方价的也分时段`)
+    for (const id of ['relay', 'plan', 'work', 'mystery']) near(result.byProvider[id].value, 2, `${label}：${id} 按高峰价`)
+    near(result.byProvider.relay.spend, 2)
+    near(result.byProvider.plan.spend, 2)
+    near(result.peakBase, 2 * official, `${label}：只有两家官方价进高峰占比的分母`)
+    near(result.peakValue, official === 2 ? 4 : 0)
+  }
 })
 
 test('moneyParts / formatMoney：100 元以下两位小数、以上一位，千分位；一万起写万；极小值写 <¥0.01', () => {
@@ -1005,8 +1007,8 @@ test('computeCosts：包月的钱就是各项目自己的用量换算，没有�
   const one = computeCosts(mixed, '2026-11-06', '2026-11-06', settings, '2026-11-06', { table, usdCny: 7 })
   near(one.byProject.A, 7, 'A：1 美元 × 7')
   assert.equal(one.byProject.B, 0, 'B 没有官方价：换算不了，记 0（和官方价、打折一样）')
-  near(one.byProject.C, 0.8, 'C：方舟经济版统一价 0.8 元')
-  near(one.byProvider.plan.spend, 7.8)
+  near(one.byProject.C, 1.6, 'C：方舟经济版统一价（高峰价）1.6 元')
+  near(one.byProvider.plan.spend, 8.6)
 })
 
 test('computeCosts：用量全部来自未设置 / 不计入的项目不出现在 byProject（页面写「—」）', () => {

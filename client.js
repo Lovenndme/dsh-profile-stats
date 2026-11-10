@@ -831,8 +831,9 @@ window.__ModuleLoader__.load({
 
     /**
      * 某个模型在某个小时的官方单价（每百万 token）：{ currency, miss, hit, write, output, peak, timed }；没有已知价格时返回 null。
-     * flat 为 true 时不分峰谷，一律按空闲时段价（高峰价是在它基础上翻倍加价）：只有直连 DeepSeek 官方、按官方价计费的
-     * 供应商才真的分峰谷；中转站、coding plan 这些按自己的方式收费，换算成钱时用统一价。
+     * flat 为 true 时不分峰谷，一律按高峰时段价：只有直连 DeepSeek 官方、按官方价计费的供应商才真的分峰谷；
+     * 中转站、coding plan 这些全天一个价，而中转站报的「官方价 X 折」都是拿 DeepSeek 的高峰价当基准
+     * （apiranking 汇总的二十多家逐家核对过），方舟按量的 V4-Pro 一口价也等于高峰价，所以统一价用高峰价。
      *   DeepSeek 的 Flash / Pro：内置的人民币价表（按调用时间选调价、分高峰 / 空闲时段，timed = true），
      *     2026-08-17 之前没有已知价格（不退回价格表，免得用别家转售的旧价）；
      *   其他模型：宿主随快照发来的价格表（LiteLLM，美元），缓存读 / 写没有单独价格时按未缓存输入价。
@@ -847,7 +848,8 @@ window.__ModuleLoader__.load({
         }
         if (!row) return null
         const peak = !flat && isPeakHour(epochHour)
-        const price = peak ? row.peak : row.offPeak
+        // 统一价（flat）= 高峰价；按官方价计费的按调用时间分高峰 / 空闲
+        const price = flat || peak ? row.peak : row.offPeak
         return { currency: 'CNY', miss: price.miss, hit: price.hit, write: price.miss, output: price.output, peak, timed: !flat }
       }
       const listed = table && Object.prototype.hasOwnProperty.call(table, model) && Array.isArray(table[model]) ? table[model] : null
@@ -878,7 +880,7 @@ window.__ModuleLoader__.load({
      * 一段日期内的费用（人民币）。slots 是宿主按小时记的 [小时序号, 供应商, 模型, 项目键, 未缓存输入, 缓存读, 缓存写, 输出]。
      * options：{ table（价格表：模型 → [输入, 输出, 缓存读, 缓存写] 美元 / 百万），usdCny（美元兑人民币） }
      *   value     按官方价折算（所有人都有；美元价按汇率换算）。只有计费方式是「官方价」的供应商（直连 DeepSeek）分峰谷，
-     *             其余（打折、包月、不计入、未设置）一律按不分峰谷的统一价（空闲时段价）
+     *             其余（打折、包月、不计入、未设置）一律按不分峰谷的统一价（高峰时段价，中转站的「官方价」就是它）
      *   peakValue / peakBase  分峰谷计价的那部分里，高峰时段的部分 / 全部——高峰占比只看这些
      *   spend     按各家计费方式：官方 = value，打折 = value × 倍数，包月 = value（用量换算成钱；月费只用来对比，见 planCycleStart），
      *             不计入 = 0，未设置 = 不知道（不算进 spend，列在 unset 里）

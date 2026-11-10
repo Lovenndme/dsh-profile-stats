@@ -126,7 +126,7 @@ test('fuzz computeCosts：倍数与汇率是线性的', () => {
   }
 })
 
-test('fuzz computeCosts：包月 = 用量按统一价换算，和设成「打折 ×1」完全一样（不分峰谷）；只有官方价分峰谷', () => {
+test('fuzz computeCosts：包月 = 用量按统一价（高峰价）换算，和设成「打折 ×1」完全一样；只有官方价分峰谷，所以不会比统一价贵', () => {
   const rand = mulberry32(11)
   for (let scenario = 0; scenario < 150; scenario += 1) {
     const daily = randomDaily(rand)
@@ -139,7 +139,7 @@ test('fuzz computeCosts：包月 = 用量按统一价换算，和设成「打折
     close(asPlan.spend, asFactor.spend, `scenario ${scenario} 包月 = 打折 ×1`)
     for (const id of PROVIDERS) if (asPlan.byProvider[id]) close(asPlan.byProvider[id].spend, asFactor.byProvider[id].spend, `scenario ${scenario} ${id}`)
     assert.equal(asPlan.peakBase, 0, `scenario ${scenario} 包月不进高峰占比`)
-    assert.ok(asOfficial.spend >= asPlan.spend - 1e-9, `scenario ${scenario} 官方价（有高峰）不低于统一价`)
+    assert.ok(asOfficial.spend <= asPlan.spend + 1e-9, `scenario ${scenario} 官方价（有空闲时段）不高于统一价（全按高峰价）`)
   }
 })
 test('fuzz rangeWindow / deltaWindows：窗口在今天以内、天数对得上；上一期在本期之前且不更长', () => {
