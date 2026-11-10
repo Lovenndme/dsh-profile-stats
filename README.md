@@ -36,12 +36,12 @@ dsh-profile-stats
 | 📊 | **Five headline numbers** | Tokens in the selected range (with a small trend beside it — the last 7 days as bars for today, the last 4 weeks for this week, a daily line for this month — and the change against the previous period above the trend), its spend, longest task, the active-day streak with your best, today's cache hit rate |
 | 🗓️ | **Token activity** | A 12-month day grid, switchable between daily, weekly and running-total views |
 | 🧩 | **Model distribution** | Stacked columns by model family (version + tier, so `v4-flash` and `v4.1-flash` stay apart) by day (last 7 days), week (last 4 weeks) or month (last 6 months) — independent of the header range — as stacked columns of token amounts, or as a pie of each model's share of the window |
-| 🎯 | **Cache Lens** | Total tokens plus the cache hit rate, and the cache-hit / uncached-input / output split (plus cache write when a provider reports it) as a segmented bar, with a zoom into the uncached part and the daily cache hit rate underneath |
+| 🎯 | **Token stats** | Where the tokens went, as a ring chart with the total in the centre: system prompt, tool definitions, user messages, injected context, skill injections, tool calls, reasoning and answers, each with its share and an estimated amount |
 | 💳 | **Provider split** | Tokens and cache hit rate per billing route in the selected range, or today only; give a route a display name that stays on your machine |
 | 📁 | **Projects** | Tokens per working directory in the selected range, with the part used by subagent sessions |
 | 💰 | **Spend** | The selected range's spend, plus a spend column per provider and project. Usage is priced at the list price (peak and off-peak hours only for DeepSeek direct; relays and coding plans at the flat peak price, which is what relays discount from); each provider can be set to list price, a discount, a monthly plan (usage converted to money, with the usage since the latest renewal day against the fee) or not counted, stored only on your machine |
 
-A range switch in the header — today, this week, this month, all time or custom dates — drives the first number, Cache Lens, the projects and the provider split (the model distribution has its own switch); the selected range can be exported as CSV (one row per day) or JSON.
+A range switch in the header — today, this week, this month, all time or custom dates — drives the first number, the token stats, the projects and the provider split (the model distribution has its own switch); the selected range can be exported as CSV (one row per day) or JSON.
 
 ## Privacy
 

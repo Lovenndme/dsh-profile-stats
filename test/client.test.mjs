@@ -3,88 +3,62 @@ import test from 'node:test'
 
 import { loadClientHelpers, readClientSource } from './helpers/client-source.mjs'
 
-/* 这些用例测的是 client.js 里的纯函数（数值格式、日期窗口、图表几何、Cache Lens 口径）。
+/* 这些用例测的是 client.js 里的纯函数（数值格式、日期窗口、图表几何、Token 统计口径）。
  * 组件渲染由 profile-stats-verify/client-smoke.mjs 那套 smoke 覆盖，这里只管算得对不对。 */
 
 const withLocale = { extraCode: ["const currentLocaleId = () => 'zh-CN'", 'const isChineseLocale = () => true'] }
 const withEnglish = { extraCode: ["const currentLocaleId = () => 'en-US'", 'const isChineseLocale = () => false'] }
 const NUMBER_HELPERS = ['toNumber', 'bigNumberParts', 'unitGap', 'tokenParts', 'formatTokens']
 
-const lensHelpers = () => loadClientHelpers({ functions: ['deriveLens', 'cacheHitRate', 'toNumber'] })
+const lensHelpers = () => loadClientHelpers({ functions: ['deriveLens', 'cacheHitRate', 'toNumber'], constants: ['MIX_KEYS'] })
 
-test('deriveLens：四项互不重叠，直接取用；几行加起来等于总量', () => {
+test('deriveLens：八类按宿主 mix 数组的顺序取用，各类之和是占比的分母；总用量是日明细的 tokens', () => {
   const { deriveLens } = lensHelpers()
-  const lens = deriveLens({ tokens: 2000, inputTokens: 900, outputTokens: 500, cacheReadTokens: 600, cacheWriteTokens: 0 })
-  assert.equal(lens.cache, 600)
-  assert.equal(lens.write, 0)
-  assert.equal(lens.uncached, 900)
-  assert.equal(lens.output, 500)
-  assert.equal(lens.inputTotal, 1500)
-  assert.equal(lens.partsTotal, 2000)
-  assert.equal(lens.partsTotal, lens.total)
-  assert.equal(lens.uncachedTotal, 1400)
-  assert.equal(lens.hitRate, 40)
-  assert.equal(Number(lens.uncachedShare.toFixed(4)), Number(((900 / 1400) * 100).toFixed(4)))
-})
-
-test('deriveLens：输入 ≥ 缓存时不再减掉缓存（旧算法在真实命中率 ≤ 50% 时算高，50% 直接跳成 100%）', () => {
-  const { deriveLens } = lensHelpers()
-  const half = deriveLens({ tokens: 2000, inputTokens: 1000, cacheReadTokens: 1000, outputTokens: 0 })
-  assert.equal(half.uncached, 1000)
-  assert.equal(half.hitRate, 50, '旧算法：未缓存 = 1000 − 1000 = 0 → 100%')
-  const third = deriveLens({ tokens: 1500, inputTokens: 1000, cacheReadTokens: 500, outputTokens: 0 })
-  assert.equal(Number(third.hitRate.toFixed(4)), Number(((500 / 1500) * 100).toFixed(4)), '旧算法给 50%')
-  // 命中率随缓存连续变化，没有跳变
-  const below = deriveLens({ tokens: 1999, inputTokens: 1000, cacheReadTokens: 999, outputTokens: 0 })
-  assert.ok(Math.abs(below.hitRate - half.hitRate) < 0.1)
-})
-
-test('deriveLens：缓存写入不算命中，只进命中率的分母', () => {
-  const { deriveLens } = lensHelpers()
-  const lens = deriveLens({ tokens: 650, inputTokens: 400, outputTokens: 100, cacheReadTokens: 100, cacheWriteTokens: 50 })
-  assert.equal(lens.cache, 100)
-  assert.equal(lens.write, 50)
-  assert.equal(lens.inputTotal, 550)
-  assert.equal(lens.partsTotal, 650)
-  assert.equal(lens.hitRate, (100 / 550) * 100)
-  assert.equal(lens.uncachedTotal, 400 + 50 + 100, '放大视图：除了命中以外的全部')
-})
-
-test('deriveLens：不再从总量反推未缓存输入', () => {
-  const { deriveLens } = lensHelpers()
-  // 旧实现在 inputTokens 缺失时用「总量 − 缓存 − 输出」= 500
-  const lens = deriveLens({ tokens: 1000, outputTokens: 200, cacheReadTokens: 300 })
-  assert.equal(lens.uncached, 0)
+  const MIX_KEYS = ['system', 'tools', 'user', 'inject', 'skill', 'toolCalls', 'thinking', 'answers']
+  const lens = deriveLens({ tokens: 1000, mix: [10, 50, 20, 60, 0, 560, 250, 50] })
   assert.equal(lens.total, 1000)
-  assert.equal(lens.partsTotal, 500)
+  assert.deepEqual(
+    lens.parts.map((part) => part.key),
+    MIX_KEYS,
+  )
+  assert.deepEqual(
+    lens.parts.map((part) => part.value),
+    [10, 50, 20, 60, 0, 560, 250, 50],
+  )
+  assert.equal(lens.partsTotal, 1000)
+  const percent = lens.parts.reduce((sum, part) => sum + (part.value / lens.partsTotal) * 100, 0)
+  assert.equal(Math.round(percent * 1e6) / 1e6, 100)
 })
 
-test('deriveLens / cacheHitRate：全零 / 空快照不产生 NaN；没有输入时命中率为 null', () => {
-  const { deriveLens, cacheHitRate } = lensHelpers()
-  for (const totals of [undefined, {}, { tokens: 0 }, { tokens: null, inputTokens: 'x' }, { inputTokens: -5, cacheReadTokens: -1 }]) {
+test('deriveLens：旧版宿主没有 mix、空快照、脏值都不产生 NaN，八类全是 0', () => {
+  const { deriveLens } = lensHelpers()
+  for (const totals of [undefined, {}, { tokens: 500 }, { tokens: null, mix: 'x' }, { tokens: 5, mix: [NaN, -3, 'a'] }]) {
     const lens = deriveLens(totals)
-    for (const [key, value] of Object.entries(lens)) {
-      if (key === 'hitRate' || key === 'uncachedShare') continue
-      assert.ok(Number.isFinite(value), `${key} 必须是有限数字，实际 ${value}`)
-    }
-    // 没有输入时是 null（页面写「—」），不是 0%
-    assert.equal(lens.hitRate, null)
+    assert.ok(Number.isFinite(lens.total))
+    assert.equal(lens.parts.length, 8)
     assert.equal(lens.partsTotal, 0)
-    assert.equal(lens.uncachedShare, null)
+    for (const part of lens.parts) assert.equal(part.value, 0)
   }
-  assert.equal(cacheHitRate({}), null)
-  assert.equal(cacheHitRate(undefined), null)
+})
+
+test('cacheHitRate：输入 ≥ 缓存时不再减掉缓存（旧算法在真实命中率 ≤ 50% 时算高，50% 直接跳成 100%）', () => {
+  const { cacheHitRate } = lensHelpers()
+  const half = cacheHitRate({ tokens: 2000, inputTokens: 1000, cacheReadTokens: 1000, outputTokens: 0 })
+  assert.equal(half, 50, '旧算法：未缓存 = 1000 − 1000 = 0 → 100%')
+  const third = cacheHitRate({ tokens: 1500, inputTokens: 1000, cacheReadTokens: 500, outputTokens: 0 })
+  assert.equal(Number(third.toFixed(4)), Number(((500 / 1500) * 100).toFixed(4)), '旧算法给 50%')
+  // 命中率随缓存连续变化，没有跳变
+  const below = cacheHitRate({ tokens: 1999, inputTokens: 1000, cacheReadTokens: 999, outputTokens: 0 })
+  assert.ok(Math.abs(below - half) < 0.1)
+})
+
+test('cacheHitRate：缓存写入不算命中，只进分母；没有输入时是 null（页面写「—」），不是 0%', () => {
+  const { cacheHitRate } = lensHelpers()
+  assert.equal(cacheHitRate({ tokens: 650, inputTokens: 400, outputTokens: 100, cacheReadTokens: 100, cacheWriteTokens: 50 }), (100 / 550) * 100)
+  for (const totals of [undefined, {}, { tokens: 0 }, { tokens: null, inputTokens: 'x' }, { inputTokens: -5, cacheReadTokens: -1 }]) assert.equal(cacheHitRate(totals), null)
   assert.equal(cacheHitRate({ outputTokens: 100 }), null, '只有输出、没有输入')
   assert.equal(cacheHitRate({ inputTokens: 100 }), 0)
   assert.equal(cacheHitRate({ cacheReadTokens: 100 }), 100)
-})
-
-test('deriveLens：百分比列除以全部输入，命中 + 写入 + 未缓存输入恰好 100%', () => {
-  const { deriveLens } = lensHelpers()
-  const lens = deriveLens({ tokens: 1230, inputTokens: 400, outputTokens: 200, cacheReadTokens: 600, cacheWriteTokens: 30 })
-  const percent = (value) => (value / lens.inputTotal) * 100
-  assert.equal(Math.round((percent(lens.cache) + percent(lens.write) + percent(lens.uncached)) * 1e6) / 1e6, 100)
-  assert.equal(percent(lens.cache), lens.hitRate)
 })
 
 test('tokenParts / formatTokens：中文单位按一位小数，亿 / 万不出现 10000.0 万', () => {
@@ -399,6 +373,7 @@ test('deriveProviders：每家按自己的四项算命中率，「其他」用�
 test('summarizeDaily：缓存读写分开汇总、各家四项用量按窗口累加；旧版宿主的 cacheTokens 当作读', () => {
   const { summarizeDaily, cacheHitRate } = loadClientHelpers({
     functions: ['summarizeDaily', 'emptySummary', 'emptyUsage', 'addUsage', 'cacheHitRate', 'indexDaily', 'parseDateKey', 'toNumber'],
+    constants: ['MIX_KEYS'],
   })
   const daily = [
     {
@@ -820,6 +795,7 @@ test('deriveProjects：超过 8 个项目时其余并成「其他项目（N）�
 test('summarizeDaily：按项目与子代理部分累加', () => {
   const { summarizeDaily } = loadClientHelpers({
     functions: ['summarizeDaily', 'emptySummary', 'emptyUsage', 'addUsage', 'indexDaily', 'parseDateKey', 'toNumber'],
+    constants: ['MIX_KEYS'],
   })
   const summary = summarizeDaily(
     [
@@ -831,6 +807,22 @@ test('summarizeDaily：按项目与子代理部分累加', () => {
   )
   assert.deepEqual(summary.byProject, { a: 11, b: 4 })
   assert.deepEqual(summary.byProjectSubagent, { a: 3 })
+})
+
+test('summarizeDaily：八类 mix 按窗口逐项累加；没有 mix 的日子（旧版宿主）不贡献、脏值当 0', () => {
+  const { summarizeDaily } = loadClientHelpers({
+    functions: ['summarizeDaily', 'emptySummary', 'emptyUsage', 'addUsage', 'indexDaily', 'parseDateKey', 'toNumber'],
+    constants: ['MIX_KEYS'],
+  })
+  const daily = [
+    { date: '2026-11-04', tokens: 36, mix: [1, 2, 3, 4, 5, 6, 7, 8] },
+    { date: '2026-11-05', tokens: 80, mix: [10, 10, 10, 10, 10, 10, 10, 10] },
+    { date: '2026-11-06', tokens: 9 },
+    { date: '2026-11-07', tokens: 5, mix: [5, -2, 'x', NaN] },
+  ]
+  assert.deepEqual(summarizeDaily(daily, '', '').mix, [16, 12, 13, 14, 15, 16, 17, 18])
+  assert.deepEqual(summarizeDaily(daily, '2026-11-05', '2026-11-06').mix, [10, 10, 10, 10, 10, 10, 10, 10])
+  assert.deepEqual(summarizeDaily([], '', '').mix, [0, 0, 0, 0, 0, 0, 0, 0])
 })
 
 /* ------------------------------------------------------------ 费用 */
@@ -1207,6 +1199,57 @@ test('pieArc：扇区路径——四分之一、半圈、超过半圈用大弧�
   assert.equal(pieArc(100, 100, 50, 0, (Math.PI * 3) / 2), 'M 100 100 L 100 50 A 50 50 0 1 1 50 100 Z')
   assert.equal(pieArc(100, 100, 50, 0, Math.PI * 2), 'M 100 50 A 50 50 0 1 1 100 150 A 50 50 0 1 1 100 50 Z', '只有一个家族：整圆')
   for (const [start, end] of [[0, 0.001], [1, 2], [3, 6.2], [0, 6.283]]) assert.ok(!/NaN|Infinity/.test(pieArc(140, 120, 84, start, end)), `${start}-${end}`)
+})
+
+test('ringSegments：从 12 点钟顺时针排、段间留缝、首尾闭合；极小段按最短弧长画，不放大成大段；比例保留原值', () => {
+  const { ringSegments } = loadClientHelpers({ functions: ['ringSegments', 'pieSlices', 'toNumber'] })
+  const full = Math.PI * 2
+  const gap = 0.04
+  const min = 0.06
+  const near = (a, b) => Math.abs(a - b) < 1e-9
+  // 典型的 DeepSeek 构成：命中 96.6%，其余几项都很小
+  const values = [9660, 310, 20, 10]
+  const arcs = ringSegments(values, gap, min)
+  assert.deepEqual(
+    arcs.map((arc) => arc.fraction),
+    values.map((value) => value / 10000),
+    'fraction 是原始比例，不受最短弧长影响',
+  )
+  assert.ok(near(arcs[0].start, gap / 2), '第一段从 12 点钟右边半个缝开始')
+  for (let index = 1; index < arcs.length; index += 1) assert.ok(near(arcs[index].start, arcs[index - 1].end + gap), `第 ${index} 段前面留一个缝`)
+  assert.ok(near(arcs.at(-1).end + gap / 2, full), '最后一段收在 12 点钟左边半个缝')
+  const span = (arc) => arc.end - arc.start
+  assert.ok(near(span(arcs[2]), min) && near(span(arcs[3]), min), '0.2% / 0.1% 按最短弧长画')
+  assert.ok(span(arcs[3]) / full < 0.01, '最短弧长不到一圈的 1%，不会把 0.1% 画成 20%')
+  assert.ok(near(span(arcs[0]) / span(arcs[1]), 9660 / 310), '够长的段之间保持原比例')
+
+  // 中间为 0 的项不画，也不占缝
+  const holed = ringSegments([5, 0, 5], gap, min)
+  assert.equal(holed[1].start, holed[1].end)
+  assert.ok(near(holed[2].start, holed[0].end + gap))
+  assert.ok(near(span(holed[0]), (full - 2 * gap) / 2))
+
+  // 只有一段非零：整圈、不留缝；合计为 0 / 没有数据：没有分段
+  assert.deepEqual(ringSegments([0, 7, 0], gap, min), [
+    { fraction: 0, start: 0, end: 0 },
+    { fraction: 1, start: 0, end: full },
+    { fraction: 0, start: 0, end: 0 },
+  ])
+  assert.deepEqual(ringSegments([0, 0], gap, min), [])
+  assert.deepEqual(ringSegments(null, gap, min), [])
+
+  // 段很多、最短弧长放不下时按平均分，不出负数
+  const crowded = ringSegments(Array.from({ length: 40 }, (_, index) => (index === 0 ? 1e9 : 1)), 0.1, 0.5)
+  assert.ok(crowded.every((arc) => arc.end >= arc.start && Number.isFinite(arc.end)))
+  assert.ok(crowded.at(-1).end <= full)
+})
+
+test('ringArc：环上的弧线路径——四分之一、超过半圈用大弧、一整圈画成两个半圆；没有 NaN', () => {
+  const { ringArc } = loadClientHelpers({ functions: ['ringArc'] })
+  assert.equal(ringArc(50, 50, 43, 0, Math.PI / 2), 'M 50 7 A 43 43 0 0 1 93 50')
+  assert.equal(ringArc(50, 50, 43, 0, (Math.PI * 3) / 2), 'M 50 7 A 43 43 0 1 1 7 50')
+  assert.equal(ringArc(50, 50, 43, 0, Math.PI * 2), 'M 50 7 A 43 43 0 1 1 50 93 A 43 43 0 1 1 50 7')
+  for (const [start, end] of [[0, 0.001], [1, 2], [3, 6.2], [0.02, 6.26]]) assert.ok(!/NaN|Infinity/.test(ringArc(50, 50, 43, start, end)), `${start}-${end}`)
 })
 
 test('buildModelSeries：不同粒度窗口里模型的占比各算各的（窗口大了，早期的配比也算进来）', () => {

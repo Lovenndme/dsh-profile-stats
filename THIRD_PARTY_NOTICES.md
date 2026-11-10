@@ -32,3 +32,11 @@ SOFTWARE.
 
 Only the prices are kept (input, output, cache read and cache write per 1M tokens, in USD), for models
 sold directly by their vendors. No LiteLLM code is included.
+
+## dsh-context token estimation
+
+The Token stats card's method — the eight content categories, the fixed-density estimate (4 characters per
+token, 4 tokens of overhead per block and per message), the image grid estimate and the rule for which
+messages count as injected context or skill injections — follows the design of the `dsh-context` plugin
+(https://github.com/bowenliang123/dsh-context), which is licensed under the Apache License 2.0. The
+implementation here is written for this package's own fold; no dsh-context source file is included.

@@ -2,8 +2,17 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  MIX_KEYS,
   applyEvent,
+  createContext,
   emptyFold,
+  estimateImage,
+  estimateMessage,
+  estimateSystem,
+  estimateTools,
+  messageCategory,
+  splitByWeights,
+  trackContext,
   foldSnapshot,
   modelFamilyOf,
   normalizeModelId,
@@ -401,4 +410,197 @@ test('foldSnapshot：继承前缀单独记单次峰值与最长任务（孤儿�
   assert.equal(fold.inheritedLongestTurnMs, 7200000)
   assert.equal(fold.maxStepTokens, 15, '本体的峰值不含前缀')
   assert.equal(fold.longestTurnMs, 60000)
+})
+
+/* ---------------------------------------------------------------- Token 统计（八类） */
+
+const text = (length) => ({ type: 'text', text: 'x'.repeat(length) })
+const mixOf = (mix) => Object.fromEntries(MIX_KEYS.map((key, index) => [key, mix[index]]))
+const systemEvent = (seq, length, surfaceOp = 'append') => ({ type: 'system/message', seq, time: 1, surfaceOp, data: { message: { role: 'system', content: [text(length)], source: { kind: 'system-prompt' } } } })
+const userEvent = (seq, length, source = { kind: 'user' }, surfaceOp = 'append') => ({ type: 'user/message', seq, time: 1, surfaceOp, data: { role: 'user', content: [text(length)], source } })
+const resultEvent = (seq, callId, length, surfaceOp = 'append', body) => ({
+  type: 'tool/result',
+  seq,
+  time: 1,
+  surfaceOp,
+  data: { message: { role: 'tool', source: { kind: 'tool', callId }, content: [body ? { type: 'text', text: body } : text(length)] } },
+})
+const callEvent = (seq, callId, name) => ({ type: 'tool/call', seq, time: 1, data: { callId, name, arguments: '{}' } })
+const stepEvent = (seq, usage, content, time = localNoon(2026, 11, 6)) => ({
+  type: 'assistant/message',
+  seq,
+  time,
+  surfaceOp: 'append',
+  data: { usage, message: { role: 'assistant', content, source: { kind: 'model', provider: 'alpha', model: 'deepseek-v4-1-flash' } } },
+})
+
+test('estimateMessage / estimateSystem / estimateTools / estimateImage：4 个字符 ≈ 1 token，加块与角色开销；空内容是 0', () => {
+  assert.deepEqual(estimateMessage({ content: [text(400)] }), { tokens: 108, reasoning: 0, answers: 104, calls: 0 })
+  assert.deepEqual(
+    estimateMessage({ content: [{ type: 'reasoning', text: 'r'.repeat(40) }, text(8), { type: 'tool-call', name: 'read', arguments: 'a'.repeat(16) }] }),
+    { tokens: 14 + 6 + 9 + 4, reasoning: 14, answers: 6, calls: 9 },
+  )
+  for (const empty of [undefined, null, {}, { content: [] }, { content: 'x' }]) assert.deepEqual(estimateMessage(empty), { tokens: 0, reasoning: 0, answers: 0, calls: 0 })
+  assert.equal(estimateMessage({ content: [null, 7] }).tokens, 4 + 4 + 4, '坏掉的块只算块开销')
+  assert.equal(estimateSystem({ content: [text(400)] }), 104)
+  assert.equal(estimateSystem({ content: [] }), 0)
+  assert.equal(estimateTools([]), 0)
+  assert.equal(estimateTools(undefined), 0)
+  const tools = [{ name: 'read', description: 'd'.repeat(100), parameters: {} }]
+  assert.equal(estimateTools(tools), Math.ceil(JSON.stringify(tools).length / 4) + 4)
+  // 图片按尺寸：小图放大到 544 × 544 的面积；大图封顶 1024；没有尺寸按引用长度、同样封顶
+  assert.equal(estimateImage({ type: 'image', attachment: { width: 544, height: 544 } }), 13 * 14 + 2)
+  assert.equal(estimateImage({ type: 'image', attachment: { width: 100, height: 100 } }), 13 * 14 + 2)
+  assert.equal(estimateImage({ type: 'image', attachment: { width: 4000, height: 3000 } }), 1024)
+  assert.equal(estimateImage({ type: 'image', data: 'x'.repeat(100000) }), 1024)
+  assert.ok(estimateImage({ type: 'image' }) < 10)
+})
+
+test('messageCategory：技能目录 / 调用算技能注入，来源不是用户本人的算注入内容，developer 消息算注入内容', () => {
+  assert.equal(messageCategory('user/message', { kind: 'user' }), 'user')
+  assert.equal(messageCategory('user/message', undefined), 'user')
+  assert.equal(messageCategory('user/message', { kind: 'skill-catalog', form: 'catalog' }), 'skill')
+  assert.equal(messageCategory('user/message', { kind: 'skill-invocation', form: 'instructions' }), 'skill')
+  for (const kind of ['runtime-context', 'time-context', 'agent-instructions', 'compact-checkpoint', 'schedule', 'plugin']) assert.equal(messageCategory('user/message', { kind }), 'inject', kind)
+  assert.equal(messageCategory('user/message', { form: 'notice' }), 'inject')
+  assert.equal(messageCategory('developer/message', { kind: 'tool-registry' }), 'inject')
+})
+
+test('splitByWeights：按比例分成整数，各份之和恰好等于总数；权重全 0 / 脏值时全是 0', () => {
+  assert.deepEqual(splitByWeights(100, [1, 1, 1]), [34, 33, 33])
+  assert.deepEqual(splitByWeights(10, [0, 3, 1]), [0, 8, 2])
+  assert.deepEqual(splitByWeights(7, [0, 0]), [0, 0])
+  assert.deepEqual(splitByWeights(0, [1, 2]), [0, 0])
+  assert.deepEqual(splitByWeights(5, [NaN, -1, 2]), [0, 0, 5])
+  for (const total of [1, 999, 123456789]) {
+    const parts = splitByWeights(total, [0.3, 17, 2.5, 0, 961.2])
+    assert.equal(parts.reduce((sum, part) => sum + part, 0), total)
+    assert.ok(parts.every((part) => Number.isInteger(part) && part >= 0))
+  }
+})
+
+test('trackContext：一步的输入按当时上下文里各类的估算比例分摊，输出按这一步自己生成的内容分摊，八类之和 = 这一步的 token 数', () => {
+  const context = createContext()
+  const header = { type: 'request/header', seq: 0, time: 1, data: { header: { tools: [{ name: 'read', description: 'd'.repeat(352), parameters: {} }] } } }
+  assert.equal(trackContext(context, header), null)
+  trackContext(context, systemEvent(1, 384))
+  trackContext(context, userEvent(2, 768))
+  trackContext(context, userEvent(3, 368, { kind: 'runtime-context', form: 'snapshot' }))
+  const weights = { system: 100, tools: estimateTools(header.data.header.tools), user: 200, inject: 100 }
+  const first = trackContext(
+    context,
+    stepEvent(4, { inputTokens: 1000, cacheReadTokens: 3000, outputTokens: 300 }, [
+      { type: 'reasoning', text: 'r'.repeat(784) },
+      { type: 'tool-call', name: 'read', arguments: 'a'.repeat(380) },
+    ]),
+  )
+  const firstMix = mixOf(first)
+  assert.equal(first.reduce((sum, part) => sum + part, 0), 4300)
+  const weightSum = weights.system + weights.tools + weights.user + weights.inject
+  for (const key of ['system', 'tools', 'user', 'inject']) assert.ok(Math.abs(firstMix[key] - (4000 * weights[key]) / weightSum) < 1, key)
+  assert.equal(firstMix.skill, 0)
+  // 输出 300：思考 200、调用 100（估算值 200 : 100）；这一步自己的回复还不在它的输入里
+  assert.equal(firstMix.thinking, 200)
+  assert.equal(firstMix.toolCalls, 100)
+  assert.equal(firstMix.answers, 0)
+
+  // 第二步：上下文里多了上一步的回复（思考 200、调用 100，加角色开销 4）和工具结果
+  trackContext(context, callEvent(5, 'c1', 'read'))
+  trackContext(context, resultEvent(6, 'c1', 1568))
+  const second = mixOf(trackContext(context, stepEvent(7, { inputTokens: 500, outputTokens: 100 }, [text(384)])))
+  const total = weightSum + 304 + 400
+  assert.ok(Math.abs(second.thinking - (500 * 200 * (304 / 300)) / total) < 1)
+  assert.ok(Math.abs(second.toolCalls - (500 * (400 + 100 * (304 / 300))) / total) < 1)
+  assert.equal(second.answers, 100, '输出全是回复正文')
+  assert.equal(
+    Object.values(second).reduce((sum, part) => sum + part, 0),
+    600,
+  )
+})
+
+test('trackContext：供应商报了 reasoningTokens 就用它分思考，其余按回复 / 调用的估算值分；什么都分不出来时算工具调用', () => {
+  const run = (usage, content) => {
+    const context = createContext()
+    trackContext(context, userEvent(1, 400))
+    return mixOf(trackContext(context, stepEvent(2, usage, content)))
+  }
+  const reported = run({ inputTokens: 0, outputTokens: 100, reasoningTokens: 70 }, [{ type: 'reasoning', text: 'r' }, text(396)])
+  assert.equal(reported.thinking, 70)
+  assert.equal(reported.answers, 30)
+  assert.equal(run({ outputTokens: 100, reasoningTokens: 500 }, [text(40)]).thinking, 100, '报的思考比输出还多：封顶在输出')
+  assert.equal(run({ outputTokens: 100, reasoningTokens: 40 }, []).thinking, 100, '只有思考、没有别的内容：全算思考')
+  assert.equal(run({ outputTokens: 100 }, []).toolCalls, 100, '日志里没有内容：算工具调用')
+  // 没有任何上下文的残缺日志：输入记在用户消息上
+  const bare = mixOf(trackContext(createContext(), stepEvent(1, { inputTokens: 50, outputTokens: 0 }, [])))
+  assert.equal(bare.user, 50)
+  assert.equal(trackContext(createContext(), stepEvent(1, undefined, [text(8)])), null, '没有用量的回复不分摊，但进上下文')
+})
+
+test('trackContext：skill 工具加载的技能正文算技能注入；别的工具返回里出现同样的标记不算', () => {
+  const body = '<skill_content name="demo">' + 'x'.repeat(373)
+  const run = (name) => {
+    const context = createContext()
+    if (name) trackContext(context, callEvent(1, 'c1', name))
+    trackContext(context, resultEvent(2, 'c1', 0, 'append', body))
+    return mixOf(trackContext(context, stepEvent(3, { inputTokens: 100, outputTokens: 0 }, [])))
+  }
+  assert.equal(run('skill').skill, 100)
+  assert.equal(run(undefined).skill, 100, '找不到对应的调用时按内容认')
+  assert.equal(run('read').toolCalls, 100)
+})
+
+test('trackContext：压缩 / 裁剪后，被点名的消息从上下文里拿掉、换成摘要；系统提示词换新后按新的算', () => {
+  const context = createContext()
+  trackContext(context, systemEvent(1, 384))
+  trackContext(context, userEvent(2, 3968))
+  trackContext(context, callEvent(3, 'c1', 'read'))
+  trackContext(context, resultEvent(4, 'c1', 7968))
+  const before = mixOf(trackContext(context, stepEvent(5, { inputTokens: 3100, outputTokens: 0 }, [])))
+  assert.deepEqual([before.system, before.user, before.toolCalls], [100, 1000, 2000])
+  // 压缩：2、4 被摘要（seq 7，400 token）顶替
+  trackContext(context, { type: 'compaction/summary', seq: 6, time: 1, data: { shadowedSeqs: [2, 4] } })
+  trackContext(context, userEvent(7, 1568, { kind: 'compact-checkpoint' }, { op: 'replace', startSeq: 2, endSeq: 4 }))
+  const after = mixOf(trackContext(context, stepEvent(8, { inputTokens: 500, outputTokens: 0 }, [])))
+  assert.deepEqual([after.system, after.user, after.toolCalls, after.inject], [100, 0, 0, 400])
+  // 裁剪：没点名时按 seq 范围替换
+  trackContext(context, resultEvent(9, 'c2', 768))
+  trackContext(context, resultEvent(10, 'c2', 368, { op: 'replace', startSeq: 9, endSeq: 9 }))
+  // 系统提示词换新（replace 自己原来的 seq）
+  trackContext(context, systemEvent(11, 1184, { op: 'replace', startSeq: 1, endSeq: 1 }))
+  const last = mixOf(trackContext(context, stepEvent(12, { inputTokens: 800, outputTokens: 0 }, [])))
+  assert.deepEqual([last.system, last.inject, last.toolCalls], [300, 400, 100])
+})
+
+test('foldSnapshot：每天的 mix 八类之和 = 当天的 token 数；继承前缀的消息算进后面每一步的上下文，但它的用量记在前缀自己的表里', () => {
+  const day = localNoon(2026, 11, 6)
+  const key = '2026-11-06'
+  const fold = foldSnapshot({
+    session: { id: 'mix', parentSession: 'origin' },
+    inheritedEventCount: 3,
+    events: [
+      systemEvent(0, 384),
+      userEvent(1, 1168),
+      stepEvent(2, { inputTokens: 400, outputTokens: 0 }, [], day),
+      stepEvent(3, { inputTokens: 300, cacheReadTokens: 100, outputTokens: 60 }, [text(8)], day),
+      null,
+      { type: 'assistant/message', seq: 5, time: day, data: { usage: { inputTokens: 7 }, message: 'broken' } },
+    ],
+  })
+  assert.equal(fold.perDayMix[key].length, 8)
+  assert.equal(
+    fold.perDayMix[key].reduce((sum, part) => sum + part, 0),
+    fold.perDay[key],
+  )
+  assert.equal(fold.perDay[key], 467)
+  const own = mixOf(fold.perDayMix[key])
+  assert.equal(own.system + own.user, 407, '前缀里的系统提示词和用户消息仍在本体每一步的输入里')
+  assert.equal(own.answers, 60)
+  assert.deepEqual(mixOf(fold.inheritedPerDayMix[key]), { ...mixOf(MIX_KEYS.map(() => 0)), system: 100, user: 300 })
+})
+
+test('applyEvent：单独调用、没有传分摊结果时，这一步照常计入用量，只是不进 mix', () => {
+  const fold = emptyFold('solo', 0)
+  applyEvent(fold, assistantEvent({ seq: 1, time: localNoon(2026, 11, 6), input: 10, output: 5 }))
+  assert.equal(fold.tokens, 15)
+  assert.deepEqual(fold.perDayMix, {})
 })

@@ -55,7 +55,7 @@ test('aggregate：总量、每日、峰值、连续天数口径一致', () => {
   })
   assert.deepEqual(shape(day1), { tokens: 500, calls: 1, input: 400, output: 100, cacheRead: 0, cacheWrite: 0 })
   assert.deepEqual(shape(day2), { tokens: 1150, calls: 2, input: 300, output: 250, cacheRead: 600, cacheWrite: 0 })
-  // 每天四项之和 = 当天总量（Token 构成的几行加起来等于大数字）
+  // 每天四项之和 = 当天总量（和当天的 tokens 对得上）
   for (const entry of daily) {
     assert.equal(entry.inputTokens + entry.cacheReadTokens + entry.cacheWriteTokens + entry.outputTokens, entry.tokens, entry.date)
   }
@@ -335,4 +335,25 @@ test('aggregate：孤儿前缀补回时，单次峰值、最长任务、单会�
   const both = aggregate([origin, copy], NOW, new Set(['copy', 'gone'])).totals
   assert.equal(both.longestTurnMs, 0)
   assert.equal(both.peakSessionTokens, 1000000)
+})
+
+test('aggregate：每天的 mix 是各会话八类的逐项之和，加起来 = 当天的 token 数；孤儿前缀补回时前缀的 mix 也补回', () => {
+  const text = (length) => ({ type: 'text', text: 'x'.repeat(length) })
+  const user = (seq, length) => ({ type: 'user/message', seq, time: DAY_1, surfaceOp: 'append', data: { role: 'user', content: [text(length)], source: { kind: 'user' } } })
+  const step = (seq, time, usage) => ({ type: 'assistant/message', seq, time, surfaceOp: 'append', data: { usage, message: { role: 'assistant', content: [text(8)], source: { kind: 'model', provider: 'alpha', model: 'deepseek-v4-1-flash' } } } })
+  const first = foldSnapshot({ session: { id: 'a' }, events: [user(0, 400), step(1, DAY_1, { inputTokens: 90, outputTokens: 10 }), step(2, DAY_2, { inputTokens: 40, outputTokens: 5 })] })
+  const copy = foldSnapshot({
+    session: { id: 'b', parentSession: 'gone' },
+    inheritedEventCount: 2,
+    events: [user(0, 400), step(1, DAY_1, { inputTokens: 30, outputTokens: 0 }), step(2, DAY_1, { inputTokens: 20, outputTokens: 6 })],
+  })
+  const snapshot = aggregate([first, copy], NOW)
+  const sumOf = (mix) => mix.reduce((left, right) => left + right, 0)
+  for (const entry of snapshot.daily) {
+    assert.equal(entry.mix.length, 8)
+    assert.equal(sumOf(entry.mix), entry.tokens, entry.date)
+  }
+  const total = snapshot.daily.reduce((sum, entry) => sum + sumOf(entry.mix), 0)
+  assert.equal(total, snapshot.totals.tokens)
+  assert.equal(total, 100 + 45 + 30 + 26, '来源会话不在本机：前缀的 30 连同它的 mix 一起补回')
 })

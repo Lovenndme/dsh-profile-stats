@@ -2,7 +2,7 @@
  * dsh-profile-stats — 浏览器半区。
  *
  * 在左侧图标栏加一个「个人主页」入口，主区渲染个人用量页：
- * 页头（头像 / 名字 / 刷新 / 更新）· 五个指标 · Token 活动 · 模型分布 · Token 构成（Cache Lens）· 供应商分类。
+ * 页头（头像 / 名字 / 刷新 / 更新）· 五个指标 · Token 活动 · 模型分布 · Token 统计 · 供应商分类。
  *
  * 数字只有一个来源：宿主的 GET /api/dsh-profile-stats/snapshot。这里只做两件事：
  *   1. 派生展示值（占比、分桶求和、坐标轴），全程用原始整数，格式化只发生在渲染那一步；
@@ -42,7 +42,7 @@ window.__ModuleLoader__.load({
       'stat.currentStreak': 'Current streak',
       'section.activity': 'Token activity',
       'section.model': 'Token by model',
-      'section.breakdown': 'Token mix',
+      'section.breakdown': 'Token stats',
       'section.provider': 'Provider split',
       'mode.day': 'Daily',
       'mode.week': 'Weekly',
@@ -110,21 +110,15 @@ window.__ModuleLoader__.load({
       'chart.empty': 'No data',
       'model.others': 'Other models',
       'model.unknown': 'Unknown model',
-      'lens.total': 'Total tokens',
-      'lens.cacheHit': 'Cache hit rate',
-      'lens.uncachedTotal': 'Uncached total',
-      'lens.uncachedShare': 'Uncached input share',
-      'lens.cache': 'Cache hit',
-      'lens.cacheWrite': 'Cache write',
-      'lens.input': 'Uncached input',
-      'lens.output': 'Output',
-      'lens.zoom': 'Zoom into uncached',
-      'lens.back': 'Back to overall',
-      'lens.uncachedTitle': 'Uncached token mix',
-      'lens.colType': 'Type',
-      'lens.colAmount': 'Tokens',
-      'lens.colShareTotal': 'of input',
-      'lens.colShareUncached': 'of uncached',
+      'lens.total': 'Total',
+      'lens.system': 'System prompt',
+      'lens.tools': 'Tool definitions',
+      'lens.user': 'User messages',
+      'lens.inject': 'Injected context',
+      'lens.skill': 'Skill injections',
+      'lens.toolCalls': 'Tool calls',
+      'lens.thinking': 'Reasoning',
+      'lens.answers': 'Answers',
       'provider.deepseek-account': 'DeepSeek account',
       'provider.deepseek-official': 'DeepSeek official',
       'provider.deepseek-modlens': 'DeepSeek ModLens',
@@ -149,13 +143,11 @@ window.__ModuleLoader__.load({
       'unit.none': '—',
       'aria.activity': 'Token activity chart',
       'aria.model': 'Token by model chart',
-      'aria.lens': 'Token mix bar',
+      'aria.lens': 'Token stats chart',
       'aria.range': 'Time range',
-      'aria.hitTrend': 'Daily cache hit rate',
       'aria.spark': 'Daily token trend (7-day average)',
       'aria.sparkDaily': 'Tokens per day',
       'aria.sparkWeekly': 'Tokens per week',
-      'lens.hitTrend': 'Daily cache hit rate',
     }
 
     const ZH = {
@@ -165,7 +157,7 @@ window.__ModuleLoader__.load({
       'stat.currentStreak': '当前连续天数',
       'section.activity': 'Token 活动',
       'section.model': '模型分布',
-      'section.breakdown': 'Token 构成',
+      'section.breakdown': 'Token 统计',
       'section.provider': '供应商分类',
       'mode.day': '每天',
       'mode.week': '每周',
@@ -233,21 +225,15 @@ window.__ModuleLoader__.load({
       'chart.empty': '暂无数据',
       'model.others': '其他模型',
       'model.unknown': '未知模型',
-      'lens.total': '总 Token',
-      'lens.cacheHit': '缓存命中率',
-      'lens.uncachedTotal': '非缓存 Token 合计',
-      'lens.uncachedShare': '未缓存输入占比',
-      'lens.cache': '缓存命中',
-      'lens.cacheWrite': '缓存写入',
-      'lens.input': '未缓存输入',
-      'lens.output': '输出',
-      'lens.zoom': '放大非缓存细分',
-      'lens.back': '返回整体构成',
-      'lens.uncachedTitle': '非缓存 Token 构成',
-      'lens.colType': '类型',
-      'lens.colAmount': '用量',
-      'lens.colShareTotal': '占输入',
-      'lens.colShareUncached': '占非缓存合计',
+      'lens.total': '总用量',
+      'lens.system': '系统提示词',
+      'lens.tools': '工具定义',
+      'lens.user': '用户消息',
+      'lens.inject': '注入内容',
+      'lens.skill': '技能注入',
+      'lens.toolCalls': '工具调用',
+      'lens.thinking': '模型思考',
+      'lens.answers': '模型回复',
       'provider.deepseek-account': 'DeepSeek 账号',
       'provider.deepseek-official': 'DeepSeek 官方',
       'provider.deepseek-modlens': 'DeepSeek ModLens',
@@ -272,13 +258,11 @@ window.__ModuleLoader__.load({
       'unit.none': '—',
       'aria.activity': 'Token 活动图',
       'aria.model': '模型分布图',
-      'aria.lens': 'Token 构成条',
+      'aria.lens': 'Token 统计环形图',
       'aria.range': '时间范围',
-      'aria.hitTrend': '每日缓存命中率',
       'aria.spark': '每日用量趋势（7 日均线）',
       'aria.sparkDaily': '每日用量',
       'aria.sparkWeekly': '每周用量',
-      'lens.hitTrend': '每日缓存命中率',
     }
 
     const localeBridge = {
@@ -635,6 +619,9 @@ window.__ModuleLoader__.load({
       return all > 0 ? (read / all) * 100 : null
     }
 
+    /** Token 统计的八类，顺序和宿主每日明细里的 mix 数组一致（index.js 的 MIX_KEYS）。 */
+    const MIX_KEYS = ['system', 'tools', 'user', 'inject', 'skill', 'toolCalls', 'thinking', 'answers']
+
     function emptySummary() {
       return {
         tokens: 0,
@@ -648,6 +635,7 @@ window.__ModuleLoader__.load({
         byModel: {},
         byProject: {},
         byProjectSubagent: {},
+        mix: MIX_KEYS.map(() => 0),
         days: 0,
         activeDays: 0,
       }
@@ -670,6 +658,7 @@ window.__ModuleLoader__.load({
         // 旧版宿主的日明细只有读写合并的 cacheTokens（升级后宿主重载前会短暂遇到）
         summary.cacheReadTokens += toNumber(entry.cacheReadTokens === undefined ? entry.cacheTokens : entry.cacheReadTokens)
         summary.cacheWriteTokens += toNumber(entry.cacheWriteTokens)
+        if (Array.isArray(entry.mix)) for (let index = 0; index < MIX_KEYS.length; index += 1) summary.mix[index] += Math.max(0, toNumber(entry.mix[index]))
         for (const [id, amount] of Object.entries(entry.byProvider || {})) {
           summary.byProvider[id] = toNumber(summary.byProvider[id]) + toNumber(amount)
         }
@@ -689,15 +678,9 @@ window.__ModuleLoader__.load({
       return summary
     }
 
-    /** 汇总结果 → Cache Lens 需要的 totals 形状。 */
+    /** 汇总结果 → Token 统计需要的 totals 形状。 */
     function lensTotalsOf(summary) {
-      return {
-        tokens: summary.tokens,
-        inputTokens: summary.inputTokens,
-        outputTokens: summary.outputTokens,
-        cacheReadTokens: summary.cacheReadTokens,
-        cacheWriteTokens: summary.cacheWriteTokens,
-      }
+      return { tokens: summary.tokens, mix: summary.mix }
     }
 
     /** 日明细 → 连续日序列（缺的补 0），给指标卡的迷你趋势用。 */
@@ -1334,14 +1317,13 @@ window.__ModuleLoader__.load({
       calendar: 'M4 7h16v13H4zM8 3v4m8-4v4M4 11h16',
       flame: 'M12 21c3.9 0 6-2.4 6-5.4 0-4.2-4.2-5.6-3.3-10.6-2.6.8-4.2 3.1-4.2 5 0 1.1.4 1.9.4 2.7 0 1.1-.8 1.8-1.7 1.8-1 0-1.9-.9-1.9-2.2-1 1.4-1.3 2.9-1.3 4.2C6 18.6 8.1 21 12 21z',
       refresh: 'M20 12a8 8 0 11-2.3-5.6M20 4v4h-4',
-      zoom: 'M11 18a7 7 0 100-14 7 7 0 000 14zM16 16l4 4M8.5 11h5',
-      back: 'M19 12H5m6-6l-6 6 6 6',
       update: 'M12 16V4m-5 5l5-5 5 5M5 20h14',
       download: 'M12 4v10m-4.5-4l4.5 4.5 4.5-4.5M5 20h14',
       alert: 'M12 8v5m0 3.5v.01M10.3 3.9L2.6 17.5A2 2 0 004.3 20.5h15.4a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z',
       edit: 'M4 20h4L19 9l-4-4L4 16v4zM13 7l4 4',
       wallet: 'M4 7.5A1.5 1.5 0 015.5 6H18a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2V7.5zM4 8l12-3.5V6M16 13h2',
       target: 'M12 21a9 9 0 100-18 9 9 0 000 18zM12 16.5a4.5 4.5 0 100-9 4.5 4.5 0 000 9zM12 12.6a.6.6 0 100-1.2.6.6 0 000 1.2z',
+      database: 'M4 6a8 3 0 1 0 16 0a8 3 0 1 0 -16 0M4 6v12a8 3 0 0 0 16 0V6M4 12a8 3 0 0 0 16 0',
     }
 
     function Icon(props) {
@@ -2513,326 +2495,176 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /* ------------------------------------------------------------ Token 构成 */
+    /* ------------------------------------------------------------ Token 统计 */
 
     /**
-     * Token 构成（Cache Lens）的派生值。DSH 的用量四项互不重叠，直接取用、不做推断：
-     *   缓存命中 = cacheReadTokens    缓存写入 = cacheWriteTokens
-     *   未缓存输入 = inputTokens      输出 = outputTokens
-     *   总 Token = 范围内日明细的 tokens 之和（宿主按每步四项之和折叠，所以等于四项之和）
-     *   缓存命中率 = cacheHitRate：命中 ÷（未缓存输入 + 命中 + 写入）
-     *   未缓存输入占比 = 未缓存输入 ÷ 非命中合计（未缓存输入 + 写入 + 输出）——放大视图的分母
-     * 旧实现按「inputTokens ≥ 缓存就减掉缓存」猜字段含义，真实命中率 ≤ 50% 时会算高（50% 直接跳成 100%）。
+     * Token 统计的派生值：范围内的 token 按「花在什么内容上」分成八类（宿主每日明细里的 mix，顺序见 MIX_KEYS）。
+     *   总用量 = 范围内日明细的 tokens 之和（供应商报的数）
+     *   八类是宿主按每一步的上下文估算比例分摊出来的，每一步八类之和等于那一步的 token 数
+     *   各项占比的分母 = 八类之和（partsTotal）：加起来恰好 100%，和环形的弧长同一个分母
+     * 旧版宿主的日明细没有 mix：八类全是 0，页面画空环、占比写「—」。
      */
     function deriveLens(totals) {
       const source = totals || {}
       const count = (value) => Math.max(0, toNumber(value))
-      const total = count(source.tokens)
-      const cache = count(source.cacheReadTokens)
-      const write = count(source.cacheWriteTokens)
-      const uncached = count(source.inputTokens)
-      const output = count(source.outputTokens)
-      const inputTotal = uncached + cache + write
-      const uncachedTotal = uncached + write + output
-      const hitRate = cacheHitRate(source)
-      return {
-        total,
-        cache,
-        write,
-        uncached,
-        output,
-        inputTotal,
-        uncachedTotal,
-        partsTotal: inputTotal + output,
-        // 没有输入 / 没有非命中用量时是 null：页面写「—」，不写 0%（和每日命中率、供应商的命中率一致）
-        hitRate,
-        uncachedShare: uncachedTotal > 0 ? (uncached / uncachedTotal) * 100 : null,
-      }
+      const mix = Array.isArray(source.mix) ? source.mix : []
+      const parts = MIX_KEYS.map((key, index) => ({ key, value: count(mix[index]) }))
+      return { total: count(source.tokens), parts, partsTotal: parts.reduce((sum, part) => sum + part.value, 0) }
     }
 
+    /** 八类的颜色：只用主题 token 调出来，浅色 / 深色都分得开。 */
     const LENS_COLORS = {
-      cache: 'var(--dps-accent)',
-      write: 'color-mix(in srgb,var(--dps-accent) 42%,transparent)',
-      input: 'var(--dsw-alias-state-warn-primary)',
-      output: 'var(--dsw-alias-state-success-primary)',
+      system: 'color-mix(in srgb,var(--dps-accent) 60%,var(--dps-ink))',
+      tools: 'var(--dsw-alias-state-warn-primary)',
+      user: 'var(--dsw-alias-state-success-primary)',
+      inject: 'color-mix(in srgb,var(--dps-accent) 30%,var(--dsw-alias-state-error-primary))',
+      skill: 'color-mix(in srgb,var(--dsw-alias-state-warn-primary) 45%,var(--dsw-alias-state-error-primary))',
+      toolCalls: 'color-mix(in srgb,var(--dps-accent) 45%,var(--dsw-alias-state-success-primary))',
+      thinking: 'color-mix(in srgb,var(--dps-accent) 68%,var(--dsw-alias-state-error-primary))',
+      answers: 'color-mix(in srgb,var(--dsw-alias-state-error-primary) 60%,var(--dps-ink))',
     }
+
+    /** 环形图的几何（viewBox 100 × 100）：半径、环宽，段与段之间的缝、极小段的最短弧长（都是 viewBox 里的长度）。 */
+    const RING_R = 43
+    const RING_WIDTH = 12
+    const RING_GAP = 1.8
+    const RING_MIN = 2.4
 
     /**
-     * 每日缓存命中率（Token 构成卡的底部）：一天一个点，命中 ÷ 全部输入。没有输入的日子没有命中率，
-     * 线直接连到下一个有数的日子（不画成 0）。纵轴从数据最低点往下取整到 5% 起、到 100%，
-     * 左侧写出上下两端的刻度，否则 90% 以上的起伏看不出来。悬停显示日期与当天的命中率。
+     * 环形图的分段：values 是各项用量（非负），按给定顺序从 12 点钟方向顺时针排；返回和 values 等长的
+     * { fraction（占合计的比例 0–1）, start, end（弧度，12 点钟 = 0）}。fraction 是原始比例，start / end 只管画：
+     * 非零段之间各留 gap 弧度的缝；不到 min 弧度的段按 min 画（看得见，但不会把 0.2% 画成 20%），
+     * 多出来的弧长从其余各段按比例扣。只有一段非零时画一整圈、不留缝；为 0 的段 start = end。合计为 0 时返回空数组。
      */
-    function HitTrend(props) {
-      const points = props.points || []
-      const count = points.length
-      const hasRate = (point) => point && point.rate !== null && point.rate !== undefined
-      const known = points.filter(hasRate)
-      const [hover, setHover] = useState(null)
-      const wrapRef = useRef(null)
-      const pointer = usePointer()
-      if (known.length < 2) return null
-      let lowest = 100
-      for (const point of known) lowest = Math.min(lowest, point.rate)
-      const floor = Math.max(0, Math.min(95, Math.floor((lowest - 1) / 5) * 5))
-      const width = Math.max(count * 4, 8)
-      const height = 40
-      const xOf = (index) => (count <= 1 ? width / 2 : (index / (count - 1)) * width)
-      const yOf = (rate) => height - ((rate - floor) / (100 - floor)) * (height - 4) - 2
-      const line = points
-        .map((point, index) => (hasRate(point) ? `${xOf(index).toFixed(2)} ${yOf(point.rate).toFixed(2)}` : null))
-        .filter(Boolean)
-        .map((xy, index) => `${index === 0 ? 'M' : 'L'}${xy}`)
-        .join(' ')
-      let lastIndex = count - 1
-      while (lastIndex >= 0 && !hasRate(points[lastIndex])) lastIndex -= 1
-      const marked = hover !== null && hasRate(points[hover]) ? hover : lastIndex
-      const indexAt = (clientX) => {
-        const node = wrapRef.current
-        if (!node || typeof node.getBoundingClientRect !== 'function') return null
-        const rect = node.getBoundingClientRect()
-        if (!(rect.width > 0)) return null
-        return Math.max(0, Math.min(count - 1, Math.round(((clientX - rect.left) / rect.width) * (count - 1))))
+    function ringSegments(values, gap, min) {
+      const slices = pieSlices(values)
+      const full = Math.PI * 2
+      const shown = slices.filter((slice) => slice.fraction > 0)
+      if (shown.length <= 1) return slices.map((slice) => ({ fraction: slice.fraction, start: 0, end: slice.fraction > 0 ? full : 0 }))
+      const room = full - gap * shown.length
+      const least = Math.min(min, room / shown.length)
+      // 掉到下限以下的段固定按下限画，剩下的弧长再按比例分给其余各段；分完又有段不够下限就再分一轮
+      const fixed = new Set()
+      let spans = new Map()
+      for (let round = 0; round <= shown.length; round += 1) {
+        let free = 0
+        for (const slice of shown) if (!fixed.has(slice)) free += slice.fraction
+        const rest = room - fixed.size * least
+        spans = new Map(shown.map((slice) => [slice, fixed.has(slice) ? least : (slice.fraction / free) * rest]))
+        const below = shown.filter((slice) => !fixed.has(slice) && spans.get(slice) < least)
+        if (!below.length) break
+        for (const slice of below) fixed.add(slice)
       }
-      let tip = null
-      if (hover !== null && points[hover] && wrapRef.current && typeof wrapRef.current.getBoundingClientRect === 'function') {
-        const rect = wrapRef.current.getBoundingClientRect()
-        const point = points[hover]
-        const date = parseDateKey(point.key)
-        tip = h(
-          Popover,
-          { pointer, anchor: { left: rect.left + (count > 1 ? hover / (count - 1) : 0.5) * rect.width, top: rect.top, width: 0, height: rect.height } },
-          h('div', { className: 'dps-pop-title' }, date ? formatDate(date, { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' }) : point.key),
-          h('div', { className: 'dps-pop-value' }, hasRate(point) ? `${t('lens.cacheHit')} ${formatPercent(point.rate)}` : t('tip.none')),
-        )
-      }
-      return h(
-        'div',
-        { className: 'dps-hit', 'data-dps-field': 'hit-trend', 'data-floor': floor },
-        h('div', { className: 'dps-hit-label' }, t('lens.hitTrend')),
-        h(
-          'div',
-          { className: 'dps-hit-body' },
-          h(
-            'div',
-            { className: 'dps-hit-axis', 'aria-hidden': true },
-            h('span', { style: { top: '0%' } }, '100%'),
-            h('span', { style: { top: '100%' } }, `${floor}%`),
-          ),
-          h(
-            'span',
-            {
-              ref: wrapRef,
-              className: 'dps-spark-wrap dps-hit-plot',
-              onMouseEnter: (event) => {
-                pointer.move(event.clientX, event.clientY)
-                setHover(indexAt(event.clientX))
-              },
-              onMouseMove: (event) => {
-                pointer.move(event.clientX, event.clientY)
-                const index = indexAt(event.clientX)
-                if (index !== hover) setHover(index)
-              },
-              onMouseLeave: () => {
-                pointer.leave()
-                setHover(null)
-              },
-            },
-            h(
-              'svg',
-              { className: 'dps-spark dps-hit-svg', viewBox: `0 0 ${width} ${height}`, preserveAspectRatio: 'none', role: 'img', 'aria-label': t('aria.hitTrend') },
-              h('path', { className: 'dps-spark-line', d: line, 'data-dps-field': 'hit-line' }),
-            ),
-            marked >= 0
-              ? h('span', {
-                  className: 'dps-spark-end',
-                  'aria-hidden': true,
-                  style: { left: `${(xOf(marked) / width) * 100}%`, top: `${(yOf(points[marked].rate) / height) * 100}%` },
-                })
-              : null,
-          ),
-        ),
-        tip,
-      )
+      let angle = gap / 2
+      return slices.map((slice) => {
+        const start = angle
+        if (!(slice.fraction > 0)) return { fraction: slice.fraction, start, end: start }
+        angle += spans.get(slice) + gap
+        return { fraction: slice.fraction, start, end: start + spans.get(slice) }
+      })
+    }
+
+    /** 环上一段的 SVG 路径（只有弧线，环宽靠描边）；一整圈画成两个半圆。 */
+    function ringArc(cx, cy, r, start, end) {
+      const num = (value) => Math.round(value * 100) / 100
+      const point = (angle) => `${num(cx + r * Math.sin(angle))} ${num(cy - r * Math.cos(angle))}`
+      const radius = `${num(r)} ${num(r)} 0`
+      if (end - start >= Math.PI * 2 - 1e-9) return `M ${point(0)} A ${radius} 1 1 ${point(Math.PI)} A ${radius} 1 1 ${point(0)}`
+      return `M ${point(start)} A ${radius} ${end - start > Math.PI ? 1 : 0} 1 ${point(end)}`
     }
 
     function LensCard(props) {
       const lens = useMemo(() => deriveLens(props.totals), [props.totals])
-      const [zoomed, setZoomed] = useState(false)
       const [hover, setHover] = useState(null)
-      const segmentRefs = useRef({})
-      const pointer = usePointer()
-
-      // 柱宽描述的是「构成本身」，分母是总量（放大视图是非缓存合计）。
-      const denominator = zoomed ? lens.uncachedTotal : lens.partsTotal
-      const barShare = (value) => (denominator > 0 ? (value / denominator) * 100 : 0)
-      // 百分比列统一除以「全部输入」（命中 + 写入 + 未缓存输入），命中那一行的百分比就是命中率，
-      // 几行加起来恰好 100%。输出不属于输入，这一列不给百分比。
-      const percentBasis = zoomed ? lens.uncachedTotal : lens.inputTotal
-      const share = (value) => (percentBasis > 0 ? (value / percentBasis) * 100 : 0)
-      const percentCell = (row) => (zoomed || row.key !== 'output' ? (percentBasis > 0 ? formatPercent(share(row.value)) : t('unit.none')) : '')
-      const percentText = (value) => (value === null ? t('unit.none') : formatPercent(value))
-      // 缓存写入只在有数时出一行（DeepSeek 没有这个字段，大多数时候是 0）
-      const rows = [
-        { key: 'cache', label: t('lens.cache'), value: lens.cache, visible: !zoomed },
-        { key: 'write', label: t('lens.cacheWrite'), value: lens.write, visible: lens.write > 0 },
-        { key: 'input', label: t('lens.input'), value: lens.uncached, visible: true },
-        { key: 'output', label: t('lens.output'), value: lens.output, visible: true },
-      ]
-
-      const metrics = zoomed
-        ? [
-            { id: 'primary', label: t('lens.uncachedTotal'), value: lens.uncachedTotal, parts: [tokenParts(lens.uncachedTotal)] },
-            { id: 'secondary', label: t('lens.uncachedShare'), value: lens.uncachedShare, text: percentText(lens.uncachedShare), swatch: 'input' },
-          ]
-        : [
-            { id: 'primary', label: t('lens.total'), value: lens.total, parts: [tokenParts(lens.total)] },
-            { id: 'secondary', label: t('lens.cacheHit'), value: lens.hitRate, text: percentText(lens.hitRate), swatch: 'cache', accent: true },
-          ]
-
-      let visibleBefore = false
-      const segments = rows.map((row) => {
-        const shown = row.visible && row.value > 0
-        const separator = shown && visibleBefore
-        if (shown) visibleBefore = true
-        const ratio = row.visible ? barShare(row.value) : 0
-        return h('span', {
-          key: row.key,
-          ref: (node) => {
-            segmentRefs.current[row.key] = node
-          },
-          className: 'dps-lens-seg',
-          'data-segment': row.key,
-          'data-value': row.visible ? row.value : 0,
-          'data-share': ratio,
-          'data-sep': separator ? 'true' : 'false',
-          'data-dim': hover && hover !== row.key ? 'true' : 'false',
-          // 宽度严格按占比（flex-grow = 百分比）；非零段最少 3px 才看得见，但不把 0.2% 画成 20%
-          style: { flexGrow: ratio, minWidth: shown ? '3px' : '0px', background: LENS_COLORS[row.key] },
-          onMouseEnter: (event) => {
-            pointer.move(event.clientX, event.clientY)
-            setHover(row.key)
-          },
-          onMouseMove: (event) => pointer.move(event.clientX, event.clientY),
-          onMouseLeave: () => {
-            pointer.leave()
-            setHover(null)
-          },
-        })
-      })
-
-      let tip = null
-      const hovered = hover ? rows.find((row) => row.key === hover && row.visible) : null
-      const hoveredNode = hovered ? segmentRefs.current[hovered.key] : null
-      if (hovered && hoveredNode && typeof hoveredNode.getBoundingClientRect === 'function') {
-        const rect = hoveredNode.getBoundingClientRect()
-        tip = h(
-          Popover,
-          { pointer, anchor: { left: rect.left, top: rect.top, width: rect.width, height: rect.height } },
-          h('div', { className: 'dps-pop-title' }, hovered.label),
-          h('div', { className: 'dps-pop-value' }, t('tip.tokens', { value: formatTokens(hovered.value) })),
-          // 和表格的百分比列一致：整体视图里输出不属于输入，不给「占输入」
-          percentCell(hovered)
-            ? h('div', { className: 'dps-pop-title' }, `${percentCell(hovered)} · ${zoomed ? t('lens.colShareUncached') : t('lens.colShareTotal')}`)
-            : null,
-        )
-      }
+      const basis = lens.partsTotal
+      const share = (value) => (basis > 0 ? (value / basis) * 100 : 0)
+      const percentText = (value) => (basis > 0 ? formatPercent(share(value)) : t('unit.none'))
+      // 八类是按估算比例分摊的，用量前一律加「≈」；没有数据时写 0
+      const amountText = (value) => (value > 0 ? `≈${formatTokens(value)}` : formatTokens(value))
+      // 有数据时只列有用量的类别（没加载过技能就没有「技能注入」）；没有数据时八类都列出来
+      const rows = lens.parts.filter((part) => basis === 0 || part.value > 0).map((part) => ({ ...part, label: t(`lens.${part.key}`) }))
+      const arcs = ringSegments(
+        rows.map((row) => row.value),
+        RING_GAP / RING_R,
+        RING_MIN / RING_R,
+      )
+      const totalParts = tokenParts(lens.total)
+      const hoverHandlers = (key) => ({ onMouseEnter: () => setHover(key), onMouseLeave: () => setHover(null) })
 
       return h(
         'section',
-        { className: 'dps-panel dps-lens', 'data-dps-card': 'lens', 'data-zoomed': zoomed ? 'true' : 'false', 'data-denominator': denominator },
+        { className: 'dps-panel dps-lens', 'data-dps-card': 'lens', 'data-denominator': basis },
         h(
           'header',
           { className: 'dps-panel-head' },
-          h('div', { className: 'dps-panel-title' }, h('h2', null, zoomed ? t('lens.uncachedTitle') : t('section.breakdown'))),
-          h(
-            'button',
-            {
-              type: 'button',
-              className: 'dps-ghost',
-              'data-dps-control': 'lens-zoom',
-              'aria-pressed': zoomed ? 'true' : 'false',
-              onClick: () => {
-                setZoomed(!zoomed)
-                setHover(null)
-              },
-            },
-            h(Icon, { name: zoomed ? 'back' : 'zoom' }),
-            zoomed ? t('lens.back') : t('lens.zoom'),
-          ),
+          h('div', { className: 'dps-panel-title' }, h('h2', null, h(Icon, { name: 'database' }), t('section.breakdown'))),
         ),
         h(
           'div',
-          { className: 'dps-lens-metrics' },
-          metrics.map((metric) =>
-            h(
-              'div',
-              { key: metric.id, className: 'dps-metric', 'data-dps-metric': metric.id, 'data-value': metric.value === null ? '' : metric.value, 'data-accent': metric.accent ? 'true' : 'false' },
-              h(
-                'div',
-                { className: 'dps-metric-value' },
-                metric.parts ? h(ValueParts, { parts: metric.parts }) : h('span', { className: 'dps-num' }, metric.text),
-              ),
-              h(
-                'div',
-                { className: 'dps-metric-label' },
-                // 比率说的是哪一类，就用那一类的色块标出来（放大视图里是琥珀色的「未缓存输入」）
-                metric.swatch ? h('i', { className: 'dps-lens-dot', style: { background: LENS_COLORS[metric.swatch] }, 'aria-hidden': true }) : null,
-                metric.label,
-              ),
-            ),
-          ),
-        ),
-        h(
-          'div',
-          {
-            className: 'dps-lens-bar',
-            role: 'img',
-            'aria-label': `${t('aria.lens')}: ${rows
-              .filter((row) => row.visible)
-              .map((row) => `${row.label} ${formatPercent(barShare(row.value))}`)
-              .join(', ')}`,
-          },
-          segments,
-        ),
-        h(
-          'div',
-          { className: 'dps-lens-table', role: 'table' },
+          { className: 'dps-lens-body' },
           h(
             'div',
-            { className: 'dps-lens-row dps-lens-th', role: 'row' },
-            h('span', { role: 'columnheader', 'aria-hidden': true }),
-            h('span', { role: 'columnheader' }, t('lens.colType')),
-            h('span', { role: 'columnheader' }, t('lens.colAmount')),
-            h('span', { role: 'columnheader', 'data-dps-field': 'share-basis' }, zoomed ? t('lens.colShareUncached') : t('lens.colShareTotal')),
+            { className: 'dps-lens-ring' },
+            h(
+              'svg',
+              {
+                viewBox: '0 0 100 100',
+                role: 'img',
+                'aria-label': `${t('aria.lens')}: ${rows.map((row) => `${row.label} ${percentText(row.value)}`).join(', ')}`,
+              },
+              arcs.length ? null : h('circle', { className: 'dps-lens-track', cx: 50, cy: 50, r: RING_R, strokeWidth: RING_WIDTH }),
+              rows.map((row, index) => {
+                const arc = arcs[index]
+                return h('path', {
+                  key: row.key,
+                  className: 'dps-lens-seg',
+                  'data-segment': row.key,
+                  'data-value': row.value,
+                  'data-share': share(row.value),
+                  'data-dim': hover && hover !== row.key ? 'true' : 'false',
+                  d: arc && arc.end > arc.start ? ringArc(50, 50, RING_R, arc.start, arc.end) : undefined,
+                  strokeWidth: RING_WIDTH,
+                  style: { stroke: LENS_COLORS[row.key] },
+                  ...hoverHandlers(row.key),
+                })
+              }),
+            ),
+            h(
+              'div',
+              { className: 'dps-lens-center', 'data-dps-metric': 'primary', 'data-value': lens.total },
+              h(
+                'div',
+                { className: 'dps-lens-total' },
+                h('span', null, totalParts.value),
+                totalParts.unit ? h('span', { className: 'dps-lens-total-unit' }, totalParts.unit) : null,
+              ),
+              h('div', { className: 'dps-lens-total-label' }, t('lens.total')),
+            ),
           ),
-          // 放大视图只列未缓存输入 / 输出；第三行留一个等高的空位，切换时卡片高度不变、整页不跳
-          zoomed ? h('div', { key: 'spacer', className: 'dps-lens-row', 'data-placeholder': 'true', 'aria-hidden': true }, h('i', { className: 'dps-lens-dot' }), h('span', null, '\u00a0')) : null,
-          rows
-            .filter((row) => row.visible)
-            .map((row) =>
+          h(
+            'div',
+            { className: 'dps-lens-legend', role: 'list', 'data-hovering': hover ? 'true' : 'false' },
+            rows.map((row) =>
               h(
                 'div',
                 {
                   key: row.key,
-                  className: 'dps-lens-row',
-                  role: 'row',
+                  className: 'dps-lens-item',
+                  role: 'listitem',
                   'data-row': row.key,
                   'data-value': row.value,
                   'data-share': share(row.value),
                   'data-active': hover === row.key ? 'true' : 'false',
-                  onMouseEnter: () => setHover(row.key),
-                  onMouseLeave: () => setHover(null),
+                  ...hoverHandlers(row.key),
                 },
                 h('i', { className: 'dps-lens-dot', style: { background: LENS_COLORS[row.key] }, 'aria-hidden': true }),
-                h('span', { className: 'dps-lens-name', role: 'cell' }, row.label),
-                h('span', { className: 'dps-lens-value', role: 'cell' }, formatTokens(row.value)),
-                h('span', { className: 'dps-lens-share', role: 'cell' }, percentCell(row)),
+                h('span', { className: 'dps-lens-name' }, row.label),
+                h('span', { className: 'dps-lens-share' }, percentText(row.value)),
+                h('span', { className: 'dps-lens-value' }, amountText(row.value)),
               ),
             ),
+          ),
         ),
-        // 放大视图里也留着：卡片高度不变，命中率的走势和缓存也相关
-        h(HitTrend, { points: props.hitSeries }),
-        tip,
       )
     }
 
@@ -3658,39 +3490,29 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
 .dps-ghost{appearance:none;display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 10px 0 9px;border-radius:8px;border:1px solid var(--dps-line);background:transparent;color:var(--dps-muted);font-size:12.5px;cursor:pointer;white-space:nowrap;transition:color .15s ease,background-color .15s ease}
 .dps-ghost:hover{color:var(--dps-ink);background:var(--dps-hover)}
 .dps-ghost svg{width:15px;height:15px}
-.dps-lens-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-.dps-metric{min-width:0}
-.dps-metric-value{display:flex;align-items:baseline;white-space:nowrap;font-variant-numeric:tabular-nums}
-.dps-metric-value .dps-num{font-size:28px}
-.dps-metric[data-accent="true"] .dps-num{color:var(--dps-accent)}
-.dps-metric-label{display:flex;align-items:center;gap:6px;margin-top:7px;font-size:12.5px;color:var(--dps-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dps-metric-label .dps-lens-dot{width:8px;height:8px;border-radius:2px;flex:0 0 auto}
-.dps-lens-bar{display:flex;height:12px;border-radius:999px;overflow:hidden;background:var(--dps-track)}
-.dps-lens-seg{display:block;height:100%;flex-shrink:1;flex-basis:0;transition:flex-grow .5s cubic-bezier(.3,.7,.2,1),min-width .5s ease,opacity .15s ease}
-.dps-lens-seg[data-sep="true"]{border-left:2px solid var(--dps-card)}
+.dps-panel-title h2 svg{display:inline-block;width:17px;height:17px;margin-right:8px;vertical-align:-3px}
+.dps-lens-body{flex:1 1 auto;display:flex;flex-wrap:wrap;align-items:center;align-content:center;gap:16px 24px}
+.dps-lens-ring{position:relative;flex:0 0 auto;width:112px;height:112px}
+.dps-lens-ring svg{display:block;width:100%;height:100%;overflow:visible}
+.dps-lens-track{fill:none;stroke:var(--dps-track)}
+.dps-lens-seg{fill:none;stroke-linecap:butt;transition:opacity .15s ease}
 .dps-lens-seg[data-dim="true"]{opacity:.35}
-.dps-lens-table{display:flex;flex-direction:column;gap:1px;margin:0 -8px}
-.dps-lens-row{display:grid;grid-template-columns:10px minmax(0,1fr) 84px 76px;align-items:center;column-gap:10px;padding:7px 8px;border-radius:8px;font-size:13px;transition:background-color .15s ease}
-.dps-lens-row[data-active="true"]{background:var(--dps-hover)}
-.dps-lens-row[data-placeholder="true"]{visibility:hidden;order:9}
-.dps-lens-th{padding-top:0;padding-bottom:3px;font-size:11.5px;color:var(--dps-faint)}
-.dps-lens-th span:nth-child(n+3),.dps-lens-value,.dps-lens-share{text-align:right}
-.dps-lens-dot{display:block;width:10px;height:10px;border-radius:3px}
-.dps-lens-name{color:var(--dps-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dps-lens-value{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
-.dps-lens-share{color:var(--dps-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.dps-lens-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;pointer-events:none;text-align:center}
+.dps-lens-total{display:flex;align-items:baseline;font-size:16px;font-weight:700;line-height:1.1;color:var(--dps-ink);font-variant-numeric:tabular-nums;white-space:nowrap}
+.dps-lens-total-unit{margin-left:1px;font-size:11px;font-weight:600}
+.dps-lens-total-label{font-size:12px;line-height:1.2;color:var(--dps-muted);white-space:nowrap}
+.dps-lens-legend{flex:1 1 220px;min-width:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px 26px}
+.dps-lens-item{display:grid;grid-template-columns:10px minmax(0,1fr) auto;grid-template-areas:"dot name share" ". value value";align-items:center;column-gap:8px;row-gap:4px;min-width:0;transition:opacity .15s ease}
+.dps-lens-legend[data-hovering="true"] .dps-lens-item:not([data-active="true"]){opacity:.5}
+.dps-lens-dot{grid-area:dot;display:block;width:10px;height:10px;border-radius:3px}
+.dps-lens-name{grid-area:name;min-width:0;font-size:13px;font-weight:650;color:var(--dps-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dps-lens-share{grid-area:share;font-size:13px;font-weight:650;color:var(--dps-ink);font-variant-numeric:tabular-nums;white-space:nowrap}
+.dps-lens-value{grid-area:value;font-size:12px;color:var(--dps-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .dps-prov{flex:1 1 auto}
 .dps-panel-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .dps-proj-bar{display:flex;height:100%;border-radius:inherit;overflow:hidden;transition:width .45s cubic-bezier(.3,.7,.2,1)}
 .dps-proj-main{flex:0 1 0;min-width:0;background:var(--dps-accent)}
 .dps-proj-sub{flex:0 1 0;min-width:2px;background:color-mix(in srgb,var(--dps-accent) 45%,transparent)}
-.dps-hit{margin-top:auto;padding-top:12px;border-top:1px solid var(--dps-hair);display:flex;flex-direction:column;gap:8px}
-.dps-hit-label{font-size:11.5px;color:var(--dps-faint)}
-.dps-hit-body{display:grid;grid-template-columns:34px minmax(0,1fr);column-gap:8px}
-.dps-hit-axis{position:relative;font-size:10.5px;color:var(--dps-faint);font-variant-numeric:tabular-nums}
-.dps-hit-axis span{position:absolute;right:0;transform:translateY(-50%);line-height:1;white-space:nowrap}
-.dps-hit-plot{border-top:1px dashed var(--dps-line);border-bottom:1px solid var(--dps-line)}
-.dps-hit-svg{height:44px;overflow:visible}
 .dps-prov-table{display:flex;flex-direction:column;gap:14px}
 .dps-prov-row{display:grid;grid-template-columns:minmax(0,1fr) 60px 44px 52px var(--dps-cost-w,68px);align-items:baseline;column-gap:10px;row-gap:7px;font-size:13px}
 .dps-prov-th{margin-bottom:-6px;font-size:11.5px;color:var(--dps-faint)}
@@ -4542,19 +4364,7 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
       const lensTotals = useMemo(() => lensTotalsOf(rangeSummary), [rangeSummary])
       const todaySummary = useMemo(() => summarizeDaily(daily, todayKey, todayKey), [daily, todayKey])
       const todayHit = useMemo(() => cacheHitRate(todaySummary), [todaySummary])
-      const spark = useMemo(() => {
-        // 命中率小趋势画范围内的每一天；累计范围只画最近 90 天，避免几百个点挤成一团
-        const end = parseDateKey(rangeWin.endKey)
-        const startKey = rangeWin.startKey || (end ? localDateKey(addDays(end, -89)) : rangeWin.endKey)
-        const points = dailySeries(daily, startKey, rangeWin.endKey)
-        return points.map((point) => ({ ...point, today: point.key === todayKey }))
-      }, [daily, rangeWin.startKey, rangeWin.endKey, todayKey])
       const trend = useMemo(() => tokenTrend(daily, range, rangeWin, todayKey), [daily, range, rangeWin, todayKey])
-      // 每天的缓存命中率（Token 构成卡里的小趋势）
-      const hitSeries = useMemo(() => {
-        const byDate = indexDaily(daily)
-        return spark.map((point) => ({ key: point.key, rate: byDate.has(point.key) ? cacheHitRate(byDate.get(point.key)) : null }))
-      }, [daily, spark])
       const projectPaths = (snapshot && snapshot.projects) || null
       const snapshotBilling = snapshot && snapshot.billing && snapshot.billing.providers
       const snapshotAliases = snapshot && snapshot.aliases && snapshot.aliases.providers
@@ -4768,7 +4578,7 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
             { className: 'dps-grid', 'data-row': 'charts' },
             // 模型分布不跟顶部范围走
             h(ModelCard, { daily, today }),
-            h(LensCard, { totals: lensTotals, hitSeries }),
+            h(LensCard, { totals: lensTotals }),
           ),
           h(
             'div',

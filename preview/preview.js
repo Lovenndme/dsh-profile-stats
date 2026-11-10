@@ -55,6 +55,10 @@
 
   /* ------------------------------------------------------------ 内置假快照 */
 
+  /** Token 统计的八类（顺序同宿主的 MIX_KEYS）与预览用的配比。 */
+  var MIX_KEYS = ['system', 'tools', 'user', 'inject', 'skill', 'toolCalls', 'thinking', 'answers']
+  var MIX_WEIGHTS = { system: 8, tools: 48, user: 19, inject: 65, skill: 14, toolCalls: 561, thinking: 246, answers: 39 }
+
   function mulberry32(seed) {
     return function () {
       seed |= 0
@@ -96,7 +100,7 @@
    */
   /**
    * 各家供应商的缓存命中率不同（供应商卡片的「命中率」列才有区别）。
-   * write 只在「含缓存写入」视图里生效：relay-lab 演示一家会报缓存写入的供应商（Token 构成多出一行）。
+   * write 只在「含缓存写入」视图里生效：relay-lab 演示一家会报缓存写入的供应商（供应商分类里它的命中率分母多一项）。
    */
   /**
    * 演示用的项目（工作目录）：虚构的公开路径。键和宿主一样（Windows 路径小写、正斜杠），
@@ -246,6 +250,8 @@
         var part = Math.floor(byProject[project.key] * project.subagent)
         if (part > 0) byProjectSubagent[project.key] = part
       })
+      // 按内容分类的八类（各类之和 = 当天总量；不消耗随机数，其余数字不变）
+      var mixParts = split(tokens, MIX_WEIGHTS)
       return {
         date: key,
         tokens: tokens,
@@ -259,6 +265,9 @@
         byModel: split(tokens, models),
         byProject: byProject,
         byProjectSubagent: byProjectSubagent,
+        mix: MIX_KEYS.map(function (name) {
+          return mixParts[name]
+        }),
         slots: buildSlots(entry.date, providerUsage),
       }
     })
@@ -605,14 +614,9 @@
     })
   }
 
-  /** 「模型按月」「Cache Lens 放大」是组件内部状态：挂载后点插件自己的按钮进入，走真实代码路径。 */
+  /** 「模型按月」是组件内部状态：挂载后点插件自己的按钮进入，走真实代码路径。 */
   function applyViewAction(token) {
-    var selector =
-      state.view === 'model-month'
-        ? '[data-dps-control="model-grain"] [data-value="month"]'
-        : state.view === 'lens-zoom'
-          ? '[data-dps-control="lens-zoom"]'
-          : null
+    var selector = state.view === 'model-month' ? '[data-dps-control="model-grain"] [data-value="month"]' : null
     if (!selector) return
     var started = Date.now()
     ;(function poll() {

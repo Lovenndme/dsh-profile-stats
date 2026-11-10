@@ -7,6 +7,7 @@
  *   · 单日峰值、单会话峰值、单次调用峰值
  *   · 最长任务用时（同一 turn 内 turn/start → turn/end 的最大跨度）
  *   · 活跃天数、最长连续天数、当前连续天数
+ *   · 每天的 token 按内容分成八类（系统提示词 / 工具定义 / 用户消息 / 注入内容 / 技能注入 / 工具调用 / 模型思考 / 模型回复）
  *
  * 数据源只有一个：`ctx.sessionQuery` 读到的会话日志（唯一真相）。这里算出来的
  * 一切都可以从日志重建，磁盘缓存只是把「已经折过的会话」记下来，避免每次打开
@@ -50,8 +51,9 @@ const UPDATE_CHECK_TTL_MS = 6 * 60 * 60 * 1000
  * 15：每天按「小时 × 供应商 × 模型」记四项用量（slots），用于按调用时间折算费用。
  * 16：会话记下折叠时是否还在运行（结束后补读一次尾巴）；只有 totalTokens 的调用记作未缓存输入；
  *     slots 键改用 \u0000 分隔；模型名归一化改为反复去后缀；继承前缀记单次峰值与最长任务；缓存记下时区。
+ * 17：每天按内容分类记八类用量（mix：系统提示词 / 工具定义 / 用户消息 / 注入内容 / 技能注入 / 工具调用 / 模型思考 / 模型回复）。
  */
-const CACHE_VERSION = 16
+const CACHE_VERSION = 17
 const DAY_MS = 86400000
 /**
  * 数据保鲜不依赖用户打开页面：宿主运行期间每分钟看一眼，快照超过 5 分钟就在后台静默补扫；
@@ -591,6 +593,7 @@ function dayMapsOf(fold, inherited) {
       providers: map('inheritedPerDayProvider'),
       providerUsage: map('inheritedPerDayProviderUsage'),
       slots: map('inheritedPerDaySlots'),
+      mix: map('inheritedPerDayMix'),
       models: map('inheritedPerDayModel'),
     }
   }
@@ -604,6 +607,7 @@ function dayMapsOf(fold, inherited) {
     providers: map('perDayProvider'),
     providerUsage: map('perDayProviderUsage'),
     slots: map('perDaySlots'),
+    mix: map('perDayMix'),
     models: map('perDayModel'),
   }
 }
@@ -615,7 +619,7 @@ const SLOT_SEP = '\u0000'
  * 一步记进某一天。slots 再按「UTC 小时序号 × 供应商 × 模型」记四项用量：价格按调用时间选
  * （DeepSeek 分高峰 / 空闲时段、会调价），时段边界都在整点，存到小时就够，页面现算费用、改价不用重扫。
  */
-function addStepToDay(maps, key, parts, tokens, provider, modelFamily, time) {
+function addStepToDay(maps, key, parts, tokens, provider, modelFamily, time, mix) {
   maps.tokens[key] = toNumber(maps.tokens[key]) + tokens
   maps.calls[key] = toNumber(maps.calls[key]) + 1
   maps.input[key] = toNumber(maps.input[key]) + parts.inputTokens
@@ -635,6 +639,10 @@ function addStepToDay(maps, key, parts, tokens, provider, modelFamily, time) {
   slot[1] += parts.cacheReadTokens
   slot[2] += parts.cacheWriteTokens
   slot[3] += parts.outputTokens
+  if (Array.isArray(mix)) {
+    const sum = maps.mix[key] || (maps.mix[key] = MIX_KEYS.map(() => 0))
+    for (let index = 0; index < MIX_KEYS.length; index += 1) sum[index] += toNumber(mix[index])
+  }
 }
 
 /** 这一步是谁服务的（deepseek-official / deepseek-account …），用于和网关账单对账。 */
@@ -690,7 +698,318 @@ function modelFamilyOf(event) {
   return normalizeModelId(raw) || 'unknown'
 }
 
-function applyEvent(fold, event) {
+/* ------------------------------------------------------------ Token 统计（按内容分类） */
+
+/**
+ * 每一步的 token 按「花在什么内容上」分成八类（页面的 Token 统计）：
+ *   system 系统提示词 · tools 工具定义 · user 用户消息 · inject 注入内容 · skill 技能注入 ·
+ *   toolCalls 工具调用（调用的名称与参数 + 工具返回的结果）· thinking 模型思考 · answers 模型回复
+ * 供应商只报每一步的四项用量，不报这八类。这里的做法（设计取自 dsh-context，见 FINDINGS 的设计参考）：
+ *   1. 跟着日志重建「这一步发出去的上下文」里每一类有多少，用固定密度估算（4 个字符 ≈ 1 token）；
+ *   2. 这一步的输入（未缓存 + 缓存读 + 缓存写）按上下文里各类的估算值比例分摊；
+ *   3. 这一步的输出按它自己生成的思考 / 回复 / 工具调用分摊（供应商报了 reasoningTokens 就用它）。
+ * 分摊用最大余数法取整，八类之和恰好等于这一步的 token 数：估算只决定比例，总量仍是日志里的数。
+ */
+const MIX_KEYS = ['system', 'tools', 'user', 'inject', 'skill', 'toolCalls', 'thinking', 'answers']
+const MIX_INDEX = Object.fromEntries(MIX_KEYS.map((key, index) => [key, index]))
+const CHARS_PER_TOKEN = 4
+const ROLE_OVERHEAD = 4
+const BLOCK_OVERHEAD = 4
+const charTokens = (length) => Math.ceil(toNumber(length) / CHARS_PER_TOKEN)
+/**
+ * 图片按尺寸估：切成 42px 的格子（14px 的块、3 倍下采样），每行多一个换行位，再加首尾两个；
+ * 小图先放大到 544 × 544 的面积，一张图封顶 1024。日志里没有尺寸时按引用的 JSON 长度估，同样封顶。
+ */
+const IMAGE_TOKENS_MAX = 1024
+const IMAGE_CELL = 42
+const IMAGE_MIN_PIXELS = 544 * 544
+
+function estimateImage(block) {
+  const ref = block && block.attachment && typeof block.attachment === 'object' ? block.attachment : null
+  const width = ref ? toNumber(ref.width) : 0
+  const height = ref ? toNumber(ref.height) : 0
+  if (!(width > 0) || !(height > 0)) return Math.min(IMAGE_TOKENS_MAX, charTokens(jsonLength(block)))
+  const scale = Math.max(1, Math.sqrt(IMAGE_MIN_PIXELS / (width * height)))
+  const rows = Math.ceil((height * scale) / IMAGE_CELL)
+  const columns = Math.ceil((width * scale) / IMAGE_CELL)
+  return Math.min(IMAGE_TOKENS_MAX, rows * (columns + 1) + 2)
+}
+
+
+function jsonLength(value) {
+  try {
+    const text = JSON.stringify(value)
+    return typeof text === 'string' ? text.length : 0
+  } catch {
+    return 0
+  }
+}
+
+/** 一个内容块的估算值，以及它算哪一种（reasoning / text / tool-call，其余是 other）。 */
+function blockEstimate(block) {
+  if (!block || typeof block !== 'object') return { kind: 'other', tokens: BLOCK_OVERHEAD }
+  const text = typeof block.text === 'string' ? block.text : ''
+  if (block.type === 'text') return { kind: 'text', tokens: charTokens(text.length) + BLOCK_OVERHEAD }
+  if (block.type === 'reasoning') return { kind: 'reasoning', tokens: charTokens(text.length) + BLOCK_OVERHEAD }
+  if (block.type === 'tool-call') {
+    const name = typeof block.name === 'string' ? block.name : ''
+    const args = typeof block.arguments === 'string' ? block.arguments : ''
+    return { kind: 'tool-call', tokens: charTokens(name.length) + charTokens(args.length) + BLOCK_OVERHEAD }
+  }
+  if (block.type === 'image') return { kind: 'other', tokens: estimateImage(block) + BLOCK_OVERHEAD }
+  return { kind: 'other', tokens: charTokens(jsonLength(block)) + BLOCK_OVERHEAD }
+}
+
+/** 一条消息的估算：{ tokens（含角色开销）, reasoning, answers, calls }。没有内容的消息是 0。 */
+function estimateMessage(message) {
+  const blocks = message && Array.isArray(message.content) ? message.content : []
+  const out = { tokens: 0, reasoning: 0, answers: 0, calls: 0 }
+  if (!blocks.length) return out
+  for (const block of blocks) {
+    const part = blockEstimate(block)
+    out.tokens += part.tokens
+    if (part.kind === 'reasoning') out.reasoning += part.tokens
+    else if (part.kind === 'text') out.answers += part.tokens
+    else if (part.kind === 'tool-call') out.calls += part.tokens
+  }
+  out.tokens += ROLE_OVERHEAD
+  return out
+}
+
+/** 系统提示词：文字块量字符数，其余块量 JSON 长度，合起来再加一次角色开销。 */
+function estimateSystem(message) {
+  const blocks = message && Array.isArray(message.content) ? message.content : []
+  if (!blocks.length) return 0
+  let characters = 0
+  for (const block of blocks) {
+    characters += block && block.type === 'text' && typeof block.text === 'string' ? block.text.length : jsonLength(block)
+  }
+  return charTokens(characters) + ROLE_OVERHEAD
+}
+
+/** 工具定义：请求头里整份工具清单（名称、描述、参数 schema）的 JSON 长度。 */
+function estimateTools(tools) {
+  return Array.isArray(tools) && tools.length ? charTokens(jsonLength(tools)) + BLOCK_OVERHEAD : 0
+}
+
+/** 事件里的消息：assistant / tool / system / developer 在 data.message，user 直接在 data 上。 */
+function eventMessage(data) {
+  if (data && data.message && typeof data.message === 'object') return data.message
+  return data && Array.isArray(data.content) ? data : null
+}
+
+/** 用户消息这一侧的分类：技能目录 / 技能调用算技能注入；来源不是用户本人的（或带 form 的）算注入内容。 */
+function messageCategory(type, source) {
+  if (type === 'developer/message') return 'inject'
+  const kind = source && typeof source.kind === 'string' ? source.kind : ''
+  if (kind === 'skill-invocation' || kind === 'skill-catalog') return 'skill'
+  if ((kind && kind !== 'user') || (source && typeof source.form === 'string')) return 'inject'
+  return 'user'
+}
+
+const SKILL_CONTENT = /<skill_content\s+name="[^"]+"/
+
+/** 工具结果是不是 skill 工具加载进来的技能正文（第一个非空文字块以技能标记开头的那种）。 */
+function isSkillResult(message) {
+  const blocks = message && Array.isArray(message.content) ? message.content : []
+  for (const block of blocks) {
+    if (block && block.type === 'text' && typeof block.text === 'string' && block.text !== '') return SKILL_CONTENT.test(block.text)
+  }
+  return false
+}
+
+function createContext() {
+  return {
+    /** 系统提示词的各个版本（seq, tokens），生效的是最后一个非零的。 */
+    systems: [],
+    tools: 0,
+    /** 上下文里的消息：seq → { cat, tokens, reasoning, answers, calls }。 */
+    nodes: new Map(),
+    sums: { user: 0, inject: 0, skill: 0, tool: 0, assistant: 0, reasoning: 0, answers: 0, calls: 0 },
+    /** 压缩 / 裁剪事件点名要拿掉的消息，等下一条 replace 消息来替换。 */
+    shadowed: null,
+    /** callId → 工具名，用来认出 skill 工具的结果。 */
+    callNames: new Map(),
+  }
+}
+
+function contextRemove(context, seq) {
+  const node = context.nodes.get(seq)
+  if (!node) return
+  context.nodes.delete(seq)
+  context.sums[node.cat] -= node.tokens
+  if (node.cat === 'assistant') {
+    context.sums.reasoning -= node.reasoning
+    context.sums.answers -= node.answers
+    context.sums.calls -= node.calls
+  }
+}
+
+function contextAdd(context, seq, node) {
+  contextRemove(context, seq)
+  context.nodes.set(seq, node)
+  context.sums[node.cat] += node.tokens
+  if (node.cat === 'assistant') {
+    context.sums.reasoning += node.reasoning
+    context.sums.answers += node.answers
+    context.sums.calls += node.calls
+  }
+}
+
+/** replace 类的 surfaceOp：{ op: 'replace', startSeq, endSeq }；其余（append）返回 null。 */
+function replaceRange(surfaceOp) {
+  if (!surfaceOp || typeof surfaceOp !== 'object' || surfaceOp.op !== 'replace') return null
+  const start = surfaceOp.startSeq
+  const end = surfaceOp.endSeq
+  return typeof start === 'number' && Number.isFinite(start) && typeof end === 'number' && Number.isFinite(end) ? { start, end } : null
+}
+
+/** 一条消息进上下文：先按 replace 拿掉被它顶替的那些（压缩点名的，或 seq 落在范围里的），再把它加进去。 */
+function contextPut(context, event, node) {
+  const shadowed = context.shadowed
+  context.shadowed = null
+  const range = replaceRange(event.surfaceOp)
+  if (range) {
+    if (shadowed && shadowed.length) for (const seq of shadowed) contextRemove(context, seq)
+    else for (const seq of Array.from(context.nodes.keys())) if (seq >= range.start && seq <= range.end) contextRemove(context, seq)
+  }
+  contextAdd(context, toNumber(event.seq), node)
+}
+
+/** 把 total 按 weights 的比例分成整数，各份之和恰好等于 total（最大余数法）；权重全为 0 时返回全 0。 */
+function splitByWeights(total, weights) {
+  const amount = Math.max(0, Math.round(toNumber(total)))
+  const clean = weights.map((weight) => (Number.isFinite(weight) && weight > 0 ? weight : 0))
+  const sum = clean.reduce((left, right) => left + right, 0)
+  const parts = clean.map(() => 0)
+  if (!(sum > 0) || amount === 0) return parts
+  const remainders = []
+  let assigned = 0
+  clean.forEach((weight, index) => {
+    const exact = (amount * weight) / sum
+    parts[index] = Math.floor(exact)
+    assigned += parts[index]
+    remainders.push([exact - parts[index], index])
+  })
+  remainders.sort((left, right) => right[0] - left[0] || left[1] - right[1])
+  for (let rest = amount - assigned, at = 0; rest > 0; rest -= 1, at += 1) parts[remainders[at % remainders.length][1]] += 1
+  return parts
+}
+
+/**
+ * 一步的八类分摊。context 是这一步发出请求时的上下文（还不含这一步自己的回复），
+ * generated 是这一步自己生成内容的估算，parts 是这一步的四项用量。
+ */
+function stepMix(context, generated, parts, usage) {
+  const mix = MIX_KEYS.map(() => 0)
+  const sums = context.sums
+  // 上下文里历史回复的估算值按思考 / 回复 / 调用分；分不出来的（没有这三种块）都算工具调用
+  const content = sums.reasoning + sums.answers + sums.calls
+  const scale = content > 0 ? sums.assistant / content : 0
+  const weights = MIX_KEYS.map(() => 0)
+  const system = context.systems.reduce((latest, node) => (node.tokens > 0 ? node.tokens : latest), 0)
+  weights[MIX_INDEX.system] = system
+  weights[MIX_INDEX.tools] = context.tools
+  weights[MIX_INDEX.user] = sums.user
+  weights[MIX_INDEX.inject] = sums.inject
+  weights[MIX_INDEX.skill] = sums.skill
+  weights[MIX_INDEX.toolCalls] = sums.tool + (content > 0 ? sums.calls * scale : sums.assistant)
+  weights[MIX_INDEX.thinking] = sums.reasoning * scale
+  weights[MIX_INDEX.answers] = sums.answers * scale
+  const input = parts.inputTokens + parts.cacheReadTokens + parts.cacheWriteTokens
+  // 日志里看不到任何上下文（残缺的日志）时，输入记在用户消息上：一次请求至少有一条消息
+  if (!weights.some((weight) => weight > 0)) weights[MIX_INDEX.user] = 1
+  splitByWeights(input, weights).forEach((value, index) => {
+    mix[index] += value
+  })
+
+  const output = parts.outputTokens
+  const reported = usage && typeof usage.reasoningTokens === 'number' && Number.isFinite(usage.reasoningTokens) ? Math.max(0, Math.round(usage.reasoningTokens)) : null
+  const thinking = Math.min(output, reported === null ? -1 : reported)
+  if (thinking >= 0) {
+    // 供应商报了思考 token：思考用它，其余按回复 / 调用的估算值分；两样都没有就全算调用（只有思考时全算思考）
+    const rest = output - thinking
+    const split = splitByWeights(rest, [generated.answers, generated.calls])
+    const placed = split[0] + split[1]
+    mix[MIX_INDEX.thinking] += thinking
+    mix[MIX_INDEX.answers] += split[0]
+    mix[MIX_INDEX.toolCalls] += split[1]
+    if (placed < rest) mix[thinking > 0 ? MIX_INDEX.thinking : MIX_INDEX.toolCalls] += rest - placed
+  } else {
+    const split = splitByWeights(output, [generated.reasoning, generated.answers, generated.calls])
+    mix[MIX_INDEX.thinking] += split[0]
+    mix[MIX_INDEX.answers] += split[1]
+    mix[MIX_INDEX.toolCalls] += split[2]
+    const placed = split[0] + split[1] + split[2]
+    if (placed < output) mix[MIX_INDEX.toolCalls] += output - placed
+  }
+  return mix
+}
+
+/**
+ * 让上下文跟上一个事件。assistant/message 带用量时返回这一步的八类分摊（先分摊、再把它的回复加进上下文），
+ * 其余事件返回 null。坏掉的事件不影响别的事件。
+ */
+function trackContext(context, event) {
+  const data = event.data && typeof event.data === 'object' ? event.data : {}
+  switch (event.type) {
+    case 'request/header': {
+      const header = data.header && typeof data.header === 'object' ? data.header : {}
+      context.tools = estimateTools(header.tools)
+      return null
+    }
+    case 'system/message': {
+      context.shadowed = null
+      const range = replaceRange(event.surfaceOp)
+      if (range) {
+        context.systems = context.systems.filter((node) => node.seq < range.start || node.seq > range.end)
+        for (const seq of Array.from(context.nodes.keys())) if (seq >= range.start && seq <= range.end) contextRemove(context, seq)
+      }
+      context.systems.push({ seq: toNumber(event.seq), tokens: estimateSystem(eventMessage(data)) })
+      if (context.systems.length > 8) context.systems = context.systems.slice(-8)
+      return null
+    }
+    case 'tool/call': {
+      if (typeof data.callId === 'string' && typeof data.name === 'string') context.callNames.set(data.callId, data.name)
+      return null
+    }
+    case 'user/message':
+    case 'developer/message': {
+      const message = eventMessage(data)
+      if (!message || !Array.isArray(message.content)) return null
+      const estimate = estimateMessage(message)
+      contextPut(context, event, { cat: messageCategory(event.type, message.source), tokens: estimate.tokens })
+      return null
+    }
+    case 'tool/result': {
+      const message = eventMessage(data)
+      const estimate = estimateMessage(message)
+      const callId = message && message.source && typeof message.source.callId === 'string' ? message.source.callId : ''
+      const name = callId ? context.callNames.get(callId) : undefined
+      if (callId) context.callNames.delete(callId)
+      const skill = (name === 'skill' || name === undefined) && isSkillResult(message)
+      contextPut(context, event, { cat: skill ? 'skill' : 'tool', tokens: estimate.tokens })
+      return null
+    }
+    case 'compaction/summary':
+    case 'compaction/prune': {
+      if (Array.isArray(data.shadowedSeqs)) context.shadowed = data.shadowedSeqs.filter((seq) => typeof seq === 'number')
+      return null
+    }
+    case 'assistant/message': {
+      const message = eventMessage(data)
+      const estimate = estimateMessage(message)
+      const mix = data.usage ? stepMix(context, estimate, stepParts(data.usage), data.usage) : null
+      contextPut(context, event, { cat: 'assistant', tokens: estimate.tokens, reasoning: estimate.reasoning, answers: estimate.answers, calls: estimate.calls })
+      return mix
+    }
+    default:
+      return null
+  }
+}
+
+/** mix 是这一步的八类分摊（trackContext 算的）；单独调用、没有上下文时不传，这一步就不进 mix。 */
+function applyEvent(fold, event, mix) {
   const seq = toNumber(event.seq)
   if (seq > fold.seq) fold.seq = seq
 
@@ -722,7 +1041,7 @@ function applyEvent(fold, event) {
       fold.perProvider[provider] = toNumber(fold.perProvider[provider]) + tokens
       if (time > 0) {
         const key = localDayKey(time)
-        if (key) addStepToDay(dayMapsOf(fold, false), key, parts, tokens, provider, modelFamily, time)
+        if (key) addStepToDay(dayMapsOf(fold, false), key, parts, tokens, provider, modelFamily, time, mix)
       }
       break
     }
@@ -768,9 +1087,17 @@ function foldSnapshot(snapshot) {
   const events = snapshot && Array.isArray(snapshot.events) ? snapshot.events : []
   /** 继承前缀里还没结束的 turn：前缀不进本体的任务用时，单独算它自己的最长任务。 */
   const inheritedTurns = {}
+  /** 上下文从日志第一条事件跟起：继承前缀里的消息也在后面每一步的提示词里。只活在这次折叠里，不进缓存。 */
+  const context = createContext()
   for (const event of events) {
     // 坏掉的单条事件（null、数字）跳过，不能让整个会话折叠失败
     if (!event || typeof event !== 'object') continue
+    let mix = null
+    try {
+      mix = trackContext(context, event)
+    } catch {
+      mix = null
+    }
     const seq = toNumber(event.seq)
     if (seq < inherited) {
       // 继承前缀：只累加用量，不进本体的任务用时/首末时间。
@@ -803,13 +1130,13 @@ function foldSnapshot(snapshot) {
           toNumber(fold.inheritedPerProvider[inheritedProvider]) + tokens
         if (time > 0) {
           const key = localDayKey(time)
-          if (key) addStepToDay(dayMapsOf(fold, true), key, parts, tokens, inheritedProvider, inheritedModelFamily, time)
+          if (key) addStepToDay(dayMapsOf(fold, true), key, parts, tokens, inheritedProvider, inheritedModelFamily, time, mix)
         }
       }
       if (seq > fold.seq) fold.seq = seq
       continue
     }
-    applyEvent(fold, event)
+    applyEvent(fold, event, mix)
   }
   fold.complete = true
   return fold
@@ -908,8 +1235,11 @@ function aggregate(sessions, now, knownIds) {
         byProject: {},
         byProjectSubagent: {},
         slots: {},
+        mix: MIX_KEYS.map(() => 0),
       }
       entry.tokens += tokens
+      const dayMix = maps.mix[key]
+      if (Array.isArray(dayMix)) for (let index = 0; index < MIX_KEYS.length; index += 1) entry.mix[index] += toNumber(dayMix[index])
       // 每小时用量再带上项目：[UTC 小时序号, 供应商, 模型, 项目键, 未缓存输入, 缓存读, 缓存写, 输出]
       for (const [slotKey, parts] of Object.entries(maps.slots[key] || {})) {
         const fullKey = `${slotKey}${SLOT_SEP}${project.key}`
@@ -1082,6 +1412,7 @@ const FOLD_NUMBER_MAPS = [
 const FOLD_NESTED_MAPS = ['perDayProvider', 'perDayModel', 'inheritedPerDayProvider', 'inheritedPerDayModel']
 const FOLD_USAGE_MAPS = ['perDayProviderUsage', 'inheritedPerDayProviderUsage']
 const FOLD_SLOT_MAPS = ['perDaySlots', 'inheritedPerDaySlots']
+const FOLD_MIX_MAPS = ['perDayMix', 'inheritedPerDayMix']
 
 /**
  * 校验一条缓存里的折叠结果；哪里不对就返回 null（丢掉，下次扫描重折）。
@@ -1094,6 +1425,7 @@ function validFold(raw) {
   const mapOf = (value, check) => plain(value) && Object.values(value).every(check)
   const usage = (value) => plain(value) && ['inputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'outputTokens'].every((name) => finite(value[name]))
   const slot = (value) => Array.isArray(value) && value.length === 4 && value.every(finite)
+  const mix = (value) => Array.isArray(value) && value.length === MIX_KEYS.length && value.every(finite)
   if (!plain(raw) || raw.complete !== true) return null
   if (!FOLD_NUMBERS.every((name) => finite(raw[name]))) return null
   if (!FOLD_STRINGS.every((name) => typeof raw[name] === 'string')) return null
@@ -1103,6 +1435,7 @@ function validFold(raw) {
     [FOLD_NESTED_MAPS, (value) => mapOf(value, finite)],
     [FOLD_USAGE_MAPS, (value) => mapOf(value, usage)],
     [FOLD_SLOT_MAPS, (value) => mapOf(value, slot)],
+    [FOLD_MIX_MAPS, mix],
   ]
   for (const [names, check] of maps) {
     // 没有的表（还没记过东西）由 dayMapsOf 用到时再建
@@ -1838,6 +2171,15 @@ export {
   providerOf,
   normalizeModelId,
   modelFamilyOf,
+  MIX_KEYS,
+  estimateMessage,
+  estimateImage,
+  estimateSystem,
+  estimateTools,
+  messageCategory,
+  splitByWeights,
+  createContext,
+  trackContext,
   applyEvent,
   foldSnapshot,
   computeStreaks,
