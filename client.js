@@ -104,6 +104,7 @@ window.__ModuleLoader__.load({
       'tip.none': 'No activity',
       'tip.weekRange': '{start} – {end}',
       'tip.through': 'Through {date}',
+      'tip.average7': '7-day average',
       'tip.total': 'Total',
       'chart.total': 'total {value}',
       'chart.empty': 'No data',
@@ -151,6 +152,9 @@ window.__ModuleLoader__.load({
       'aria.lens': 'Token mix bar',
       'aria.range': 'Time range',
       'aria.hitTrend': 'Daily cache hit rate',
+      'aria.spark': 'Daily token trend (7-day average)',
+      'aria.sparkDaily': 'Tokens per day',
+      'aria.sparkWeekly': 'Tokens per week',
       'lens.hitTrend': 'Daily cache hit rate',
     }
 
@@ -223,6 +227,7 @@ window.__ModuleLoader__.load({
       'tip.none': '无活动',
       'tip.weekRange': '{start} – {end}',
       'tip.through': '截至 {date}',
+      'tip.average7': '7 日均值',
       'tip.total': '合计',
       'chart.total': '总计 {value}',
       'chart.empty': '暂无数据',
@@ -270,6 +275,9 @@ window.__ModuleLoader__.load({
       'aria.lens': 'Token 构成条',
       'aria.range': '时间范围',
       'aria.hitTrend': '每日缓存命中率',
+      'aria.spark': '每日用量趋势（7 日均线）',
+      'aria.sparkDaily': '每日用量',
+      'aria.sparkWeekly': '每周用量',
       'lens.hitTrend': '每日缓存命中率',
     }
 
@@ -705,6 +713,69 @@ window.__ModuleLoader__.load({
         points.push({ key, tokens: entry ? toNumber(entry.tokens) : 0 })
       }
       return points
+    }
+
+    /** 7 日移动平均：开头的 6 天用窗口之外的上下文补齐，避免趋势线起步被削平。 */
+    function movingAverage(daily, points, windowSize = 7) {
+      if (points.length === 0) return []
+      const byDate = indexDaily(daily)
+      const first = parseDateKey(points[0].key)
+      const context = []
+      for (let offset = windowSize - 1; offset >= 1; offset -= 1) {
+        const key = localDateKey(addDays(first, -offset))
+        const entry = byDate.get(key)
+        context.push(entry ? toNumber(entry.tokens) : 0)
+      }
+      const values = context.concat(points.map((point) => toNumber(point.tokens)))
+      return points.map((_, index) => {
+        let sum = 0
+        for (let cursor = index; cursor < index + windowSize; cursor += 1) sum += values[cursor] || 0
+        return sum / windowSize
+      })
+    }
+
+    /**
+     * 第一张卡右边的趋势画什么（主人指定）：
+     *   - 本日：最近 7 天，一天一根柱（kind = 'days'），今天那根是 current；
+     *   - 本周：最近 4 周（含本周），一周一根柱，柱高是那一周的合计（kind = 'weeks'），本周那根是 current；
+     *   - 本月：本月每天的用量，折线（kind = 'line'）；自定义 31 天以内同样画每天；
+     *   - 累计：最近 90 天的 7 日均线（kind = 'average'）；更长的自定义画整个窗口的 7 日均线。
+     * 窗口都以范围的终点为准（自定义的终点可以在过去）。没有终点时返回 null。
+     */
+    function tokenTrend(daily, range, rangeWin, todayKey) {
+      const end = rangeWin ? parseDateKey(rangeWin.endKey) : null
+      if (!end) return null
+      const endKey = rangeWin.endKey
+      if (range === 'day') {
+        const points = dailySeries(daily, localDateKey(addDays(end, -6)), endKey)
+        return { kind: 'days', points: points.map((point) => ({ ...point, current: point.key === todayKey })) }
+      }
+      if (range === 'week') {
+        const byDate = indexDaily(daily)
+        const thisWeek = startOfWeek(end)
+        const points = []
+        for (let back = 3; back >= 0; back -= 1) {
+          const start = addDays(thisWeek, -7 * back)
+          const startKey = localDateKey(start)
+          const sunday = localDateKey(addDays(start, 6))
+          // 本周只算到范围终点（今天）
+          const stopKey = sunday > endKey ? endKey : sunday
+          let tokens = 0
+          for (let date = start; localDateKey(date) <= stopKey; date = addDays(date, 1)) {
+            const entry = byDate.get(localDateKey(date))
+            if (entry) tokens += toNumber(entry.tokens)
+          }
+          points.push({ key: startKey, endKey: stopKey, tokens, current: back === 0 })
+        }
+        return { kind: 'weeks', points }
+      }
+      if (range === 'month' || (range === 'custom' && rangeWin.days > 0 && rangeWin.days <= 31)) {
+        return { kind: 'line', points: dailySeries(daily, rangeWin.startKey, endKey) }
+      }
+      // 累计只画最近 90 天，避免几百个点挤成一团
+      const startKey = rangeWin.startKey || localDateKey(addDays(end, -89))
+      const points = dailySeries(daily, startKey, endKey)
+      return { kind: 'average', points, average: movingAverage(daily, points) }
     }
 
     /** 环比百分比；上一期为 0 时没有意义（不显示）。 */
@@ -3416,7 +3487,7 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-seg button{appearance:none;position:relative;border:0;background:transparent;color:var(--dps-muted);font-size:12px;line-height:1;padding:7px 12px;border-radius:7px;cursor:pointer;white-space:nowrap;transition:color .15s ease}
 .dps-seg button:hover{color:var(--dps-ink)}
 .dps-seg button[aria-pressed="true"]{color:var(--dps-ink);font-weight:600}
-.dps-kpis{display:grid;grid-template-columns:minmax(0,1.15fr) repeat(4,minmax(0,1fr));gap:12px}
+.dps-kpis{display:grid;grid-template-columns:minmax(0,1.8fr) repeat(4,minmax(0,1fr));gap:12px}
 .dps-kpi{min-width:0;display:flex;flex-direction:column;justify-content:space-between;gap:16px;padding:16px 18px 18px;border:1px solid var(--dps-line);border-radius:var(--dps-radius);background:var(--dps-card)}
 .dps-kpi[data-hero="true"]{border-color:color-mix(in srgb,var(--dps-accent) 30%,var(--dps-line));background:color-mix(in srgb,var(--dps-accent) 5%,var(--dps-card))}
 .dps-kpi-label{display:flex;flex-wrap:wrap;align-items:center;gap:4px 7px;min-width:0;font-size:12.5px;color:var(--dps-muted)}
@@ -3430,6 +3501,16 @@ font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased}
 .dps-kpi-slot > *{grid-area:1 / 1}
 .dps-kpi-ghost{display:flex;align-items:baseline;white-space:nowrap;font-variant-numeric:tabular-nums;visibility:hidden;pointer-events:none}
 .dps-kpi-ghost [data-ghost]::before{content:attr(data-ghost)}
+.dps-kpi[data-hero="true"]{container:dps-hero / inline-size}
+.dps-kpi[data-hero="true"] .dps-kpi-body{gap:14px}
+.dps-kpi-dslot{display:flex;align-items:center;align-self:center;min-width:80px}
+.dps-kpi-aside{flex:0 1 120px;min-width:0;margin-left:auto;margin-bottom:3px}
+@container dps-hero (max-width:250px){.dps-kpi-aside{display:none}}
+.dps-spark-area{fill:color-mix(in srgb,var(--dps-accent) 14%,transparent)}
+.dps-spark-bars{display:flex;align-items:flex-end;justify-content:space-between;gap:3px;height:32px}
+.dps-spark-bar{flex:1 1 0;min-width:0;max-width:20px;border-radius:2px 2px 0 0;background:color-mix(in srgb,var(--dps-accent) 38%,transparent);transition:background-color .12s ease}
+.dps-spark-bar[data-current="true"],.dps-spark-bar[data-active="true"]{background:var(--dps-accent)}
+.dps-spark-bars[data-hovering="true"] .dps-spark-bar[data-current="true"]:not([data-active="true"]){background:color-mix(in srgb,var(--dps-accent) 38%,transparent)}
 .dps-kpi-value{display:flex;align-items:baseline;flex-wrap:nowrap;white-space:nowrap;min-width:0;font-variant-numeric:tabular-nums}
 .dps-num{font-size:28px;font-weight:650;line-height:1;letter-spacing:-.02em}
 .dps-num-empty{color:var(--dps-faint);font-weight:500}
@@ -4052,6 +4133,151 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
 
     /* -------------------------------------------------------------- 指标卡 */
 
+    /**
+     * 第一张卡右边的趋势（数据见 tokenTrend）。本日 / 本周画柱（当前那根用强调色），本月和自定义画每天的折线，
+     * 累计画 7 日均线。宽度固定在 .dps-kpi-aside 里，不跟数字、环比的宽度走：切换范围、数字滚动时不伸缩不挪位。
+     * 悬停写日期（一周写起止）与用量，浮层跟随鼠标，和其他图一致。
+     */
+    function TokenTrend(props) {
+      const trend = props.trend || null
+      const kind = trend ? trend.kind : 'line'
+      const points = (trend && trend.points) || []
+      const bars = kind === 'days' || kind === 'weeks'
+      const values =
+        kind === 'average' && Array.isArray(trend.average) && trend.average.length === points.length
+          ? trend.average
+          : points.map((point) => toNumber(point.tokens))
+      const count = values.length
+      const [hover, setHover] = useState(null)
+      const wrapRef = useRef(null)
+      const pointer = usePointer()
+      // 折线只有一个点（本月 1 号）时没有走势可画
+      if (count === 0 || (!bars && count === 1)) return null
+      let max = 0
+      for (const value of values) max = Math.max(max, value)
+
+      const indexAt = (clientX) => {
+        const node = wrapRef.current
+        if (!node || typeof node.getBoundingClientRect !== 'function') return null
+        const rect = node.getBoundingClientRect()
+        if (!(rect.width > 0)) return null
+        const ratio = (clientX - rect.left) / rect.width
+        // 柱子：按等宽的格子取；折线：取离鼠标最近的点（点落在两端与等分处）
+        const index = bars ? Math.floor(ratio * count) : Math.round(ratio * (count - 1))
+        return Math.max(0, Math.min(count - 1, index))
+      }
+      const handlers = {
+        onMouseEnter: (event) => {
+          pointer.move(event.clientX, event.clientY)
+          setHover(indexAt(event.clientX))
+        },
+        onMouseMove: (event) => {
+          pointer.move(event.clientX, event.clientY)
+          const index = indexAt(event.clientX)
+          if (index !== hover) setHover(index)
+        },
+        onMouseLeave: () => {
+          pointer.leave()
+          setHover(null)
+        },
+      }
+
+      const titleOf = (point) => {
+        const start = parseDateKey(point.key)
+        if (kind === 'weeks') {
+          const end = parseDateKey(point.endKey)
+          if (!start || !end) return point.key
+          if (point.key === point.endKey) return formatDate(start, { month: 'long', day: 'numeric', weekday: 'short' })
+          const short = { month: 'short', day: 'numeric' }
+          return t('tip.weekRange', { start: formatDate(start, short), end: formatDate(end, short) })
+        }
+        return start ? formatDate(start, { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' }) : point.key
+      }
+      let tip = null
+      if (hover !== null && hover < count && wrapRef.current && typeof wrapRef.current.getBoundingClientRect === 'function') {
+        const rect = wrapRef.current.getBoundingClientRect()
+        const value = values[hover]
+        const anchorX = bars ? (hover + 0.5) / count : count <= 1 ? 0.5 : hover / (count - 1)
+        tip = h(
+          Popover,
+          { pointer, anchor: { left: rect.left + anchorX * rect.width, top: rect.top, width: 0, height: rect.height } },
+          h('div', { className: 'dps-pop-title' }, titleOf(points[hover])),
+          h(
+            'div',
+            { className: 'dps-pop-value' },
+            kind === 'average'
+              ? `${t('tip.average7')} ${t('tip.tokens', { value: formatTokens(Math.round(value)) })}`
+              : value > 0
+                ? t('tip.tokens', { value: formatTokens(value) })
+                : t('tip.none'),
+          ),
+        )
+      }
+
+      if (bars) {
+        return h(
+          'span',
+          { ref: wrapRef, className: 'dps-spark-wrap', role: 'img', 'aria-label': kind === 'weeks' ? t('aria.sparkWeekly') : t('aria.sparkDaily'), ...handlers },
+          h(
+            'span',
+            { className: 'dps-spark-bars', 'data-dps-field': 'trend-bars', 'data-kind': kind, 'data-hovering': hover !== null ? 'true' : 'false' },
+            points.map((point, index) =>
+              h('span', {
+                key: point.key,
+                className: 'dps-spark-bar',
+                'data-key': point.key,
+                'data-value': values[index],
+                'data-current': point.current ? 'true' : 'false',
+                'data-active': hover === index ? 'true' : 'false',
+                // 高度严格按比例；非零的至少 2px，免得被峰值压成看不见
+                style: { height: `${max > 0 ? (values[index] / max) * 100 : 0}%`, minHeight: values[index] > 0 ? '2px' : '0px' },
+              }),
+            ),
+          ),
+          tip,
+        )
+      }
+
+      const width = Math.max(count * 4, 8)
+      const height = 36
+      const xOf = (index) => (count <= 1 ? width / 2 : (index / (count - 1)) * width)
+      const yOf = (value) => height - (max > 0 ? (value / max) * (height - 4) : 0) - 2
+      const line = values.map((value, index) => `${index === 0 ? 'M' : 'L'}${xOf(index).toFixed(2)} ${yOf(value).toFixed(2)}`).join(' ')
+      const area = `${line} L${width.toFixed(2)} ${height} L0 ${height} Z`
+      // 圆点标在悬停的那一天，平时标在最后一天
+      const marked = hover !== null ? hover : count - 1
+      // SVG 用 preserveAspectRatio="none" 横向拉满：画在里面的圆点会被拉成扁椭圆，所以圆点用 HTML 按百分比叠在上面
+      return h(
+        'span',
+        { ref: wrapRef, className: 'dps-spark-wrap', ...handlers },
+        h(
+          'svg',
+          {
+            className: 'dps-spark',
+            viewBox: `0 0 ${width} ${height}`,
+            preserveAspectRatio: 'none',
+            role: 'img',
+            'aria-label': kind === 'average' ? t('aria.spark') : t('aria.sparkDaily'),
+          },
+          h('path', { className: 'dps-spark-area', d: area }),
+          h('path', {
+            className: 'dps-spark-line',
+            d: line,
+            'data-dps-field': kind === 'average' ? 'moving-average' : 'daily-line',
+            'data-points': count,
+            'data-values': kind === 'average' ? undefined : values.join(','),
+            'data-last': points[count - 1].key,
+          }),
+        ),
+        h('span', {
+          className: 'dps-spark-end',
+          'aria-hidden': true,
+          style: { left: `${(xOf(marked) / width) * 100}%`, top: `${(yOf(values[marked]) / height) * 100}%` },
+        }),
+        tip,
+      )
+    }
+
     function Kpi(props) {
       return h(
         'div',
@@ -4086,6 +4312,7 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
               : h('div', { className: 'dps-kpi-value', 'data-dps-field': 'value' }, h(ValueParts, { parts: props.parts })),
             props.extra || null,
           ),
+          props.aside ? h('div', { className: 'dps-kpi-aside' }, props.aside) : null,
         ),
       )
     }
@@ -4145,8 +4372,10 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
           label: rangeLabel,
           raw: ready ? summary.tokens : undefined,
           parts: ready ? tokenValue(shownRange) : null,
-          // 环比排在数字格后面；数字格按最宽的写法占位，环比的位置不随数字的位数变。最宽的写法：一亿以下是四位整数的「万」，英文是三位整数的 M
-          extra: deltaChip,
+          // 环比排在数字格后面；数字格按最宽的写法占位，环比的位置不随数字的位数变。最宽的写法：一亿以下是四位整数的「万」，英文是三位整数的 M。
+          // 环比放在固定宽度的槽里：没有环比的范围（本日、累计）槽也留着，右边趋势的宽度和位置不变
+          extra: h('span', { className: 'dps-kpi-dslot' }, deltaChip),
+          aside: h(TokenTrend, { trend: ready ? props.trend : null }),
           reserve: isChineseLocale() ? { value: '8888.8', unit: '万' } : { value: '888.8', unit: 'M' },
         }),
         // 所选范围的花费（按各家计费方式；未设置的不计入，悬停写出来）
@@ -4316,6 +4545,7 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
         const points = dailySeries(daily, startKey, rangeWin.endKey)
         return points.map((point) => ({ ...point, today: point.key === todayKey }))
       }, [daily, rangeWin.startKey, rangeWin.endKey, todayKey])
+      const trend = useMemo(() => tokenTrend(daily, range, rangeWin, todayKey), [daily, range, rangeWin, todayKey])
       // 每天的缓存命中率（Token 构成卡里的小趋势）
       const hitSeries = useMemo(() => {
         const byDate = indexDaily(daily)
@@ -4527,7 +4757,7 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
             onExport: handleExport,
           }),
           h(StatusBar, { snapshot, error, hasData, onRetry: reload }),
-          h(KpiStrip, { kpis, ready, range, rangeWin, todayKey, summary: rangeSummary, delta, todayHit, costs }),
+          h(KpiStrip, { kpis, ready, range, rangeWin, todayKey, summary: rangeSummary, delta, trend, todayHit, costs }),
           h(ActivityCard, { daily, today, rangeStartKey: rangeWin.startKey, rangeEndKey: rangeWin.endKey }),
           h(
             'div',

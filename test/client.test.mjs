@@ -594,8 +594,64 @@ test('指标卡：数字与环比不被压缩；卡片放不下时环比换到�
   assert.match(source, /\.dps-kpi-main\{[^}]*max-width:100%/)
   assert.match(source, /\.dps-kpi-main > \*\{flex:0 0 auto\}/)
   assert.match(source, /\.dps-delta\{[^}]*white-space:nowrap/)
-  // 第一张卡不再画趋势图
-  assert.equal(/function Sparkline\b|dps-kpi-aside/.test(source), false)
+  // 环比槽宽度固定（没有环比时也占着），右边的趋势只在剩下的地方伸缩、不压数字和环比；卡片太窄时趋势不画
+  assert.match(source, /\.dps-kpi-dslot\{[^}]*min-width:80px/)
+  assert.match(source, /\.dps-kpi-aside\{[^}]*min-width:0[^}]*margin-left:auto/)
+  assert.match(source, /@container dps-hero \(max-width:250px\)\{\.dps-kpi-aside\{display:none\}\}/)
+})
+
+test('tokenTrend：本日最近 7 天日柱、本周最近 4 周周柱（周合计，本周算到今天）、本月每天折线、累计 90 天 7 日均线', () => {
+  const { tokenTrend, rangeWindow } = loadClientHelpers({
+    functions: ['tokenTrend', 'movingAverage', 'dailySeries', 'indexDaily', 'rangeWindow', 'daysBetween', 'parseDateKey', 'localDateKey', 'addDays', 'startOfDay', 'startOfWeek', 'toNumber'],
+  })
+  // 2026-11-11 是周三；每天的用量 = 那天是几号（10 月 1 日 = 1，……）
+  const daily = []
+  for (let day = 1; day <= 31; day += 1) daily.push({ date: `2026-10-${String(day).padStart(2, '0')}`, tokens: day })
+  for (let day = 1; day <= 11; day += 1) daily.push({ date: `2026-11-${String(day).padStart(2, '0')}`, tokens: day })
+  const todayKey = '2026-11-11'
+  const trendOf = (range, custom) => tokenTrend(daily, range, rangeWindow(range, todayKey, custom), todayKey)
+
+  const day = trendOf('day')
+  assert.equal(day.kind, 'days')
+  assert.deepEqual(day.points.map((point) => point.key), ['2026-11-05', '2026-11-06', '2026-11-07', '2026-11-08', '2026-11-09', '2026-11-10', '2026-11-11'])
+  assert.deepEqual(day.points.map((point) => point.tokens), [5, 6, 7, 8, 9, 10, 11])
+  assert.deepEqual(day.points.map((point) => point.current), [false, false, false, false, false, false, true])
+
+  const week = trendOf('week')
+  assert.equal(week.kind, 'weeks')
+  assert.deepEqual(week.points.map((point) => [point.key, point.endKey]), [
+    ['2026-10-19', '2026-10-25'],
+    ['2026-10-26', '2026-11-01'],
+    ['2026-11-02', '2026-11-08'],
+    ['2026-11-09', '2026-11-11'],
+  ])
+  // 10/19–25 = 19+…+25；10/26–11/1 跨月 = 26+…+31 + 1；本周一到今天 = 9+10+11
+  assert.deepEqual(week.points.map((point) => point.tokens), [154, 172, 35, 30])
+  assert.deepEqual(week.points.map((point) => point.current), [false, false, false, true])
+
+  const month = trendOf('month')
+  assert.equal(month.kind, 'line')
+  assert.deepEqual(month.points.map((point) => point.tokens), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+
+  const all = trendOf('all')
+  assert.equal(all.kind, 'average')
+  assert.equal(all.points.length, 90)
+  assert.equal(all.points.at(-1).key, todayKey)
+  assert.equal(all.average.length, 90)
+  assert.equal(all.average.at(-1), (5 + 6 + 7 + 8 + 9 + 10 + 11) / 7)
+
+  // 自定义：31 天以内每天的折线（终点可以在过去），更长的画整个窗口的 7 日均线
+  const short = trendOf('custom', { startKey: '2026-10-03', endKey: '2026-10-09' })
+  assert.equal(short.kind, 'line')
+  assert.deepEqual(short.points.map((point) => point.tokens), [3, 4, 5, 6, 7, 8, 9])
+  const long = trendOf('custom', { startKey: '2026-09-01', endKey: '2026-11-11' })
+  assert.equal(long.kind, 'average')
+  assert.equal(long.points.length, 72)
+
+  // 周一：本周只有今天一天
+  const monday = tokenTrend(daily, 'week', rangeWindow('week', '2026-11-09'), '2026-11-09')
+  assert.deepEqual(monday.points.at(-1), { key: '2026-11-09', endKey: '2026-11-09', tokens: 9, current: true })
+  assert.equal(tokenTrend(daily, 'day', null, todayKey), null)
 })
 
 test('环比颜色：增长红色、下降绿色（取宿主主题的状态色）', () => {
