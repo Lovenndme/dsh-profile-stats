@@ -3901,7 +3901,10 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
       )
     }
 
-    /** 顶部范围开关 + 自定义日期浮层。点「自定义」先打开浮层，点「确定」才切过去；点外面或 Esc 关闭。 */
+    /**
+     * 顶部范围开关 + 自定义日期浮层。点「自定义」高亮马上移过去、打开浮层，点「确定」才换数据；
+     * 没点确定就关掉（点外面、Esc、再点一次自定义），高亮回到原来的范围。
+     */
     function RangeControl(props) {
       const [picking, setPicking] = useState(false)
       const wrapRef = useRef(null)
@@ -3920,7 +3923,8 @@ button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
           control: 'range',
           label: t('aria.range'),
           fit: true,
-          value: props.range,
+          // 浮层开着时高亮在「自定义」上（正在选日期），数据仍是原来的范围
+          value: picking ? 'custom' : props.range,
           onChange: (id) => {
             if (id === 'custom') {
               setPicking(true)
