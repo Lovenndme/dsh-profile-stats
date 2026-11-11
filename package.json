@@ -1,6 +1,6 @@
 {
   "name": "dsh-profile-stats",
-  "version": "2.4.19",
+  "version": "2.4.20",
   "description": "Personal usage profile page for the DeepSeek Harness Web UI: tokens and spend by range, longest task, activity streaks, cache hit rate, a 12-month token-activity heatmap, model distribution, token stats by content, projects and a per-provider breakdown, all folded from the local session logs.",
   "type": "module",
   "main": "index.js",

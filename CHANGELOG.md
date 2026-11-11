@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.4.20 — 2026-11-11
+
+- fix: tiny pie slices stay visible
+- fix: call the multiplier billing method 倍率 instead of 打折
+- style: redesign the provider settings page; billing tags are grey
+- feat: provider settings page; the provider card is read-only
+- feat: remove a provider from the whole page; every provider gets its own row
+- fix: today's cache hit rate to two decimals; the provider card follows the header range only
+
+
 ## 2.4.19 — 2026-11-11
 
 - docs: fuller README — why, a section-by-section tour, how spend is worked out, FAQ, local files
