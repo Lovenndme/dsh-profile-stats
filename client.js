@@ -2099,6 +2099,20 @@ window.__ModuleLoader__.load({
       })
     }
 
+    /**
+     * 饼图上非零扇区最少画多大（弧度，约 5.2°）：扇区之间那圈 2px 的分隔描边会把 0.4%（1.4°，外圈只有 2px 宽）
+     * 这样的细扇区整个盖住，看起来只剩一条深色的线。按这个角度画，外圈约 7.6px，去掉两边描边还露出约 6px 颜色。
+     */
+    const PIE_MIN_ANGLE = 0.09
+
+    /**
+     * 饼图实际画出来的扇区：fraction 是原始占比（图例、浮层、圆外的百分比都用它），start / end / mid 只管画——
+     * 角度交给 ringSegments 分（不留缝），不到 PIE_MIN_ANGLE 的非零扇区按它画，多出来的从其余扇区按比例扣。
+     */
+    function pieLayout(values) {
+      return ringSegments(values, 0, PIE_MIN_ANGLE).map((slice) => ({ ...slice, mid: (slice.start + slice.end) / 2 }))
+    }
+
     /** 一个扇区的 SVG 路径（圆心 cx, cy，半径 r）；一整圈（只有一个家族）画成圆。 */
     function pieArc(cx, cy, r, start, end) {
       const num = (value) => Math.round(value * 100) / 100
@@ -2212,7 +2226,7 @@ window.__ModuleLoader__.load({
         setActive(next)
       }
 
-      const slices = share ? pieSlices(data.series.map((item) => item.total)) : []
+      const slices = share ? pieLayout(data.series.map((item) => item.total)) : []
       const ticks = data.axis.ticks
       const axisMax = data.axis.max
       const tickText = (tick) => formatAxis(tick)

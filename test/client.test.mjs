@@ -1200,6 +1200,29 @@ test('pieSlices：从 12 点钟顺时针排，占比之和 = 1，角度首尾相
   assert.equal(pieSlices([7])[0].fraction, 1)
 })
 
+test('pieLayout：占比照原样；非零扇区最少画 PIE_MIN_ANGLE（不被 2px 的分隔描边盖住），多出来的从大扇区扣；角度首尾相接收在整圈', () => {
+  const { pieLayout } = loadClientHelpers({
+    extraCode: ['const PIE_MIN_ANGLE = 0.09'],
+    functions: ['pieLayout', 'ringSegments', 'pieSlices', 'toNumber'],
+  })
+  // 99.4% / 0.4% / 0.2%（主人截图里的按月占比）
+  const slices = pieLayout([994, 4, 2])
+  assert.deepEqual(slices.map((slice) => Math.round(slice.fraction * 1000) / 1000), [0.994, 0.004, 0.002], '占比不变')
+  assert.ok(slices[1].end - slices[1].start >= 0.09 - 1e-9, '0.4% 至少画 0.09 弧度')
+  assert.ok(slices[2].end - slices[2].start >= 0.09 - 1e-9, '0.2% 至少画 0.09 弧度')
+  assert.ok(slices[0].end - slices[0].start < 0.994 * Math.PI * 2, '大扇区让出角度')
+  assert.equal(slices[0].start, 0)
+  for (let index = 1; index < slices.length; index += 1) assert.ok(Math.abs(slices[index].start - slices[index - 1].end) < 1e-12)
+  assert.ok(Math.abs(slices.at(-1).end - Math.PI * 2) < 1e-9, '收在整圈')
+  for (const slice of slices) assert.ok(Math.abs(slice.mid - (slice.start + slice.end) / 2) < 1e-12)
+  // 本来就够大的扇区照原比例画
+  const even = pieLayout([50, 30, 20])
+  assert.ok(Math.abs(even[0].end - Math.PI) < 1e-9)
+  // 只有一个家族：一整圈；没有数据：空
+  assert.equal(pieLayout([7])[0].end, Math.PI * 2)
+  assert.deepEqual(pieLayout([]), [])
+})
+
 test('pieArc：扇区路径——四分之一、半圈、超过半圈用大弧、一整圈画成圆；没有 NaN', () => {
   const { pieArc } = loadClientHelpers({ functions: ['pieArc'] })
   assert.equal(pieArc(100, 100, 50, 0, Math.PI / 2), 'M 100 100 L 100 50 A 50 50 0 0 1 150 100 Z')
