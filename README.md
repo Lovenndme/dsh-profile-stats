@@ -41,13 +41,14 @@ dsh-profile-stats
 | 📁 | **Projects** | Tokens per working directory in the selected range, with the part used by subagent sessions |
 | 💰 | **Spend** | The selected range's spend, plus a spend column per provider and project. Usage is priced at the list price (peak and off-peak hours only for DeepSeek direct; relays and coding plans at the flat peak price, which is what relays discount from); each provider can be set to list price, a discount, a monthly plan (usage converted to money, with the usage since the latest renewal day against the fee) or not counted, stored only on your machine |
 
-A range switch in the header — today, this week, this month, all time or custom dates — drives the first number, the token stats, the projects and the provider split (the model distribution has its own switch); the selected range can be exported as CSV (one row per day) or JSON.
+A range switch in the header — today, this week, this month, all time or custom dates — drives the first two numbers (tokens and spend), the token stats, the projects and the provider split (the model distribution has its own switch); the selected range can be exported as CSV (one row per day) or JSON.
 
 ## Privacy
 
 > [!NOTE]
-> Everything is read from your own session logs through `ctx.sessionQuery`; nothing is re-derived
-> from guesses. The only outbound request is a six-hourly read of this package's own version from
+> Everything is read from your own session logs through `ctx.sessionQuery`. Token counts are the
+> providers' own figures as logged; only the token-stats categories (split by content size) and the
+> spend (priced at list prices and your billing settings) are estimates. The only outbound request is a six-hourly read of this package's own version from
 > the npm registry, used by the in-panel update button. No telemetry, no credentials, nothing
 > uploaded.
 

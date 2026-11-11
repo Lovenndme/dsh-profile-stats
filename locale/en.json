@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Profile & Token Stats",
-    "description": "Adds a personal profile page to the sidebar: cumulative tokens, peak daily tokens, longest task time, activity streaks, token stats by content and a 12-month token-activity heatmap, folded from this machine's session logs."
+    "description": "Adds a personal profile page to the sidebar: tokens and spend by range, longest task time, activity streaks, today's cache hit rate, a 12-month token-activity heatmap, model distribution, token stats by content, projects and a per-provider breakdown, folded from this machine's session logs."
   }
 }
