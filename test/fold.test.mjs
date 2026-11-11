@@ -14,6 +14,7 @@ import {
   splitByWeights,
   trackContext,
   foldSnapshot,
+  localDayKey,
   modelFamilyOf,
   normalizeModelId,
   providerOf,
@@ -603,4 +604,59 @@ test('applyEvent：单独调用、没有传分摊结果时，这一步照常计�
   applyEvent(fold, assistantEvent({ seq: 1, time: localNoon(2026, 11, 6), input: 10, output: 5 }))
   assert.equal(fold.tokens, 15)
   assert.deepEqual(fold.perDayMix, {})
+})
+
+
+test('foldSnapshot：不统计的供应商每一步都跳过（总量、按供应商、按天）；只用了它的任务不算最长任务，混着用的照算', () => {
+  const t0 = localNoon(2026, 11, 6)
+  const step = (seq, time, provider, input, output) => assistantEvent({ seq, time, input, output, total: input + output, provider, model: 'deepseek-v4-1-flash' })
+  const snapshot = {
+    session: { id: 'x', createdAt: t0 },
+    events: [
+      turnStartEvent({ seq: 0, time: t0, turn: 'only-lens' }),
+      step(1, t0 + 1000, 'lens', 1000, 500),
+      turnEndEvent({ seq: 2, time: t0 + 600000, turn: 'only-lens' }),
+      turnStartEvent({ seq: 3, time: t0 + 700000, turn: 'mixed' }),
+      step(4, t0 + 701000, 'alpha', 100, 50),
+      step(5, t0 + 702000, 'lens', 100, 50),
+      turnEndEvent({ seq: 6, time: t0 + 760000, turn: 'mixed' }),
+      turnStartEvent({ seq: 7, time: t0 + 800000, turn: 'empty' }),
+      turnEndEvent({ seq: 8, time: t0 + 830000, turn: 'empty' }),
+    ],
+  }
+  const all = foldSnapshot(snapshot)
+  assert.equal(all.tokens, 1800)
+  assert.equal(all.calls, 3)
+  assert.equal(all.longestTurnMs, 600000)
+
+  const kept = foldSnapshot(snapshot, new Set(['lens']))
+  assert.equal(kept.tokens, 150)
+  assert.equal(kept.calls, 1)
+  assert.equal(kept.maxStepTokens, 150)
+  assert.deepEqual(kept.perProvider, { alpha: 150 })
+  const day = localDayKey(t0)
+  assert.deepEqual(kept.perDayProvider[day], { alpha: 150 })
+  assert.equal(kept.perDay[day], 150)
+  // 只用了 lens 的那个任务不算；混着用的（60 秒）照算；一步都没有的任务不受影响（30 秒，比 60 秒短）
+  assert.equal(kept.longestTurnMs, 60000)
+  // 数组也行；名单为空时和不传一样
+  assert.equal(foldSnapshot(snapshot, ['lens']).tokens, 150)
+  assert.equal(foldSnapshot(snapshot, []).tokens, 1800)
+})
+
+test('foldSnapshot：继承前缀里的不统计供应商也跳过', () => {
+  const t0 = localNoon(2026, 11, 6)
+  const snapshot = {
+    session: { id: 'child', createdAt: t0, parentSession: 'gone' },
+    inheritedEventCount: 2,
+    events: [
+      assistantEvent({ seq: 0, time: t0, input: 400, output: 100, total: 500, provider: 'lens', model: 'deepseek-v4-1-flash' }),
+      assistantEvent({ seq: 1, time: t0, input: 40, output: 10, total: 50, provider: 'alpha', model: 'deepseek-v4-1-flash' }),
+      assistantEvent({ seq: 2, time: t0 + 1000, input: 80, output: 20, total: 100, provider: 'alpha', model: 'deepseek-v4-1-flash' }),
+    ],
+  }
+  const kept = foldSnapshot(snapshot, new Set(['lens']))
+  assert.equal(kept.inheritedTokens, 50)
+  assert.deepEqual(kept.inheritedPerProvider, { alpha: 50 })
+  assert.equal(kept.tokens, 100)
 })

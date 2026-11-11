@@ -141,8 +141,10 @@ function readIdentityOverride() {
 }
 
 /**
- * 供应商的显示名（只存在本机，不进仓库、不进 npm 包）：{ "providers": { "<provider id>": "<显示名>" } }。
+ * 供应商的显示名与「不统计」名单（只存在本机，不进仓库、不进 npm 包）：
+ *   { "providers": { "<provider id>": "<显示名>" }, "excluded": ["<provider id>", ...] }
  * 公开代码里不写任何私有渠道的名字，页面默认显示原始 id；用户可以在供应商卡片上给自己的渠道起名。
+ * excluded 里的供应商整页都不算：折叠日志时跳过它的每一步（见 foldSnapshot），名单变了缓存整份重扫。
  */
 function aliasFile() {
   return path.join(dshHome(), 'dsh-profile-stats', 'aliases.json')
@@ -153,7 +155,7 @@ const ALIAS_MAX_ID = 200
 const ALIAS_MAX_COUNT = 200
 const ALIAS_BODY_LIMIT = 16 * 1024
 
-/** 只留「非空 id → 非空、不超过 40 字的名字」，最多 200 条；文件被手改坏了也不抛错。 */
+/** 只留「非空 id → 非空、不超过 40 字的名字」，最多 200 条；不统计名单去重、排序、最多 200 个。文件被手改坏了也不抛错。 */
 function sanitizeAliases(raw) {
   const providers = {}
   const source = raw && typeof raw === 'object' && raw.providers && typeof raw.providers === 'object' && !Array.isArray(raw.providers) ? raw.providers : {}
@@ -164,7 +166,20 @@ function sanitizeAliases(raw) {
     if (!validProviderId(key) || !label) continue
     providers[key] = label
   }
-  return { providers }
+  const excluded = new Set()
+  if (raw && typeof raw === 'object' && Array.isArray(raw.excluded)) {
+    for (const id of raw.excluded) {
+      if (excluded.size >= ALIAS_MAX_COUNT) break
+      const key = typeof id === 'string' ? id.trim() : ''
+      if (validProviderId(key)) excluded.add(key)
+    }
+  }
+  return { providers, excluded: [...excluded].sort() }
+}
+
+/** 不统计名单的指纹：缓存记下它是按哪份名单折的，对不上就整份重扫。 */
+function excludedKey(list) {
+  return (Array.isArray(list) ? list : []).join('\n')
 }
 
 /** 能当供应商 id 存进本地文件的字符串：非空、不太长、不是 __proto__。 */
@@ -176,8 +191,16 @@ function readAliases() {
   try {
     return sanitizeAliases(parseJson(fs.readFileSync(aliasFile(), 'utf8')))
   } catch {
-    return { providers: {} }
+    return { providers: {}, excluded: [] }
   }
+}
+
+function saveAliases(next) {
+  const file = aliasFile()
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const temporary = `${file}.${process.pid}.tmp`
+  fs.writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`)
+  fs.renameSync(temporary, file)
 }
 
 /**
@@ -194,12 +217,27 @@ function writeAlias(provider, name) {
   else delete current.providers[id]
   const next = sanitizeAliases(current)
   if (label && !next.providers[id]) return { ok: false, error: 'too-many' }
-  const file = aliasFile()
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  const temporary = `${file}.${process.pid}.tmp`
-  fs.writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`)
-  fs.renameSync(temporary, file)
+  saveAliases(next)
   return { ok: true, aliases: next }
+}
+
+/**
+ * 把一个供应商放进 / 移出「不统计」名单（excluded 必须是布尔值）。名单真的变了时 changed 为 true，调用方据此整份重扫。
+ */
+function writeExcluded(provider, excluded) {
+  const id = typeof provider === 'string' ? provider.trim() : ''
+  if (!validProviderId(id)) return { ok: false, error: 'invalid-provider' }
+  if (typeof excluded !== 'boolean') return { ok: false, error: 'invalid-excluded' }
+  const current = readAliases()
+  const list = new Set(current.excluded)
+  const had = list.has(id)
+  if (excluded) list.add(id)
+  else list.delete(id)
+  const next = sanitizeAliases({ providers: current.providers, excluded: [...list] })
+  if (excluded && !next.excluded.includes(id)) return { ok: false, error: 'too-many' }
+  if (had === excluded) return { ok: true, aliases: next, changed: false }
+  saveAliases(next)
+  return { ok: true, aliases: next, changed: true }
 }
 
 /**
@@ -1009,7 +1047,12 @@ function trackContext(context, event) {
 }
 
 /** mix 是这一步的八类分摊（trackContext 算的）；单独调用、没有上下文时不传，这一步就不进 mix。 */
-function applyEvent(fold, event, mix) {
+/**
+ * scope（可选，一次折叠内有效、不进缓存）：
+ *   excluded  不统计的供应商 id 集合：它的每一步都不累加用量；
+ *   turns     每个 turn 里有没有被统计的步 / 不统计的步，只用了不统计供应商的 turn 不算任务用时。
+ */
+function applyEvent(fold, event, mix, scope) {
   const seq = toNumber(event.seq)
   if (seq > fold.seq) fold.seq = seq
 
@@ -1024,6 +1067,13 @@ function applyEvent(fold, event, mix) {
     case 'assistant/message': {
       const usage = data.usage
       if (!usage) break
+      // provider 不需要日期，照记；否则按供应商拆出来的合计会小于总量。
+      const provider = providerOf(event)
+      if (scope && scope.excluded.has(provider)) {
+        markTurns(scope, fold.openTurns, 'excluded')
+        break
+      }
+      markTurns(scope, fold.openTurns, 'counted')
       const parts = stepParts(usage)
       const tokens = partsSum(parts)
       fold.calls += 1
@@ -1036,8 +1086,6 @@ function applyEvent(fold, event, mix) {
       if (tokens > fold.maxStepTokens) fold.maxStepTokens = tokens
       const modelFamily = modelFamilyOf(event)
       fold.perModel[modelFamily] = toNumber(fold.perModel[modelFamily]) + tokens
-      // provider 不需要日期，照记；否则按供应商拆出来的合计会小于总量。
-      const provider = providerOf(event)
       fold.perProvider[provider] = toNumber(fold.perProvider[provider]) + tokens
       if (time > 0) {
         const key = localDayKey(time)
@@ -1055,16 +1103,32 @@ function applyEvent(fold, event, mix) {
       if (turn === undefined) break
       const key = safeKey(turn)
       const started = fold.openTurns[key]
-      if (typeof started === 'number' && time >= started) {
+      if (typeof started === 'number' && time >= started && !excludedOnly(scope, key)) {
         const span = time - started
         if (span > fold.longestTurnMs) fold.longestTurnMs = span
       }
       delete fold.openTurns[key]
+      if (scope && scope.turns) delete scope.turns[key]
       break
     }
     default:
       break
   }
+}
+
+/** 给当前没结束的 turn 记上「有被统计的步」/「有不统计的步」。 */
+function markTurns(scope, openTurns, flag) {
+  if (!scope || !scope.turns || scope.excluded.size === 0) return
+  for (const key of Object.keys(openTurns)) {
+    const use = scope.turns[key] || (scope.turns[key] = { counted: false, excluded: false })
+    use[flag] = true
+  }
+}
+
+/** 这个 turn 只用了不统计的供应商（没有一步被统计）：任务用时不算它。 */
+function excludedOnly(scope, key) {
+  const use = scope && scope.turns ? scope.turns[key] : null
+  return Boolean(use && use.excluded && !use.counted)
 }
 
 /**
@@ -1077,8 +1141,12 @@ function applyEvent(fold, event, mix) {
  *   - 找不到原件（来源会话已被删除、或本就不在本机）时，这笔花费只存在于副本里，
  *     聚合会把前缀补回总量——否则会少算。
  */
-function foldSnapshot(snapshot) {
+function foldSnapshot(snapshot, excluded) {
   const header = snapshot && snapshot.session ? snapshot.session : {}
+  /** 不统计的供应商（aliases.json 的 excluded）；本体与继承前缀各自记每个 turn 用到了哪种步 */
+  const skip = excluded instanceof Set ? excluded : new Set(Array.isArray(excluded) ? excluded : [])
+  const scope = { excluded: skip, turns: {} }
+  const inheritedScope = { excluded: skip, turns: {} }
   const sessionId = header.id === undefined ? '' : String(header.id)
   const inherited = toNumber(snapshot && snapshot.inheritedEventCount)
   const fold = emptyFold(sessionId, header.createdAt, header.parentSession)
@@ -1105,13 +1173,16 @@ function foldSnapshot(snapshot) {
       if (event.type === 'turn/start' && turn !== undefined && toNumber(event.time) > 0) inheritedTurns[safeKey(turn)] = toNumber(event.time)
       if (event.type === 'turn/end' && turn !== undefined) {
         const started = inheritedTurns[safeKey(turn)]
-        if (typeof started === 'number' && toNumber(event.time) >= started) {
+        if (typeof started === 'number' && toNumber(event.time) >= started && !excludedOnly(inheritedScope, safeKey(turn))) {
           fold.inheritedLongestTurnMs = Math.max(fold.inheritedLongestTurnMs, toNumber(event.time) - started)
         }
         delete inheritedTurns[safeKey(turn)]
+        delete inheritedScope.turns[safeKey(turn)]
       }
       const usage = event.type === 'assistant/message' && event.data ? event.data.usage : undefined
-      if (usage) {
+      const skipped = Boolean(usage) && skip.has(providerOf(event))
+      if (usage) markTurns(inheritedScope, inheritedTurns, skipped ? 'excluded' : 'counted')
+      if (usage && !skipped) {
         const parts = stepParts(usage)
         const tokens = partsSum(parts)
         if (tokens > fold.inheritedMaxStepTokens) fold.inheritedMaxStepTokens = tokens
@@ -1136,7 +1207,7 @@ function foldSnapshot(snapshot) {
       if (seq > fold.seq) fold.seq = seq
       continue
     }
-    applyEvent(fold, event, mix)
+    applyEvent(fold, event, mix, scope)
   }
   fold.complete = true
   return fold
@@ -1445,7 +1516,7 @@ function validFold(raw) {
 }
 
 function readCache() {
-  const empty = { version: CACHE_VERSION, generatedAt: 0, sessions: {}, complete: false }
+  const empty = { version: CACHE_VERSION, generatedAt: 0, excluded: '', sessions: {}, complete: false }
   try {
     const parsed = parseJson(fs.readFileSync(cacheFile(), 'utf8'))
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || parsed.version !== CACHE_VERSION) return empty
@@ -1463,6 +1534,8 @@ function readCache() {
     return {
       version: CACHE_VERSION,
       generatedAt: toNumber(parsed.generatedAt),
+      // 按哪份不统计名单折的（旧缓存没有这个字段 = 空名单）
+      excluded: typeof parsed.excluded === 'string' ? parsed.excluded : '',
       sessions,
       // 只有首次全量扫描中途落盘时才显式写 false；没有这个字段的旧缓存视为完整
       complete: parsed.complete !== false,
@@ -1588,6 +1661,19 @@ export function createController(ctx) {
   }
   state.generatedAt = state.cache.generatedAt
 
+  /** 不统计名单和缓存折的时候不一样（页面上改了、或手改了 aliases.json）：清空缓存，下一轮整份重扫。返回当前名单。 */
+  const syncExcluded = () => {
+    const list = readAliases().excluded
+    const key = excludedKey(list)
+    if (state.cache.excluded !== key) {
+      state.cache = { version: CACHE_VERSION, generatedAt: 0, excluded: key, sessions: {}, complete: false }
+      state.generatedAt = 0
+      state.dirty = true
+    }
+    return new Set(list)
+  }
+  syncExcluded()
+
   const rebuild = () => {
     state.aggregate = aggregate(Object.values(state.cache.sessions), Date.now(), state.knownIds)
     state.dirty = false
@@ -1607,6 +1693,7 @@ export function createController(ctx) {
     if (state.inflight) return state.inflight
     state.inflight = (async () => {
       const startedAt = Date.now()
+      const excluded = syncExcluded()
       state.firstScan = Object.keys(state.cache.sessions).length === 0 || state.cache.complete === false
       state.scanning = true
       try {
@@ -1668,7 +1755,7 @@ export function createController(ctx) {
               const _t0 = Date.now()
               const snapshot = await ctx.sessionQuery.readSession(target.id)
               const _t1 = Date.now()
-              const fold = foldSnapshot(snapshot)
+              const fold = foldSnapshot(snapshot, excluded)
               fold.live = target.live
               state.cache.sessions[target.id] = fold
               state.dirty = true
@@ -1721,9 +1808,25 @@ export function createController(ctx) {
         state.firstScan = false
         state.progress = { done: 0, total: 0 }
         state.inflight = null
+        // 扫描途中改了不统计名单：这一轮是按旧名单折的，紧接着再扫一轮
+        if (state.rescanPending) {
+          state.rescanPending = false
+          setTimeout(() => scan('excluded').catch(() => {}), 0)
+        }
       }
     })()
     return state.inflight
+  }
+
+  /** 不统计名单变了：清空缓存马上重扫（正在扫就排在这一轮后面）。 */
+  const rescanExcluded = () => {
+    if (state.inflight) {
+      state.rescanPending = true
+      return
+    }
+    syncExcluded()
+    rebuild()
+    scan('excluded').catch(() => {})
   }
 
   /**
@@ -1956,7 +2059,7 @@ export function createController(ctx) {
     }
   }
 
-  return { state, scan, kick, snapshotBody, identity, updateInfo, refreshUpdateInfo, startUpdate }
+  return { state, scan, kick, rescanExcluded, snapshotBody, identity, updateInfo, refreshUpdateInfo, startUpdate }
 }
 
 /**
@@ -1992,7 +2095,7 @@ function snapshotTag(body) {
 
 export function apply(ctx) {
   const controller = createController(ctx)
-  const { state, kick, snapshotBody, startUpdate, refreshUpdateInfo } = controller
+  const { state, kick, rescanExcluded, snapshotBody, startUpdate, refreshUpdateInfo } = controller
 
   const sendJson = (res, status, payload) => {
     const body = JSON.stringify(payload)
@@ -2100,6 +2203,12 @@ export function apply(ctx) {
         }
         try {
           const has = (name) => Boolean(body) && typeof body === 'object' && Object.prototype.hasOwnProperty.call(body, name)
+          if (has('excluded')) {
+            const result = writeExcluded(has('provider') ? body.provider : undefined, body.excluded)
+            if (result.ok && result.changed) rescanExcluded()
+            sendJson(res, result.ok ? 200 : 400, result.ok ? { ok: true, aliases: result.aliases } : result)
+            return
+          }
           const result = writeAlias(has('provider') ? body.provider : undefined, has('name') ? body.name : undefined)
           sendJson(res, result.ok ? 200 : 400, result)
         } catch (error) {
@@ -2159,6 +2268,8 @@ export {
   sanitizeAliases,
   readAliases,
   writeAlias,
+  writeExcluded,
+  excludedKey,
   usageParts,
   stepParts,
   stepTokens,

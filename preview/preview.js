@@ -162,7 +162,9 @@
     'relay-lab': { hit: 0.9, write: 0.03 },
   }
 
-  function buildSnapshot(withWrites) {
+  /** excluded：不统计的供应商（和宿主一样整份都不算它；随机数照原样消耗，其余数字不变）。 */
+  function buildSnapshot(withWrites, excluded) {
+    var skip = excluded || []
     var rand = mulberry32(20261104)
     var today = new Date()
     today.setHours(0, 0, 0, 0)
@@ -223,15 +225,20 @@
       var providers = { 'deepseek-official': 52, 'deepseek-account': 30, 'deepseek-modlens': 14, 'relay-lab': 4 }
       if (entry.offset === 0) providers = { 'deepseek-official': 70, 'deepseek-account': 30 }
       // 和宿主一样四项互不重叠：每家 token = 未缓存输入 + 缓存读 + 缓存写 + 输出
-      var byProvider = split(tokens, providers)
+      var allByProvider = split(tokens, providers)
+      var byProvider = {}
       var providerUsage = {}
       var sums = { input: 0, read: 0, write: 0, output: 0 }
-      Object.keys(byProvider).forEach(function (id) {
-        var amount = byProvider[id]
+      tokens = 0
+      Object.keys(allByProvider).forEach(function (id) {
+        var amount = allByProvider[id]
         var profile = PROVIDER_PROFILES[id]
         var read = Math.floor(amount * (profile.hit + (rand() - 0.5) * 0.012))
         var write = withWrites ? Math.floor(amount * profile.write) : 0
         var output = Math.floor(amount * (0.0016 + rand() * 0.001))
+        if (skip.indexOf(id) >= 0) return
+        byProvider[id] = amount
+        tokens += amount
         var usage = { inputTokens: amount - read - write - output, cacheReadTokens: read, cacheWriteTokens: write, outputTokens: output }
         providerUsage[id] = usage
         sums.input += usage.inputTokens
@@ -270,6 +277,9 @@
         }),
         slots: buildSlots(entry.date, providerUsage),
       }
+    }).filter(function (entry) {
+      // 只用了不统计供应商的那天：当作没用过
+      return entry.tokens > 0
     })
 
     var totals = {
@@ -356,13 +366,13 @@
     }
   }
 
-  var fullSnapshot = buildSnapshot(false)
-  var writeSnapshot = buildSnapshot(true)
+  var fullSnapshot = buildSnapshot(false, readExcluded())
+  var writeSnapshot = buildSnapshot(true, readExcluded())
   /** 每次挂载重置的「宿主」运行状态：刷新后扫描几轮、首扫进度、升级进度。 */
   var hostState = null
 
   function resetHost() {
-    hostState = { scanLeft: 0, firstScanDone: 23, updateAt: 0 }
+    hostState = { scanLeft: 0, firstScanDone: 23, updateAt: 0, rescanLeft: 0 }
   }
 
   function updateBlock() {
@@ -382,8 +392,13 @@
       hostState.firstScanDone = Math.min(68, hostState.firstScanDone + 3)
       return { ok: true, identity: identity, totals: emptyTotals(), daily: [], scanning: true, firstScan: true, progress: { done: hostState.firstScanDone, total: 69 }, generatedAt: 0, update: updateBlock() }
     }
+    if (hostState.rescanLeft > 0) {
+      // 删除 / 恢复了一家：宿主清空缓存整份重扫，这几轮快照是空的、带首扫进度
+      hostState.rescanLeft -= 1
+      return { ok: true, identity: identity, totals: emptyTotals(), daily: [], scanning: true, firstScan: true, progress: { done: 69 - hostState.rescanLeft * 20, total: 69 }, generatedAt: 0, aliases: { providers: readAliases(), excluded: readExcluded() }, update: updateBlock() }
+    }
     var body = JSON.parse(JSON.stringify(state.view === 'cache-write' ? writeSnapshot : fullSnapshot))
-    body.aliases = { providers: readAliases() }
+    body.aliases = { providers: readAliases(), excluded: readExcluded() }
     body.billing = { providers: billingMemory || readBillingStore() }
     body.prices = { currency: 'USD', unit: 'per 1M tokens', fetchedAt: '2026-11-09', defaultUsdCny: 6.7168, models: PREVIEW_PRICES }
     body.generatedAt = Date.now()
@@ -427,6 +442,31 @@
       /* 拿不到 localStorage：只在这次页面里生效 */
     }
     return current
+  }
+
+  /** 不统计的供应商：宿主存在本机 aliases.json 的 excluded 里，预览存在这个浏览器的 localStorage 里。 */
+  function readExcluded() {
+    try {
+      var parsed = JSON.parse(window.localStorage.getItem('dps-preview-excluded') || '[]')
+      return Array.isArray(parsed) ? parsed.filter(function (id) { return typeof id === 'string' && id }).sort() : []
+    } catch (error) {
+      return []
+    }
+  }
+  /** 改了名单就按新名单重新生成数据，并模拟宿主整份重扫几轮。返回新名单。 */
+  function writeExcluded(provider, value) {
+    var list = readExcluded().filter(function (id) { return id !== provider })
+    if (value) list.push(provider)
+    list.sort()
+    try {
+      window.localStorage.setItem('dps-preview-excluded', JSON.stringify(list))
+    } catch (error) {
+      /* 拿不到 localStorage：只在这次页面里生效 */
+    }
+    fullSnapshot = buildSnapshot(false, list)
+    writeSnapshot = buildSnapshot(true, list)
+    hostState.rescanLeft = 3
+    return list
   }
 
   /** 供应商显示名：宿主存在本机文件里，预览存在这个浏览器的 localStorage 里（刷新后还在）。 */
@@ -527,9 +567,12 @@
       } catch (error) {
         payload = {}
       }
-      result = payload && typeof payload.provider === 'string' && payload.provider
-        ? json(200, { ok: true, aliases: { providers: writeAlias(payload.provider, payload.name) } })
-        : json(400, { ok: false, error: 'invalid-provider' })
+      if (!(payload && typeof payload.provider === 'string' && payload.provider)) result = json(400, { ok: false, error: 'invalid-provider' })
+      else if (Object.prototype.hasOwnProperty.call(payload, 'excluded'))
+        result = typeof payload.excluded === 'boolean'
+          ? json(200, { ok: true, aliases: { providers: readAliases(), excluded: writeExcluded(payload.provider, payload.excluded) } })
+          : json(400, { ok: false, error: 'invalid-excluded' })
+      else result = json(200, { ok: true, aliases: { providers: writeAlias(payload.provider, payload.name), excluded: readExcluded() } })
     } else if (url === UPDATE_URL && method === 'POST') {
       requestLog.update += 1
       hostState.updateAt = Date.now() + 3000

@@ -123,7 +123,9 @@ window.__ModuleLoader__.load({
       'provider.deepseek-official': 'DeepSeek official',
       'provider.deepseek-modlens': 'DeepSeek ModLens',
       'provider.unknown': 'Unknown',
-      'provider.other': 'Other',
+      'provider.remove': 'Remove',
+      'provider.removed': '{n} removed',
+      'provider.restore': 'Restore',
       'provider.colName': 'Provider',
       'provider.colAmount': 'Tokens',
       'provider.colShare': 'Share',
@@ -237,7 +239,9 @@ window.__ModuleLoader__.load({
       'provider.deepseek-official': 'DeepSeek 官方',
       'provider.deepseek-modlens': 'DeepSeek ModLens',
       'provider.unknown': '未知来源',
-      'provider.other': '其他',
+      'provider.remove': '删除',
+      'provider.removed': '已删除 {n} 家',
+      'provider.restore': '恢复',
       'provider.colName': '供应商',
       'provider.colAmount': '用量',
       'provider.colShare': '占比',
@@ -1320,6 +1324,7 @@ window.__ModuleLoader__.load({
       download: 'M12 4v10m-4.5-4l4.5 4.5 4.5-4.5M5 20h14',
       alert: 'M12 8v5m0 3.5v.01M10.3 3.9L2.6 17.5A2 2 0 004.3 20.5h15.4a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z',
       edit: 'M4 20h4L19 9l-4-4L4 16v4zM13 7l4 4',
+      trash: 'M4 7h16M9 7V4.5h6V7M6.5 7l1 12.5h9l1-12.5M10 11v5.5m4-5.5v5.5',
       wallet: 'M4 7.5A1.5 1.5 0 015.5 6H18a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2V7.5zM4 8l12-3.5V6M16 13h2',
       target: 'M12 21a9 9 0 100-18 9 9 0 000 18zM12 16.5a4.5 4.5 0 100-9 4.5 4.5 0 000 9zM12 12.6a.6.6 0 100-1.2.6.6 0 000 1.2z',
       database: 'M4 6a8 3 0 1 0 16 0a8 3 0 1 0 -16 0M4 6v12a8 3 0 0 0 16 0V6M4 12a8 3 0 0 0 16 0',
@@ -2669,9 +2674,10 @@ window.__ModuleLoader__.load({
 
     /* ------------------------------------------------------------ 供应商分类 */
 
+    const NO_IDS = Object.freeze([])
+
     /** 显示名：本机起的名字（aliases，只存在本机）→ 内置文案 → 原始 id。 */
     function providerLabel(id, aliases) {
-      if (id === '__other') return t('provider.other')
       const alias = aliases && typeof aliases[id] === 'string' ? aliases[id].trim() : ''
       if (alias) return alias
       const key = `provider.${id}`
@@ -2691,25 +2697,67 @@ window.__ModuleLoader__.load({
         .filter((row) => row.tokens > 0)
         .sort((left, right) => right.tokens - left.tokens || (left.id < right.id ? -1 : 1))
       const total = entries.reduce((sum, row) => sum + row.tokens, 0)
-      const rows = entries.slice(0, 6)
-      const rest = entries.slice(6)
-      if (rest.length > 0) {
-        const known = rest.filter((row) => row.usage)
-        rows.push({
-          id: '__other',
-          tokens: rest.reduce((sum, row) => sum + row.tokens, 0),
-          usage: known.length > 0 ? known.reduce((sum, row) => addUsage(sum, row.usage), emptyUsage()) : null,
-        })
-      }
+      // 每家都单独一行，不合并成「其他」（主人：是哪家就显示哪家）
       return {
         total,
-        rows: rows.map((row) => ({
+        rows: entries.map((row) => ({
           id: row.id,
           tokens: row.tokens,
           share: total > 0 ? (row.tokens / total) * 100 : 0,
           hitRate: row.usage ? cacheHitRate(row.usage) : null,
         })),
       }
+    }
+
+    /** 供应商卡标题右边：「已删除 N 家」，点开列出每一家，点一下恢复。点外面或按 Esc 关闭。 */
+    function ExcludedMenu(props) {
+      const [open, setOpen] = useState(false)
+      const wrapRef = useRef(null)
+      useDismiss(open, wrapRef, (reason) => {
+        setOpen(false)
+        if (reason === 'escape') focusWithin(wrapRef, '[data-dps-action="excluded"]')
+      })
+      const aliases = props.aliases || {}
+      return h(
+        'div',
+        { ref: wrapRef, className: 'dps-menu', 'data-dps-control': 'excluded' },
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dps-ghost',
+            'data-dps-action': 'excluded',
+            'aria-haspopup': 'menu',
+            'aria-expanded': open ? 'true' : 'false',
+            onClick: () => setOpen((value) => !value),
+          },
+          t('provider.removed', { n: props.ids.length }),
+        ),
+        open
+          ? h(
+              'div',
+              { className: 'dps-menu-pop', role: 'menu' },
+              props.ids.map((id) =>
+                h(
+                  'button',
+                  {
+                    key: id,
+                    type: 'button',
+                    role: 'menuitem',
+                    className: 'dps-menu-row',
+                    'data-dps-restore': id,
+                    onClick: () => {
+                      setOpen(false)
+                      props.onRestore(id)
+                    },
+                  },
+                  h('span', { className: 'dps-menu-name' }, providerLabel(id, aliases)),
+                  h('span', { className: 'dps-menu-act' }, t('provider.restore')),
+                ),
+              ),
+            )
+          : null,
+      )
     }
 
     /** 月费的上限，和宿主一致（index.js 的 PRICE_LIMIT）：超过的宿主会拒绝，编辑器里就不让点「确定」。 */
@@ -2871,7 +2919,17 @@ window.__ModuleLoader__.load({
       // 跟随页面顶部的时间范围（只由顶部按钮控制）
       const summary = props.summary || emptySummary()
       const costs = props.costs || null
-      const data = useMemo(() => deriveProviders(summary.byProvider, summary.providerUsage), [summary])
+      const excluded = props.excluded || NO_IDS
+      const data = useMemo(() => {
+        const all = deriveProviders(summary.byProvider, summary.providerUsage)
+        if (excluded.length === 0) return all
+        // 刚删、宿主还没按新名单重扫完：先在这里藏起来，占比按剩下的算
+        const kept = deriveProviders(
+          Object.fromEntries(Object.entries(summary.byProvider || {}).filter(([id]) => !excluded.includes(id))),
+          summary.providerUsage,
+        )
+        return kept.rows.length === all.rows.length ? all : kept
+      }, [summary, excluded])
       const aliases = props.aliases || {}
       const errors = props.billingErrors || {}
       // 正在设置计费方式的那一行；那一行不在表里了（换了范围后没有用量）就收起，免得切回来时自己又打开
@@ -2881,13 +2939,9 @@ window.__ModuleLoader__.load({
         if (billingOpen !== null && !shownIds.has(billingOpen)) setBillingOpen(null)
       })
       const tableRef = useRef(null)
-      // 「其他」那一行：没单独列出来的供应商的花费合计（未设置的不计入）
-      const otherSpend = costs
-        ? Object.entries(costs.byProvider).reduce((sum, [id, row]) => (shownIds.has(id) || row.spend === null ? sum : sum + row.spend), 0)
-        : 0
-      /** 一家的计费信息：费用、计费方式、标签（打折倍数 / 包月 / 未保存）和悬停文字。「其他」那一行和没有费用数据时是 null。 */
+      /** 一家的计费信息：费用、计费方式、标签（打折倍数 / 包月 / 未保存）和悬停文字。没有费用数据时是 null。 */
       const costInfo = (row) => {
-        if (!costs || row.id === '__other') return null
+        if (!costs) return null
         const cost = costs.byProvider[row.id] || null
         const bill = cost ? cost.billing : billingOf(row.id, props.billingSettings)
         // 包月：只写这个订阅月里用量换算成的钱和月费。不写「按官方价算」——包月的费用本来就等于它（费用格里那个数），
@@ -2919,7 +2973,6 @@ window.__ModuleLoader__.load({
       }
       const costCell = (row) => {
         if (!costs) return h('span', { className: 'dps-prov-cost', role: 'cell' }, t('unit.none'))
-        if (row.id === '__other') return h('span', { className: 'dps-prov-cost', role: 'cell', 'data-value': otherSpend }, formatMoney(otherSpend))
         const { cost, bill, failed, title } = costInfo(row)
         return h(
           'span',
@@ -2982,32 +3035,48 @@ window.__ModuleLoader__.load({
           )
         }
         const label = providerLabel(row.id, aliases)
-        const renamed = row.id !== '__other' && label !== providerLabel(row.id)
+        const renamed = label !== providerLabel(row.id)
         return h(
           'span',
           { className: 'dps-prov-namecell', role: 'cell' },
           // 改过名的悬停时带上原始 id，对账时还能认出是哪个渠道
           h('span', { className: 'dps-prov-name', title: renamed ? `${label} · ${row.id}` : label }, label),
-          row.id === '__other'
-            ? null
-            : h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'dps-prov-edit',
-                  'data-dps-action': 'rename',
-                  'aria-label': `${t('provider.rename')} ${label}`,
-                  title: t('provider.rename'),
-                  onClick: () => setEditing({ id: row.id, draft: typeof aliases[row.id] === 'string' ? aliases[row.id] : '' }),
-                },
-                h(Icon, { name: 'edit' }),
-              ),
+          // 悬停时出现：改名、删除（整页都不再算这一家，标题右边能恢复）
+          h(
+            'span',
+            { className: 'dps-prov-acts' },
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'dps-prov-edit',
+                'data-dps-action': 'rename',
+                'aria-label': `${t('provider.rename')} ${label}`,
+                title: t('provider.rename'),
+                onClick: () => setEditing({ id: row.id, draft: typeof aliases[row.id] === 'string' ? aliases[row.id] : '' }),
+              },
+              h(Icon, { name: 'edit' }),
+            ),
+            props.onExclude
+              ? h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dps-prov-edit',
+                    'data-dps-action': 'exclude',
+                    'aria-label': `${t('provider.remove')} ${label}`,
+                    title: t('provider.remove'),
+                    onClick: () => props.onExclude(row.id, true),
+                  },
+                  h(Icon, { name: 'trash' }),
+                )
+              : null,
+          ),
         )
       }
       // 费用列里每一格的文字变了才重新量列宽
       const costKey = [
         currentLocaleId(),
-        formatMoney(otherSpend),
         ...data.rows.map((row) => {
           const cost = costs && costs.byProvider[row.id]
           return [row.id, cost ? cost.mode : '', cost && cost.spend !== null ? formatMoney(cost.spend) : '', cost ? billingTag(cost.billing) : '', errors[row.id] || ''].join(',')
@@ -3026,6 +3095,9 @@ window.__ModuleLoader__.load({
             h('h2', null, t('section.provider')),
             h('span', { className: 'dps-panel-meta', 'data-dps-field': 'provider-total', 'data-value': data.total }, t('chart.total', { value: formatTokens(data.total) })),
           ),
+          excluded.length > 0 && props.onExclude
+            ? h('div', { className: 'dps-panel-tools' }, h(ExcludedMenu, { ids: excluded, aliases, onRestore: (id) => props.onExclude(id, false) }))
+            : null,
         ),
         data.rows.length === 0
           ? h('div', { className: 'dps-prov-empty' }, t('chart.empty'))
@@ -3065,7 +3137,7 @@ window.__ModuleLoader__.load({
                     { className: 'dps-prov-track', 'aria-hidden': true },
                     h('span', { className: 'dps-prov-fill', style: { width: `${row.share}%`, minWidth: row.tokens > 0 ? '3px' : '0px' } }),
                   ),
-                  billingOpen === row.id && row.id !== '__other'
+                  billingOpen === row.id
                     ? h(BillingEditor, {
                         key: `billing-${row.id}`,
                         provider: row.id,
@@ -3357,6 +3429,9 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
 .dps-menu-pop{position:absolute;right:0;top:calc(100% + 6px);z-index:80;min-width:156px;padding:5px;border-radius:10px;border:1px solid var(--dps-line);background:var(--dsw-alias-bg-layer-2);box-shadow:0 10px 30px var(--dps-shadow);display:flex;flex-direction:column;gap:2px}
 .dps-menu-pop button{appearance:none;border:0;background:transparent;color:var(--dps-ink);font-size:12.5px;line-height:1.4;text-align:left;padding:8px 10px;border-radius:7px;cursor:pointer;white-space:nowrap}
 .dps-menu-pop button:hover{background:var(--dps-hover)}
+.dps-menu-pop .dps-menu-row{display:flex;align-items:center;justify-content:space-between;gap:18px}
+.dps-menu-name{min-width:0;max-width:220px;overflow:hidden;text-overflow:ellipsis}
+.dps-menu-act{flex:0 0 auto;font-size:12px;color:var(--dps-accent)}
 .dps-grid{display:grid;grid-template-columns:minmax(0,1.62fr) minmax(0,1fr);gap:16px;align-items:stretch}
 @container dps (max-width:860px){
 .dps-top{flex-wrap:wrap}
@@ -3518,9 +3593,10 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
 .dps-bill .dps-btn{height:28px;padding:0 12px}
 .dps-prov-namecell{position:relative;display:flex;align-items:center;min-width:0}
 .dps-prov-name{min-width:0;color:var(--dps-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dps-prov-edit{appearance:none;position:absolute;right:0;top:50%;transform:translateY(-50%);box-shadow:-8px 0 8px var(--dps-card);display:grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:var(--dps-card);color:var(--dps-muted);cursor:pointer;opacity:0;transition:opacity .15s ease,background-color .15s ease}
+.dps-prov-acts{position:absolute;right:0;top:50%;transform:translateY(-50%);display:flex;gap:2px;box-shadow:-8px 0 8px var(--dps-card);border-radius:6px;background:var(--dps-card);opacity:0;transition:opacity .15s ease}
+.dps-prov-row:hover .dps-prov-acts,.dps-prov-acts:focus-within{opacity:1}
+.dps-prov-edit{appearance:none;display:grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:var(--dps-card);color:var(--dps-muted);cursor:pointer;transition:background-color .15s ease}
 .dps-prov-edit svg{width:13px;height:13px}
-.dps-prov-row:hover .dps-prov-edit,.dps-prov-edit:focus-visible{opacity:1}
 .dps-prov-edit:hover{background:color-mix(in srgb,var(--dps-ink) 7%,var(--dps-card));color:var(--dps-ink)}
 .dps-prov-input{width:100%;min-width:0;height:24px;margin:-3px 0;padding:0 7px;border:1px solid var(--dps-accent);border-radius:6px;background:var(--dps-card);color:var(--dps-ink);font:inherit;font-size:13px;outline:none}
 .dps-root .dps-prov-input:focus-visible{outline:none}
@@ -4341,6 +4417,7 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
       const projectPaths = (snapshot && snapshot.projects) || null
       const snapshotBilling = snapshot && snapshot.billing && snapshot.billing.providers
       const snapshotAliases = snapshot && snapshot.aliases && snapshot.aliases.providers
+      const snapshotExcluded = snapshot && snapshot.aliases && Array.isArray(snapshot.aliases.excluded) ? snapshot.aliases.excluded : null
       const snapshotRate = snapshot && snapshot.billing && typeof snapshot.billing.usdCny === 'number' ? snapshot.billing.usdCny : null
       // 页面先显示刚改的值（保存中 / 刚存上还没拉到新快照）；快照里已经是这个值了就丢掉这条改动，之后以快照为准，
       // 否则别的窗口、手改的 billing.json 在这一页上永远看不到
@@ -4352,6 +4429,18 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
       useEffect(() => {
         setAliasEdits((current) => settleEdits(current, (id) => ownValue(snapshotAliases, id) || ''))
       }, [snapshotAliases])
+      const [excludedEdits, setExcludedEdits] = useState({})
+      useEffect(() => {
+        setExcludedEdits((current) => settleEdits(current, (id) => Boolean(snapshotExcluded && snapshotExcluded.includes(id))))
+      }, [snapshotExcluded])
+      const excluded = useMemo(() => {
+        const list = new Set(snapshotExcluded || [])
+        for (const [id, value] of Object.entries(excludedEdits)) {
+          if (value) list.add(id)
+          else list.delete(id)
+        }
+        return [...list].sort()
+      }, [snapshotExcluded, excludedEdits])
       const billingSettings = useMemo(() => {
         const merged = { ...(snapshotBilling || {}) }
         for (const [id, entry] of Object.entries(billingEdits)) {
@@ -4418,6 +4507,20 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
           } catch (error) {
             console.warn('[dsh-profile-stats] 保存供应商名称失败：', error && error.message ? error.message : error)
             if (mounted.current) setAliasEdits((current) => dropKey(current, id))
+          }
+        },
+        [reload, mounted],
+      )
+      // 删除 / 恢复一家：宿主改名单后整份重扫（几秒），页面先按刚改的显示，再拉快照等它扫完；没存上就撤回
+      const saveExcluded = useCallback(
+        async (id, value) => {
+          setExcludedEdits((current) => ({ ...current, [id]: value }))
+          try {
+            await postJson(ALIAS_URL, { provider: id, excluded: value })
+            reload()
+          } catch (error) {
+            console.warn('[dsh-profile-stats] 保存供应商删除状态失败：', error && error.message ? error.message : error)
+            if (mounted.current) setExcludedEdits((current) => dropKey(current, id))
           }
         },
         [reload, mounted],
@@ -4561,6 +4664,8 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
               scope: range,
               aliases,
               onRename: saveAlias,
+              excluded,
+              onExclude: saveExcluded,
               costs,
               billingSettings,
               billingErrors,

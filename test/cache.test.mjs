@@ -17,7 +17,7 @@ const foldOf = (id) =>
 test('readCache：缓存目录不存在时返回空缓存', (t) => {
   withTemporaryHome(t)
   const cache = readCache()
-  assert.deepEqual(cache, { version: CACHE_VERSION, generatedAt: 0, sessions: {}, complete: false })
+  assert.deepEqual(cache, { version: CACHE_VERSION, generatedAt: 0, excluded: '', sessions: {}, complete: false })
 })
 
 test('writeCache → readCache 往返', (t) => {

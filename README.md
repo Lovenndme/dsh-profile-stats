@@ -113,9 +113,13 @@ the lighter segment of each bar. The top eight projects get a row and the rest a
 ### Provider split
 
 Tokens, share, that provider's own cache hit rate and spend per billing route (the provider id in the logs), for the header range.
+Every provider gets its own row.
 
 - **Rename** with the pencil beside a name: the display name stays on your machine, and hovering shows the
   original id;
+- **Remove** with the bin beside it: a route you no longer use is left out of the whole page, as if it had never been
+  used (totals, spend, activity, models, token stats, projects). The page rescans once, in a few seconds. "N removed"
+  in the card's header lists them and brings one back;
 - **Billing method**: click the spend cell — see the next section.
 
 ## How spend is worked out
@@ -214,7 +218,7 @@ The plugin writes only these files, all outside the package:
 |---|---|
 | `cache.json` | Scan cache, so later opens don't rescan every log |
 | `billing.json` | The billing method you set for each provider |
-| `aliases.json` | The names you gave providers |
+| `aliases.json` | The names you gave providers, and the ones you removed |
 | `profile.json` | Optional: your own display name and avatar |
 | `update.json` | The last in-panel update result |
 | `timing.log` | Scan timings; rotated to `timing.log.1` past 256 KB |

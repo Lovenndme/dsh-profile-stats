@@ -124,7 +124,7 @@ discussion are. You can open issues and pull requests in English or Chinese; com
 
 **网络面是承诺，不是实现细节。** README 的 Privacy 段向用户保证了「没有遥测、没有凭据、什么都不上传」。因此：
 
-- 浏览器半区只 `fetch` 本插件的五个同源路由：`GET /api/dsh-profile-stats/snapshot`，`POST` 的 `refresh`、`update`、`alias`、`billing`。
+- 浏览器半区只 `fetch` 本插件的五个同源路由：`GET /api/dsh-profile-stats/snapshot`，`POST` 的 `refresh`、`update`、`alias`（改名，或把一家放进 / 移出「删除」名单）、`billing`。
 - 宿主半区唯一的外发请求是读 `registry.npmjs.org/dsh-profile-stats/latest`（最多每 6 小时一次，不带任何标识或用量数据）。
 - **任何新增的外发请求或新路由**都必须先在 issue 里获得维护者同意，默认关闭、由用户逐项开启，并同步更新
   [`docs/INTERNALS.md`](docs/INTERNALS.md#data-flow-and-network-surface) 的路由清单、`README.md` 的 Privacy 段，以及 `index.js` 顶部的注释。

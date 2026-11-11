@@ -335,7 +335,7 @@ test('deriveKpis：不跟范围走的几个指标（累计总量、最长任务�
 const providerHelpers = () =>
   loadClientHelpers({ functions: ['toNumber', 'deriveProviders', 'cacheHitRate', 'addUsage', 'emptyUsage'] })
 
-test('deriveProviders：按用量降序，前 6 个各一行，其余并成「其他」', () => {
+test('deriveProviders：按用量降序，每家各一行，不合并成「其他」', () => {
   const { deriveProviders } = providerHelpers()
 
   const small = deriveProviders({ alpha: 600, bravo: 400 })
@@ -344,16 +344,15 @@ test('deriveProviders：按用量降序，前 6 个各一行，其余并成「�
   assert.equal(small.rows[0].share, 60)
   assert.equal(small.rows[1].share, 40)
 
-  // 8 个供应商 → 前 6 行 + __other（后 2 个合并）
+  // 8 个供应商 → 8 行，每家按名字列出（主人：是哪家就显示哪家）
   const many = {}
   for (let index = 0; index < 8; index += 1) many[`p${index}`] = (8 - index) * 100
-  const grouped = deriveProviders(many)
-  assert.equal(grouped.rows.length, 7)
-  assert.deepEqual(grouped.rows.slice(0, 6).map((row) => row.id), ['p0', 'p1', 'p2', 'p3', 'p4', 'p5'])
-  assert.equal(grouped.rows.at(-1).id, '__other')
-  assert.equal(grouped.rows.at(-1).tokens, 200 + 100)
-  assert.equal(Math.round(grouped.rows.at(-1).share * 100) / 100, 8.33, '300 / 3600')
-  assert.equal(grouped.rows.reduce((sum, row) => sum + row.share, 0).toFixed(6), '100.000000')
+  const listed = deriveProviders(many)
+  assert.equal(listed.rows.length, 8)
+  assert.deepEqual(listed.rows.map((row) => row.id), ['p0', 'p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'])
+  assert.equal(listed.rows.some((row) => row.id === '__other'), false)
+  assert.equal(Math.round(listed.rows.at(-1).share * 100) / 100, 2.78, '100 / 3600')
+  assert.equal(listed.rows.reduce((sum, row) => sum + row.share, 0).toFixed(6), '100.000000')
 
   // 0 / 负数 / 非数字都被过滤；同量按 id 升序保证稳定
   const messy = deriveProviders({ b: 100, a: 100, zero: 0, neg: -5, junk: 'x' })
@@ -362,7 +361,7 @@ test('deriveProviders：按用量降序，前 6 个各一行，其余并成「�
   assert.deepEqual(deriveProviders(undefined), { total: 0, rows: [] })
 })
 
-test('deriveProviders：每家按自己的四项算命中率，「其他」用合并后的四项，缺用量时为 null', () => {
+test('deriveProviders：每家按自己的四项算命中率（排在后面的也是），缺用量时为 null', () => {
   const { deriveProviders } = providerHelpers()
   const usage = (input, cacheRead, cacheWrite = 0) => ({ inputTokens: input, cacheReadTokens: cacheRead, cacheWriteTokens: cacheWrite, outputTokens: 1 })
   const byProvider = { a: 900, b: 800, c: 700, d: 600, e: 500, f: 400, g: 300, h: 200 }
@@ -375,7 +374,9 @@ test('deriveProviders：每家按自己的四项算命中率，「其他」用�
   assert.equal(hit.d, null, '有 token 但没有输入（只有输出）')
   assert.equal(hit.e, 60, '写入进分母不进分子：60 / (20 + 60 + 20)')
   assert.equal(hit.f, null, '这一家缺四项用量')
-  assert.equal(hit.__other, 50, 'g + h：(70 + 30) / (30 + 70 + 70 + 30)')
+  assert.equal(hit.g, 70)
+  assert.equal(hit.h, 30)
+  assert.equal(hit.__other, undefined)
   assert.equal(deriveProviders({ a: 1 }, undefined).rows[0].hitRate, null)
 })
 
@@ -427,18 +428,16 @@ test('summarizeDaily：缓存读写分开汇总、各家四项用量按窗口累
 test('providerLabel：已知供应商走文案字典，未知原样显示', () => {
   const { providerLabel } = loadClientHelpers({
     extraCode: [
-      'const t = (key) => ({ "provider.alpha": "Alpha", "provider.other": "其他" }[key] || key)',
+      'const t = (key) => ({ "provider.alpha": "Alpha" }[key] || key)',
     ],
     functions: ['providerLabel'],
   })
   assert.equal(providerLabel('alpha'), 'Alpha')
-  assert.equal(providerLabel('__other'), '其他')
   assert.equal(providerLabel('bravo'), 'bravo')
-  // 本机起的名字优先；空白名字等于没起；「其他」不受影响
-  const aliases = { bravo: '实验中转', alpha: '  ', __other: 'x' }
+  // 本机起的名字优先；空白名字等于没起
+  const aliases = { bravo: '实验中转', alpha: '  ' }
   assert.equal(providerLabel('bravo', aliases), '实验中转')
   assert.equal(providerLabel('alpha', aliases), 'Alpha')
-  assert.equal(providerLabel('__other', aliases), '其他')
 })
 
 test('durationParts：毫秒 → 时/分，0 与负数返回 null', () => {

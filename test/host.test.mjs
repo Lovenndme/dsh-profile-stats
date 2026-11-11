@@ -617,9 +617,9 @@ test('改名接口：名字存在本机 aliases.json，快照带出来；名字�
 
   const saved = await host.request(ALIAS, 'POST', { provider: 'relay-x', name: '  实验中转  ' })
   assert.equal(saved.status, 200)
-  assert.deepEqual(saved.json, { ok: true, aliases: { providers: { 'relay-x': '实验中转' } } })
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { providers: { 'relay-x': '实验中转' } })
-  assert.deepEqual((await host.request(SNAPSHOT, 'GET')).json.aliases, { providers: { 'relay-x': '实验中转' } })
+  assert.deepEqual(saved.json, { ok: true, aliases: { providers: { 'relay-x': '实验中转' }, excluded: [] } })
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { providers: { 'relay-x': '实验中转' }, excluded: [] })
+  assert.deepEqual((await host.request(SNAPSHOT, 'GET')).json.aliases, { providers: { 'relay-x': '实验中转' }, excluded: [] })
 
   // 超过 40 个字截断
   const long = await host.request(ALIAS, 'POST', { provider: 'beta', name: 'x'.repeat(60) })
@@ -637,7 +637,7 @@ test('改名接口：名字存在本机 aliases.json，快照带出来；名字�
   // 字段拼错（没带 name）不能当成「删掉」；__proto__ 不能当 id
   assert.equal((await host.request(ALIAS, 'POST', { provider: 'beta', nmae: 'x' })).json.error, 'invalid-name')
   assert.equal((await host.request(ALIAS, 'POST', { provider: '__proto__', name: 'x' })).json.error, 'invalid-provider')
-  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { providers: { beta: 'x'.repeat(40) } })
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { providers: { beta: 'x'.repeat(40) }, excluded: [] })
   // 按字符截断，不把 emoji 切成半个
   const emoji = await host.request(ALIAS, 'POST', { provider: 'gamma', name: `${'a'.repeat(39)}\u{1F600}\u{1F600}` })
   assert.equal(emoji.json.aliases.providers.gamma, `${'a'.repeat(39)}\u{1F600}`)
@@ -701,9 +701,9 @@ test('aliases.json 被手改坏也不影响快照：非对象、非字符串、�
   const host = createFakeHost({ sessions: makeSessions() })
   apply(host.ctx)
   t.after(() => host.dispose())
-  assert.deepEqual((await host.request(SNAPSHOT, 'GET')).json.aliases, { providers: { a: 'A' } })
+  assert.deepEqual((await host.request(SNAPSHOT, 'GET')).json.aliases, { providers: { a: 'A' }, excluded: [] })
   fs.writeFileSync(path.join(home, 'dsh-profile-stats', 'aliases.json'), '{broken')
-  assert.deepEqual((await host.request(SNAPSHOT, 'GET')).json.aliases, { providers: {} })
+  assert.deepEqual((await host.request(SNAPSHOT, 'GET')).json.aliases, { providers: {}, excluded: [] })
 })
 
 test('计费接口：每家的计费方式存在本机 billing.json，快照带出来；null 删掉；不认识的写法被拒', async (t) => {
@@ -814,4 +814,75 @@ test('价格表：快照只带用到的模型；名字带 -thinking / -high 之�
   for (const [id, row] of Object.entries(real.models)) {
     assert.ok(row[0] > 0 || row[1] > 0 || (row[2] === 0 && row[3] === 0), `${id}：不能有输入输出都是 0 的占位行`)
   }
+})
+
+
+test('不统计名单：{ provider, excluded } 写进 aliases.json，整份重扫后快照、按供应商、按天都不再算它；移出名单算回来', async (t) => {
+  const home = withTemporaryHome(t)
+  const host = createFakeHost({ sessions: makeSessions() })
+  apply(host.ctx)
+  t.after(() => host.dispose())
+  const file = path.join(home, 'dsh-profile-stats', 'aliases.json')
+  const snapshot = async () => (await host.request(SNAPSHOT, 'GET')).json
+  await waitFor(async () => (await snapshot()).totals.tokens === 350, { label: '首次扫描完成' })
+
+  const saved = await host.request(ALIAS, 'POST', { provider: 'bravo', excluded: true })
+  assert.equal(saved.status, 200)
+  assert.deepEqual(saved.json, { ok: true, aliases: { providers: {}, excluded: ['bravo'] } })
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { providers: {}, excluded: ['bravo'] })
+  const after = await waitFor(async () => {
+    const body = await snapshot()
+    return !body.scanning && body.totals.tokens === 150 ? body : null
+  }, { label: '按新名单重扫完成' })
+  assert.deepEqual(after.aliases.excluded, ['bravo'])
+  assert.equal(after.totals.calls, 1)
+  assert.equal(after.daily.every((day) => !day.byProvider || !Object.prototype.hasOwnProperty.call(day.byProvider, 'bravo')), true)
+  assert.equal(readCache().excluded, 'bravo', '缓存记下按哪份名单折的')
+
+  // 重复放进名单：不改文件、不重扫
+  const again = await host.request(ALIAS, 'POST', { provider: 'bravo', excluded: true })
+  assert.deepEqual(again.json, { ok: true, aliases: { providers: {}, excluded: ['bravo'] } })
+
+  // 坏请求不写文件
+  assert.equal((await host.request(ALIAS, 'POST', { provider: 'bravo', excluded: 'yes' })).status, 400)
+  assert.equal((await host.request(ALIAS, 'POST', { provider: '__proto__', excluded: true })).status, 400)
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).excluded, ['bravo'])
+
+  // 改名不会把名单冲掉
+  await host.request(ALIAS, 'POST', { provider: 'alpha', name: '甲' })
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { providers: { alpha: '甲' }, excluded: ['bravo'] })
+
+  await host.request(ALIAS, 'POST', { provider: 'bravo', excluded: false })
+  const back = await waitFor(async () => {
+    const body = await snapshot()
+    return !body.scanning && body.totals.tokens === 350 ? body : null
+  }, { label: '移出名单后重扫完成' })
+  assert.deepEqual(back.aliases.excluded, [])
+})
+
+test('不统计名单：手改 aliases.json 后下一轮扫描发现和缓存不一致，整份重扫；扫描途中改名单，这一轮结束后再扫一轮', async (t) => {
+  const { host, controller } = await boot(t)
+  await controller.scan('first')
+  assert.equal(controller.snapshotBody().totals.tokens, 350)
+
+  const file = path.join(process.env.DSH_HOME, 'dsh-profile-stats', 'aliases.json')
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify({ providers: {}, excluded: ['alpha', 'alpha', '', 42] }))
+  host.reads.length = 0
+  await controller.scan('hand-edited')
+  assert.deepEqual(host.reads.sort(), ['s1', 's2'], '名单变了，已结束的会话也要重折')
+  assert.equal(controller.snapshotBody().totals.tokens, 200)
+  assert.equal(controller.state.cache.excluded, 'alpha')
+
+  // 扫描途中把 alpha 移出名单：这一轮按旧名单折完，紧接着按新名单再扫一轮
+  host.holdReads()
+  fs.writeFileSync(file, JSON.stringify({ providers: {}, excluded: [] }))
+  controller.state.cache.excluded = 'stale'
+  const running = controller.scan('during')
+  await waitFor(() => controller.state.scanning, { label: '进入扫描' })
+  controller.rescanExcluded()
+  host.releaseReads()
+  await running
+  await waitFor(() => !controller.state.scanning && controller.snapshotBody().totals.tokens === 350, { label: '补扫完成' })
+  assert.equal(controller.state.cache.excluded, '')
 })
