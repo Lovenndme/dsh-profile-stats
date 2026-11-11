@@ -142,8 +142,10 @@ is dropped and every session is folded again, which takes a few seconds. Removed
 the settings page and can be brought back (`"excluded": false`).
 
 The settings page replaces the whole dashboard while it is open and goes back with the arrow at its top left. It lists
-every provider in the all-time totals, sorted by usage, with its original id, display name, all-time usage, billing
-method and a remove button. The billing method reads as a tag plus a note — `×0.13 Discount`, `plan` with "Since 10/20
+every provider in the all-time totals, sorted by usage: on the left the display name, edited in place (it reads as plain
+text until hovered or focused; typing the default name back or clearing it removes the custom name), over the original
+id and all-time usage; on the right the billing method and a remove button. Below 560px the billing method moves under
+the name. The billing method reads as a grey tag plus a note — `×0.13 Discount`, `plan` with "Since 10/20
 ¥48.24 / fee ¥199", `Not mine`, `Not set`, or a red `not saved` with the reason on hover — and opens the billing editor
 under the row. The provider card shows only the amounts.
 

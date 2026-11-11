@@ -1339,6 +1339,7 @@ window.__ModuleLoader__.load({
       trash: 'M4 7h16M9 7V4.5h6V7M6.5 7l1 12.5h9l1-12.5M10 11v5.5m4-5.5v5.5',
       sliders: 'M4 7h8M16 7h4M14 5v4M4 17h4M12 17h8M10 15v4',
       back: 'M19 12H5M11 6l-6 6 6 6',
+      chevron: 'M6 9l6 6 6-6',
       wallet: 'M4 7.5A1.5 1.5 0 015.5 6H18a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2V7.5zM4 8l12-3.5V6M16 13h2',
       target: 'M12 21a9 9 0 100-18 9 9 0 000 18zM12 16.5a4.5 4.5 0 100-9 4.5 4.5 0 000 9zM12 12.6a.6.6 0 100-1.2.6.6 0 000 1.2z',
       database: 'M4 6a8 3 0 1 0 16 0a8 3 0 1 0 -16 0M4 6v12a8 3 0 0 0 16 0V6M4 12a8 3 0 0 0 16 0',
@@ -2995,9 +2996,10 @@ window.__ModuleLoader__.load({
 
     /**
      * 供应商设置页（供应商卡右上角进来）：改显示名、选计费方式、删除 / 恢复，都在这里；卡片本身只读。
-     * 列出所有用过的供应商（按累计用量排序），每行：原始 id、显示名、累计用量、计费方式、删除。
-     * 计费方式写成「标签 + 说明」（×0.13 打折、包月 + 这一期已用 / 月费、不计入、未设置），点一下展开原来的计费编辑器。
-     * 删掉的放在最下面「已删除」里，点「恢复」回来。显示名回车 / 失焦保存，Esc 放弃。
+     * 页头是返回 + 标题；下面一张列表，每家一行：左边是显示名（直接点着改，平时看起来就是文字）和
+     * 「原始 id · 累计用量」，右边是同宽的计费方式（标签 + 说明，点一下在下面展开计费编辑器）和删除。
+     * 按累计用量排序；删掉的放在最下面「已删除」里，点「恢复」回来。显示名回车 / 失焦保存，Esc 放弃，
+     * 清空或改回默认名字等于不起名。
      */
     function ProviderSettings(props) {
       const aliases = props.aliases || {}
@@ -3015,14 +3017,16 @@ window.__ModuleLoader__.load({
         editingRef.current = null
         setEditing(null)
         const before = typeof aliases[current.id] === 'string' ? aliases[current.id].trim() : ''
-        const after = current.draft.trim()
+        const typed = current.draft.trim()
+        // 改回默认名字（内置文案或原始 id）等于不起名
+        const after = typed === providerLabel(current.id) ? '' : typed
         if (after !== before && props.onRename) props.onRename(current.id, after)
       }
       const billOf = (id) => {
         const cost = props.costs ? props.costs.byProvider[id] || null : null
         return cost ? cost.billing : billingOf(id, props.billingSettings)
       }
-      const billingCell = (id) => {
+      const billingControl = (id) => {
         const bill = billOf(id)
         const failed = errors[id]
         const month = bill.mode === 'plan' && props.planMonths ? ownValue(props.planMonths, id) : null
@@ -3036,137 +3040,153 @@ window.__ModuleLoader__.load({
                 : `${t('billing.monthly')} ${formatMoney(toNumber(bill.monthly))}`
               : t(`billing.${bill.mode}`)
         return h(
-          'span',
-          { className: 'dps-set-billcell', role: 'cell' },
-          h(
-            'button',
-            {
-              type: 'button',
-              className: 'dps-set-bill',
-              'data-dps-action': 'billing',
-              'data-mode': bill.mode,
-              'data-error': failed ? 'true' : undefined,
-              'aria-expanded': billingOpen === id ? 'true' : 'false',
-              title: failed ? t('billing.saveFailed', { reason: failed }) : undefined,
-              onClick: () => setBillingOpen(billingOpen === id ? null : id),
-            },
-            tag ? h('span', { className: 'dps-cost-tag', 'data-dps-field': 'billing-tag', 'data-error': failed ? 'true' : undefined }, tag) : null,
-            h('span', { className: 'dps-set-billtext', 'data-dps-field': 'billing-text' }, text),
-          ),
+          'button',
+          {
+            type: 'button',
+            className: 'dps-set-bill',
+            'data-dps-action': 'billing',
+            'data-mode': bill.mode,
+            'data-error': failed ? 'true' : undefined,
+            'aria-expanded': billingOpen === id ? 'true' : 'false',
+            title: failed ? t('billing.saveFailed', { reason: failed }) : undefined,
+            onClick: () => setBillingOpen(billingOpen === id ? null : id),
+          },
+          tag ? h('span', { className: 'dps-cost-tag', 'data-dps-field': 'billing-tag', 'data-error': failed ? 'true' : undefined }, tag) : null,
+          h('span', { className: 'dps-set-billtext', 'data-dps-field': 'billing-text' }, text),
+          h(Icon, { name: 'chevron' }),
         )
       }
-      const nameInput = (id) =>
-        h('input', {
-          className: 'dps-date dps-set-input',
-          'data-dps-field': 'provider-name-input',
-          value: editing && editing.id === id ? editing.draft : typeof aliases[id] === 'string' ? aliases[id] : '',
-          placeholder: providerLabel(id),
-          maxLength: 40,
-          'aria-label': `${t('provider.rename')} ${id}`,
-          onFocus: () => setEditing({ id, draft: typeof aliases[id] === 'string' ? aliases[id] : '' }),
-          onChange: (event) => setEditing({ id, draft: event.target.value }),
-          onKeyDown: (event) => {
-            if (event.key === 'Enter') commit()
-            else if (event.key === 'Escape') {
-              editingRef.current = null
-              setEditing(null)
-            }
-          },
-          onBlur: commit,
-        })
-      return h(
-        'section',
-        { className: 'dps-panel dps-set', 'data-dps-card': 'provider-settings' },
-        h(
-          'header',
-          { className: 'dps-panel-head' },
-          h(
-            'div',
-            { className: 'dps-panel-title' },
-            h(
-              'button',
-              { type: 'button', className: 'dps-ghost dps-ghost-icon', 'data-dps-action': 'settings-back', 'aria-label': t('action.back'), title: t('action.back'), onClick: props.onBack },
-              h(Icon, { name: 'back' }),
-            ),
-            h('h2', null, t('provider.settings')),
-          ),
-        ),
+      const nameField = (id) => {
+        const label = providerLabel(id, aliases)
+        return h(
+          'label',
+          { className: 'dps-set-namewrap' },
+          h('input', {
+            className: 'dps-set-name',
+            'data-dps-field': 'provider-name-input',
+            value: editing && editing.id === id ? editing.draft : label,
+            placeholder: providerLabel(id),
+            maxLength: 40,
+            size: Math.max(6, Math.min(28, Array.from(editing && editing.id === id ? editing.draft || providerLabel(id) : label).length + 1)),
+            'aria-label': `${t('provider.rename')} ${id}`,
+            onFocus: () => setEditing({ id, draft: label }),
+            onChange: (event) => setEditing({ id, draft: event.target.value }),
+            onKeyDown: (event) => {
+              if (event.key === 'Enter') commit()
+              else if (event.key === 'Escape') {
+                editingRef.current = null
+                setEditing(null)
+              }
+            },
+            onBlur: commit,
+          }),
+          h('span', { className: 'dps-set-pen', 'aria-hidden': true }, h(Icon, { name: 'edit' })),
+        )
+      }
+      const list = rows.map((row) =>
         h(
           'div',
-          { className: 'dps-set-table', role: 'table' },
+          { key: row.id, className: 'dps-set-row', role: 'row', 'data-provider': row.id },
           h(
             'div',
-            { className: 'dps-set-row dps-prov-th', role: 'row' },
+            { className: 'dps-set-who', role: 'cell' },
+            nameField(row.id),
+            h(
+              'div',
+              { className: 'dps-set-meta' },
+              h('span', { className: 'dps-set-id', title: row.id }, row.id),
+              h('span', { className: 'dps-set-usage', 'data-value': row.tokens }, formatTokens(row.tokens)),
+            ),
+          ),
+          h('div', { className: 'dps-set-billcell', role: 'cell' }, billingControl(row.id)),
+          h(
+            'div',
+            { className: 'dps-set-act', role: 'cell' },
+            props.onExclude
+              ? h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dps-set-icon',
+                    'data-dps-action': 'exclude',
+                    'aria-label': `${t('provider.remove')} ${providerLabel(row.id, aliases)}`,
+                    title: t('provider.remove'),
+                    onClick: () => {
+                      if (billingOpen === row.id) setBillingOpen(null)
+                      props.onExclude(row.id, true)
+                    },
+                  },
+                  h(Icon, { name: 'trash' }),
+                )
+              : null,
+          ),
+          billingOpen === row.id
+            ? h(BillingEditor, {
+                key: `billing-${row.id}`,
+                provider: row.id,
+                label: providerLabel(row.id, aliases),
+                billing: billOf(row.id),
+                listValue: props.costs && props.costs.byProvider[row.id] ? props.costs.byProvider[row.id].value : 0,
+                planMonth: props.planMonths ? ownValue(props.planMonths, row.id) : null,
+                onClose: () => setBillingOpen(null),
+                onSave: (entry) => {
+                  setBillingOpen(null)
+                  if (props.onBilling) props.onBilling(row.id, entry)
+                },
+              })
+            : null,
+        ),
+      )
+      const removed = excluded.map((id) =>
+        h(
+          'div',
+          { key: `removed-${id}`, className: 'dps-set-row', role: 'row', 'data-provider': id, 'data-excluded': 'true' },
+          h(
+            'div',
+            { className: 'dps-set-who', role: 'cell' },
+            h('span', { className: 'dps-set-label' }, providerLabel(id, aliases)),
+            h('div', { className: 'dps-set-meta' }, h('span', { className: 'dps-set-id', title: id }, id)),
+          ),
+          h(
+            'div',
+            { className: 'dps-set-act', role: 'cell' },
+            h('button', { type: 'button', className: 'dps-btn dps-set-restore', 'data-dps-restore': id, onClick: () => props.onExclude(id, false) }, t('provider.restore')),
+          ),
+        ),
+      )
+      return h(
+        'div',
+        { className: 'dps-set', 'data-dps-card': 'provider-settings' },
+        h(
+          'header',
+          { className: 'dps-set-top' },
+          h(
+            'button',
+            { type: 'button', className: 'dps-iconbtn', 'data-dps-action': 'settings-back', 'aria-label': t('action.back'), title: t('action.back'), onClick: props.onBack },
+            h(Icon, { name: 'back' }),
+          ),
+          h('h1', { className: 'dps-set-title' }, t('provider.settings')),
+        ),
+        h(
+          'section',
+          { className: 'dps-panel dps-set-panel', role: 'table' },
+          h(
+            'div',
+            { className: 'dps-set-row dps-set-th', role: 'row' },
             h('span', { role: 'columnheader' }, t('settings.colId')),
-            h('span', { role: 'columnheader' }, t('settings.colName')),
-            h('span', { role: 'columnheader' }, t('settings.colUsage')),
             h('span', { role: 'columnheader' }, t('settings.colBilling')),
             h('span', { role: 'columnheader', 'aria-hidden': true }),
           ),
-          rows.length === 0 ? h('div', { className: 'dps-prov-empty' }, t('chart.empty')) : null,
-          rows.map((row) =>
-            h(
-              'div',
-              { key: row.id, className: 'dps-set-row', role: 'row', 'data-provider': row.id },
-              h('span', { className: 'dps-set-id', role: 'cell', title: row.id }, row.id),
-              h('span', { className: 'dps-set-namecell', role: 'cell' }, nameInput(row.id)),
-              h('span', { className: 'dps-set-usage', role: 'cell', 'data-value': row.tokens }, formatTokens(row.tokens)),
-              billingCell(row.id),
-              h(
-                'span',
-                { className: 'dps-set-act', role: 'cell' },
-                props.onExclude
-                  ? h(
-                      'button',
-                      {
-                        type: 'button',
-                        className: 'dps-prov-edit',
-                        'data-dps-action': 'exclude',
-                        'aria-label': `${t('provider.remove')} ${providerLabel(row.id, aliases)}`,
-                        title: t('provider.remove'),
-                        onClick: () => {
-                          if (billingOpen === row.id) setBillingOpen(null)
-                          props.onExclude(row.id, true)
-                        },
-                      },
-                      h(Icon, { name: 'trash' }),
-                    )
-                  : null,
-              ),
-              billingOpen === row.id
-                ? h(BillingEditor, {
-                    key: `billing-${row.id}`,
-                    provider: row.id,
-                    label: providerLabel(row.id, aliases),
-                    billing: billOf(row.id),
-                    listValue: props.costs && props.costs.byProvider[row.id] ? props.costs.byProvider[row.id].value : 0,
-                    planMonth: props.planMonths ? ownValue(props.planMonths, row.id) : null,
-                    onClose: () => setBillingOpen(null),
-                    onSave: (entry) => {
-                      setBillingOpen(null)
-                      if (props.onBilling) props.onBilling(row.id, entry)
-                    },
-                  })
-                : null,
-            ),
-          ),
-          excluded.length > 0 ? h('div', { className: 'dps-set-subhead', role: 'row' }, h('span', { role: 'cell' }, t('settings.removed'))) : null,
-          excluded.map((id) =>
-            h(
-              'div',
-              { key: `removed-${id}`, className: 'dps-set-row', role: 'row', 'data-provider': id, 'data-excluded': 'true' },
-              h('span', { className: 'dps-set-id', role: 'cell', title: id }, id),
-              h('span', { className: 'dps-set-namecell', role: 'cell' }, providerLabel(id, aliases)),
-              h('span', { role: 'cell' }),
-              h('span', { role: 'cell' }),
-              h(
-                'span',
-                { className: 'dps-set-act', role: 'cell' },
-                h('button', { type: 'button', className: 'dps-set-restore', 'data-dps-restore': id, onClick: () => props.onExclude(id, false) }, t('provider.restore')),
-              ),
-            ),
-          ),
+          rows.length === 0 ? h('div', { className: 'dps-prov-empty' }, t('chart.empty')) : list,
         ),
+        excluded.length > 0
+          ? h(
+              'section',
+              { className: 'dps-panel dps-set-panel', role: 'table', 'data-dps-field': 'removed' },
+              h('div', { className: 'dps-set-row dps-set-th', role: 'row' }, h('span', { role: 'columnheader' }, t('settings.removed'))),
+              removed,
+            )
+          : null,
       )
     }
 
@@ -3458,7 +3478,6 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
 .dps-grid{grid-template-columns:minmax(0,1fr)}
 }
 @container dps (max-width:720px){
-.dps-set .dps-set-row{column-gap:10px}
 .dps-grid[data-row="lists"]{grid-template-columns:minmax(0,1fr)}
 .dps-num{font-size:24px}
 .dps-kpi[data-hero="true"] .dps-num{font-size:30px}
@@ -3593,32 +3612,55 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
 .dps-bill .dps-seg{align-self:flex-start}
 .dps-bill-fields{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px}
 .dps-bill-input{width:104px}
-.dps-cost-tag{display:inline-block;padding:0 4px;border-radius:4px;background:color-mix(in srgb,var(--dps-accent) 90%,var(--dps-ink));color:var(--dps-card);font-size:10.5px;font-weight:600;line-height:16px;white-space:nowrap}
+.dps-cost-tag{display:inline-block;flex:0 0 auto;padding:0 5px;border-radius:4px;background:color-mix(in srgb,var(--dps-ink) 9%,var(--dps-card));color:var(--dps-ink);font-size:10.5px;font-weight:600;line-height:17px;white-space:nowrap}
 .dps-ghost-icon{padding:0 7px}
-.dps-set{width:100%;max-width:880px;margin:0 auto;align-self:center}
-.dps-set .dps-panel-title{gap:6px}
-.dps-set .dps-panel-title h2{margin-left:2px}
-.dps-set-table{display:flex;flex-direction:column;gap:6px}
-.dps-set-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr) 78px minmax(0,1.6fr) 52px;align-items:center;column-gap:14px;row-gap:8px;min-height:34px;font-size:13px}
-.dps-set .dps-prov-th{min-height:0;margin-bottom:0}
-.dps-set .dps-prov-th span{text-align:left}
-.dps-set .dps-prov-th span:nth-child(3){text-align:right}
-.dps-set-id{min-width:0;color:var(--dps-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dps-set-namecell{display:flex;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dps-set-input{width:100%;min-width:0;height:30px}
-.dps-set-usage{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dps-set{display:flex;flex-direction:column;gap:16px;min-width:0}
+.dps-set-top{display:flex;align-items:center;gap:12px;padding:2px 2px 4px}
+.dps-set-title{margin:0;font-size:20px;font-weight:650;line-height:1.2;letter-spacing:-.01em;color:var(--dps-ink)}
+.dps-set-panel{gap:0;padding:6px 20px}
+.dps-set-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(220px,340px) 32px;align-items:center;column-gap:16px;padding:12px 0;border-top:1px solid var(--dps-line)}
+.dps-set-row:first-child,.dps-set-th + .dps-set-row{border-top:0}
+.dps-set-th{padding:10px 0 8px;font-size:11.5px;color:var(--dps-faint);border-bottom:1px solid var(--dps-line)}
+.dps-set-who{display:flex;flex-direction:column;gap:3px;min-width:0}
+.dps-set-namewrap{position:relative;display:inline-flex;align-items:center;max-width:100%;align-self:flex-start;margin-left:-7px;border-radius:7px;cursor:text}
+.dps-set-name{appearance:none;min-width:0;max-width:100%;padding:3px 26px 3px 6px;border:1px solid transparent;border-radius:7px;background:transparent;color:var(--dps-ink);font:inherit;font-size:14px;font-weight:600;line-height:1.35;transition:background-color .15s ease,border-color .15s ease}
+.dps-set-name::placeholder{color:var(--dps-faint);font-weight:500}
+.dps-set-namewrap:hover .dps-set-name{background:var(--dps-hover)}
+.dps-set-name:focus{outline:none;border-color:color-mix(in srgb,var(--dps-accent) 55%,var(--dps-line));background:var(--dps-card)}
+.dps-set-pen{position:absolute;right:7px;display:grid;place-items:center;color:var(--dps-faint);opacity:0;pointer-events:none;transition:opacity .15s ease}
+.dps-set-pen svg{width:13px;height:13px}
+.dps-set-row:hover .dps-set-pen{opacity:1}
+.dps-set-name:focus + .dps-set-pen{opacity:0}
+.dps-set-label{font-size:14px;font-weight:600;color:var(--dps-muted)}
+.dps-set-meta{display:flex;align-items:baseline;gap:8px;min-width:0;font-size:12px;color:var(--dps-muted)}
+.dps-set-id{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dps-set-usage{flex:0 0 auto;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dps-set-usage::before{content:'·';margin-right:8px;color:var(--dps-faint)}
 .dps-set-billcell{display:flex;min-width:0}
-.dps-set-bill{appearance:none;display:inline-flex;align-items:center;gap:6px;max-width:100%;min-width:0;min-height:30px;padding:5px 10px;text-align:left;border:1px solid var(--dps-line);border-radius:8px;background:transparent;color:var(--dps-ink);font:inherit;font-size:12.5px;cursor:pointer;transition:background-color .15s ease}
+.dps-set-bill{appearance:none;display:flex;align-items:center;gap:8px;width:100%;min-width:0;min-height:34px;padding:6px 10px 6px 12px;text-align:left;border:1px solid var(--dps-line);border-radius:9px;background:var(--dps-card);color:var(--dps-ink);font:inherit;font-size:12.5px;cursor:pointer;transition:background-color .15s ease,border-color .15s ease}
 .dps-set-bill:hover,.dps-set-bill[aria-expanded="true"]{background:var(--dps-hover)}
+.dps-set-bill[aria-expanded="true"]{border-color:color-mix(in srgb,var(--dps-accent) 45%,var(--dps-line))}
+.dps-set-bill > svg{width:14px;height:14px;flex:0 0 auto;margin-left:auto;color:var(--dps-faint);transition:transform .15s ease}
+.dps-set-bill[aria-expanded="true"] > svg{transform:rotate(180deg)}
 .dps-set-bill[data-mode="unset"],.dps-set-bill[data-mode="free"]{color:var(--dps-muted)}
 .dps-set-billtext{min-width:0;font-variant-numeric:tabular-nums}
 .dps-set-act{display:flex;justify-content:flex-end}
-.dps-set-subhead{margin-top:10px;padding-top:12px;border-top:1px solid var(--dps-line);font-size:11.5px;color:var(--dps-faint)}
-.dps-set-row[data-excluded="true"] .dps-set-namecell{color:var(--dps-muted)}
-.dps-set-restore{appearance:none;border:0;background:transparent;padding:4px 0;font:inherit;font-size:12.5px;color:var(--dps-accent);cursor:pointer;white-space:nowrap}
-.dps-set-restore:hover{text-decoration:underline}
-body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(--dps-accent)}
-.dps-cost-tag[data-error="true"]{background:var(--dsw-alias-state-error-primary)}
+.dps-set-icon{appearance:none;display:grid;place-items:center;width:30px;height:30px;padding:0;border:0;border-radius:8px;background:transparent;color:var(--dps-faint);cursor:pointer;transition:color .15s ease,background-color .15s ease}
+.dps-set-icon svg{width:15px;height:15px}
+.dps-set-icon:hover{color:var(--dsw-alias-state-error-primary);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 10%,transparent)}
+.dps-set-row .dps-bill{margin-top:0}
+.dps-set-row[data-excluded="true"] .dps-set-act{grid-column:2 / -1}
+.dps-set-restore{height:30px;padding:0 14px;border-radius:8px;border:1px solid var(--dps-line);background:var(--dps-card)}
+@container dps (max-width:560px){
+.dps-set-row{grid-template-columns:minmax(0,1fr) 32px;row-gap:10px}
+.dps-set-row > .dps-set-billcell{grid-column:1 / -1;grid-row:2}
+.dps-set-row > .dps-set-act{grid-column:2;grid-row:1}
+.dps-set-th > span:nth-child(2){display:none}
+.dps-set-row[data-excluded="true"]{grid-template-columns:minmax(0,1fr) auto}
+.dps-set-row[data-excluded="true"] > .dps-set-act{grid-column:2;grid-row:1}
+}
+body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:color-mix(in srgb,var(--dps-ink) 14%,var(--dps-card))}
+.dps-cost-tag[data-error="true"]{background:var(--dsw-alias-state-error-primary);color:var(--dps-card)}
 .dps-bill-foot{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
 .dps-bill-meta{margin-right:auto;font-size:12px;color:var(--dps-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .dps-bill .dps-btn{height:28px;padding:0 12px}
