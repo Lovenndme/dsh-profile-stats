@@ -143,6 +143,7 @@ $DSH_HOME/dsh-profile-stats/profile.json    # optional display-name override
 $DSH_HOME/dsh-profile-stats/aliases.json    # provider names you set on the provider card
 $DSH_HOME/dsh-profile-stats/billing.json    # billing methods you set on the provider card
 $DSH_HOME/dsh-profile-stats/update.json     # last in-panel update result
+$DSH_HOME/dsh-profile-stats/timing.log      # scan timings; rotated to timing.log.1 past 256 KB
 ```
 
 ## Limitations
