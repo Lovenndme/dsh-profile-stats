@@ -17,7 +17,7 @@ all folded from this machine's own session logs.</p>
 
 <p><b>English</b> · <a href="README.zh.md">简体中文</a></p>
 
-<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/preview-2026-11-10b.png" alt="The profile page in the DSH sidebar" width="900">
+<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/preview-2026-11-10c.png" alt="The profile page in the DSH sidebar" width="900">
 
 </div>
 
@@ -115,12 +115,15 @@ the lighter segment of each bar. The top eight projects get a row and the rest a
 Tokens, share, that provider's own cache hit rate and spend per billing route (the provider id in the logs), for the header range.
 Every provider gets its own row.
 
-- **Rename** with the pencil beside a name: the display name stays on your machine, and hovering shows the
-  original id;
-- **Remove** with the bin beside it: a route you no longer use is left out of the whole page, as if it had never been
-  used (totals, spend, activity, models, token stats, projects). The page rescans once, in a few seconds. "N removed"
-  in the card's header lists them and brings one back;
-- **Billing method**: click the spend cell — see the next section.
+The card itself is read-only. The button at its top right opens **Provider settings**, a page that lists every
+provider you have used (by all-time usage) with:
+
+- **Display name**: a name that stays on your machine (hovering a renamed row on the card shows the original id);
+- **Billing method**: the multiplier, plan and what this plan month has used so far are shown here, not on the card —
+  click it to change it (see the next section);
+- **Remove**: a route you no longer use is left out of the whole page, as if it had never been used (totals, spend,
+  activity, models, token stats, projects). The page rescans once, in a few seconds. Removed routes are listed at the
+  bottom of the settings page and can be brought back.
 
 ## How spend is worked out
 
@@ -145,9 +148,9 @@ turns that value into what you actually paid.
 |---|---|---|
 | **List price** | The list-price value | Direct official API; `deepseek-official` and `deepseek-account` default to this |
 | **Discount** | List-price value × your multiplier | Relays that bill a fraction of the list price |
-| **Monthly** | Usage converted at list price; the hover shows usage since the renewal day against the fee | Coding plans and other subscriptions |
+| **Monthly** | Usage converted at list price; the settings page shows usage since the renewal day against the fee | Coding plans and other subscriptions |
 | **Not mine** | Left out of spend | Paid by your company, free quotas |
-| *Not set* | Left out of spend; the cell reads "Set" | Every other provider until you set one |
+| *Not set* | Left out of spend; the cell reads "—" | Every other provider until you set one |
 
 The USD → CNY rate defaults to 6.7168; write `usdCny` at the top level of `billing.json` to change it.
 

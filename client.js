@@ -76,7 +76,6 @@ window.__ModuleLoader__.load({
       'cost.hintUnpriced': 'Usage without a known list price is not included',
       'cost.hintPeak': 'For models with peak pricing (DeepSeek), the share of the list-price value used in peak hours (Beijing time, weekdays 9–12 and 14–18)',
       'provider.colCost': 'Spend',
-      'provider.setBilling': 'Set',
       'billing.official': 'List price',
       'billing.multiplier': 'Discount',
       'billing.plan': 'Monthly',
@@ -124,7 +123,14 @@ window.__ModuleLoader__.load({
       'provider.deepseek-modlens': 'DeepSeek ModLens',
       'provider.unknown': 'Unknown',
       'provider.remove': 'Remove',
-      'provider.removed': '{n} removed',
+      'provider.settings': 'Provider settings',
+      'action.back': 'Back',
+      'settings.colId': 'Provider',
+      'settings.colName': 'Display name',
+      'settings.colUsage': 'All time',
+      'settings.colBilling': 'Billing',
+      'settings.removed': 'Removed',
+      'billing.unset': 'Not set',
       'provider.restore': 'Restore',
       'provider.colName': 'Provider',
       'provider.colAmount': 'Tokens',
@@ -192,7 +198,6 @@ window.__ModuleLoader__.load({
       'cost.hintUnpriced': '部分用量没有已知的官方价，未计入',
       'cost.hintPeak': '有高峰 / 空闲时段的模型（DeepSeek）按官方价折算，高峰时段（北京时间工作日 9–12、14–18 点）的占比',
       'provider.colCost': '费用',
-      'provider.setBilling': '设置',
       'billing.official': '官方价',
       'billing.multiplier': '打折',
       'billing.plan': '包月',
@@ -240,7 +245,14 @@ window.__ModuleLoader__.load({
       'provider.deepseek-modlens': 'DeepSeek ModLens',
       'provider.unknown': '未知来源',
       'provider.remove': '删除',
-      'provider.removed': '已删除 {n} 家',
+      'provider.settings': '供应商设置',
+      'action.back': '返回',
+      'settings.colId': '供应商',
+      'settings.colName': '显示名',
+      'settings.colUsage': '累计用量',
+      'settings.colBilling': '计费方式',
+      'settings.removed': '已删除',
+      'billing.unset': '未设置',
       'provider.restore': '恢复',
       'provider.colName': '供应商',
       'provider.colAmount': '用量',
@@ -1325,6 +1337,8 @@ window.__ModuleLoader__.load({
       alert: 'M12 8v5m0 3.5v.01M10.3 3.9L2.6 17.5A2 2 0 004.3 20.5h15.4a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z',
       edit: 'M4 20h4L19 9l-4-4L4 16v4zM13 7l4 4',
       trash: 'M4 7h16M9 7V4.5h6V7M6.5 7l1 12.5h9l1-12.5M10 11v5.5m4-5.5v5.5',
+      sliders: 'M4 7h8M16 7h4M14 5v4M4 17h4M12 17h8M10 15v4',
+      back: 'M19 12H5M11 6l-6 6 6 6',
       wallet: 'M4 7.5A1.5 1.5 0 015.5 6H18a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2V7.5zM4 8l12-3.5V6M16 13h2',
       target: 'M12 21a9 9 0 100-18 9 9 0 000 18zM12 16.5a4.5 4.5 0 100-9 4.5 4.5 0 000 9zM12 12.6a.6.6 0 100-1.2.6.6 0 000 1.2z',
       database: 'M4 6a8 3 0 1 0 16 0a8 3 0 1 0 -16 0M4 6v12a8 3 0 0 0 16 0V6M4 12a8 3 0 0 0 16 0',
@@ -2709,57 +2723,6 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /** 供应商卡标题右边：「已删除 N 家」，点开列出每一家，点一下恢复。点外面或按 Esc 关闭。 */
-    function ExcludedMenu(props) {
-      const [open, setOpen] = useState(false)
-      const wrapRef = useRef(null)
-      useDismiss(open, wrapRef, (reason) => {
-        setOpen(false)
-        if (reason === 'escape') focusWithin(wrapRef, '[data-dps-action="excluded"]')
-      })
-      const aliases = props.aliases || {}
-      return h(
-        'div',
-        { ref: wrapRef, className: 'dps-menu', 'data-dps-control': 'excluded' },
-        h(
-          'button',
-          {
-            type: 'button',
-            className: 'dps-ghost',
-            'data-dps-action': 'excluded',
-            'aria-haspopup': 'menu',
-            'aria-expanded': open ? 'true' : 'false',
-            onClick: () => setOpen((value) => !value),
-          },
-          t('provider.removed', { n: props.ids.length }),
-        ),
-        open
-          ? h(
-              'div',
-              { className: 'dps-menu-pop', role: 'menu' },
-              props.ids.map((id) =>
-                h(
-                  'button',
-                  {
-                    key: id,
-                    type: 'button',
-                    role: 'menuitem',
-                    className: 'dps-menu-row',
-                    'data-dps-restore': id,
-                    onClick: () => {
-                      setOpen(false)
-                      props.onRestore(id)
-                    },
-                  },
-                  h('span', { className: 'dps-menu-name' }, providerLabel(id, aliases)),
-                  h('span', { className: 'dps-menu-act' }, t('provider.restore')),
-                ),
-              ),
-            )
-          : null,
-      )
-    }
-
     /** 月费的上限，和宿主一致（index.js 的 PRICE_LIMIT）：超过的宿主会拒绝，编辑器里就不让点「确定」。 */
     const BILLING_LIMIT = 100000
 
@@ -2875,7 +2838,7 @@ window.__ModuleLoader__.load({
       })
     }
 
-    /** 费用格前面的小标签：打折写倍数（×0.12），包月写「包月」；官方价不写。 */
+    /** 设置页里计费方式前面的小标签：打折写倍数（×0.12），包月写「包月」；官方价不写。 */
     function billingTag(bill) {
       if (!bill) return ''
       if (bill.mode === 'multiplier') return `×${Number(bill.factor)}`
@@ -2883,36 +2846,31 @@ window.__ModuleLoader__.load({
       return ''
     }
 
-    /** 供应商这一行的费用格：未设置写「设置」，不计入写「不计入」，包月悬停写月费；点一下展开计费方式。 */
+    /** 供应商这一行的费用格：未设置写「—」，不计入写「不计入」，其余写金额。 */
     function costCellText(row) {
       if (!row) return t('unit.none')
-      if (row.mode === 'unset') return t('provider.setBilling')
+      if (row.mode === 'unset') return t('unit.none')
       if (row.mode === 'free') return t('billing.excluded')
       if (row.spend === null || row.spend === undefined) return t('unit.none')
       return formatMoney(row.spend)
     }
 
     /**
-     * 表格最右边两列的宽度：费用（量出最宽的金额）和标签（量出最宽的标签）。每一行是单独的网格，列宽不能按内容自动撑开
-     * （各行会对不齐），写死又放不下「¥12.3 万」「not saved」这类。量不到（没有布局）时用 CSS 里的默认宽度。
+     * 表格最右边费用列的宽度（量出最宽的金额）。每一行是单独的网格，列宽不能按内容自动撑开（各行会对不齐），
+     * 写死又放不下「¥12.3 万」这类。量不到（没有布局）时用 CSS 里的默认宽度。
      */
     function useCostColumn(tableRef, key) {
-      const [widths, setWidths] = useState({ cost: 0, tag: 0 })
+      const [width, setWidth] = useState(0)
       useLayoutEffect(() => {
         const table = tableRef.current
         if (!table || typeof table.querySelectorAll !== 'function') return
         let cost = 0
-        let tag = 0
         for (const node of table.querySelectorAll('.dps-prov-cost')) cost = Math.max(cost, toNumber(node.scrollWidth))
-        for (const node of table.querySelectorAll('.dps-cost-tag')) tag = Math.max(tag, toNumber(node.getBoundingClientRect().width))
-        const next = { cost: cost > 0 ? Math.ceil(cost) : 0, tag: tag > 0 ? Math.ceil(tag) : 0 }
-        setWidths((current) => (current.cost === next.cost && current.tag === next.tag ? current : next))
+        const next = cost > 0 ? Math.ceil(cost) : 0
+        setWidth((current) => (current === next ? current : next))
       }, [key])
-      if (widths.cost <= 0) return undefined
-      // 有标签列时右边几列收紧一点（金额列最小 50px），给名称多留位置
-      const style = { '--dps-cost-w': `${Math.max(widths.tag > 0 ? 50 : 68, widths.cost)}px` }
-      if (widths.tag > 0) style['--dps-tag-w'] = `${widths.tag}px`
-      return style
+      if (width <= 0) return undefined
+      return { '--dps-cost-w': `${Math.max(68, width)}px` }
     }
 
     function ProviderCard(props) {
@@ -2931,109 +2889,18 @@ window.__ModuleLoader__.load({
         return kept.rows.length === all.rows.length ? all : kept
       }, [summary, excluded])
       const aliases = props.aliases || {}
-      const errors = props.billingErrors || {}
-      // 正在设置计费方式的那一行；那一行不在表里了（换了范围后没有用量）就收起，免得切回来时自己又打开
-      const [billingOpen, setBillingOpen] = useState(null)
-      const shownIds = new Set(data.rows.map((row) => row.id))
-      useEffect(() => {
-        if (billingOpen !== null && !shownIds.has(billingOpen)) setBillingOpen(null)
-      })
       const tableRef = useRef(null)
-      /** 一家的计费信息：费用、计费方式、标签（打折倍数 / 包月 / 未保存）和悬停文字。没有费用数据时是 null。 */
-      const costInfo = (row) => {
-        if (!costs) return null
-        const cost = costs.byProvider[row.id] || null
-        const bill = cost ? cost.billing : billingOf(row.id, props.billingSettings)
-        // 包月：只写这个订阅月里用量换算成的钱和月费。不写「按官方价算」——包月的费用本来就等于它（费用格里那个数），
-        // 而且它跟着顶部范围走、本月已用不跟，两个数挨在一起会被当成两种算法
-        const month = bill && bill.mode === 'plan' && props.planMonths ? ownValue(props.planMonths, row.id) : null
-        const titleParts = month
-          ? [planMonthText(month)]
-          : [t('billing.listValue', { value: formatMoney(cost ? cost.value : 0) })]
-        if (cost && cost.unpriced.length) titleParts.push(t('billing.unpriced', { models: listJoin(cost.unpriced) }))
-        // 上一次改计费方式没存上：标签换成「未保存」，悬停写原因
-        const failed = errors[row.id]
-        if (failed) titleParts.unshift(t('billing.saveFailed', { reason: failed }))
-        return { cost, bill, failed, tag: failed ? t('billing.tagUnsaved') : billingTag(bill), title: titleParts.join(' · ') }
-      }
-      // 有任何一家带标签时，表格最右边多出一列专门放标签：用量 / 占比 / 命中率 / 费用整体往左收，金额照样对齐
-      const hasTags = data.rows.some((row) => {
-        const info = costInfo(row)
-        return Boolean(info && info.tag)
-      })
-      const toggleBilling = (id) => setBillingOpen(billingOpen === id ? null : id)
-      const tagCell = (row) => {
-        const info = costInfo(row)
-        return h(
-          'span',
-          { className: 'dps-prov-tagcell', role: 'cell' },
-          // 计费方式的标签是蓝底；没存上的「未保存」是红底
-          info && info.tag ? h('span', { className: 'dps-cost-tag', 'data-dps-field': 'billing-tag', 'data-error': info.failed ? 'true' : undefined, title: info.title, onClick: () => toggleBilling(row.id) }, info.tag) : null,
-        )
-      }
+      // 费用格：只显示金额（不计入写「不计入」，未设置写「—」）；计费方式、标签、包月用了多少都在设置页里
       const costCell = (row) => {
-        if (!costs) return h('span', { className: 'dps-prov-cost', role: 'cell' }, t('unit.none'))
-        const { cost, bill, failed, title } = costInfo(row)
+        const cost = costs ? costs.byProvider[row.id] || null : null
+        const mode = cost ? cost.mode : billingOf(row.id, props.billingSettings).mode
         return h(
           'span',
-          { className: 'dps-prov-costcell', role: 'cell' },
-          h(
-            'button',
-            {
-              type: 'button',
-              className: 'dps-prov-cost',
-              'data-dps-action': 'billing',
-              'data-mode': cost ? cost.mode : bill.mode,
-              'data-spend': cost && cost.spend !== null ? cost.spend : '',
-              'data-list-value': cost ? cost.value : 0,
-              'data-error': failed ? 'true' : undefined,
-              'aria-expanded': billingOpen === row.id ? 'true' : 'false',
-              title,
-              onClick: () => toggleBilling(row.id),
-            },
-            // 这一档里没有这家的费用明细（旧版宿主没有 slots）：未设置照样写「设置」，其余写「—」，不写 ¥0
-            costCellText(cost || { mode: bill.mode, spend: null }),
-          ),
+          { className: 'dps-prov-cost', role: 'cell', 'data-mode': mode, 'data-spend': cost && cost.spend !== null ? cost.spend : '', 'data-list-value': cost ? cost.value : 0 },
+          costs ? costCellText(cost || { mode, spend: null }) : t('unit.none'),
         )
-      }
-      // 正在改名的那一行：{ id, draft }。回车 / 失焦保存，Esc 放弃；ref 防止回车后失焦再存一次
-      const [editing, setEditing] = useState(null)
-      const editingRef = useRef(null)
-      editingRef.current = editing
-      const commit = () => {
-        const current = editingRef.current
-        if (!current) return
-        editingRef.current = null
-        setEditing(null)
-        const before = typeof aliases[current.id] === 'string' ? aliases[current.id].trim() : ''
-        const after = current.draft.trim()
-        if (after !== before && props.onRename) props.onRename(current.id, after)
       }
       const nameCell = (row) => {
-        if (editing && editing.id === row.id) {
-          return h(
-            'span',
-            { className: 'dps-prov-namecell', role: 'cell' },
-            h('input', {
-              className: 'dps-prov-input',
-              'data-dps-field': 'provider-name-input',
-              value: editing.draft,
-              placeholder: row.id,
-              maxLength: 40,
-              autoFocus: true,
-              'aria-label': t('provider.rename'),
-              onChange: (event) => setEditing({ id: row.id, draft: event.target.value }),
-              onKeyDown: (event) => {
-                if (event.key === 'Enter') commit()
-                else if (event.key === 'Escape') {
-                  editingRef.current = null
-                  setEditing(null)
-                }
-              },
-              onBlur: commit,
-            }),
-          )
-        }
         const label = providerLabel(row.id, aliases)
         const renamed = label !== providerLabel(row.id)
         return h(
@@ -3041,37 +2908,6 @@ window.__ModuleLoader__.load({
           { className: 'dps-prov-namecell', role: 'cell' },
           // 改过名的悬停时带上原始 id，对账时还能认出是哪个渠道
           h('span', { className: 'dps-prov-name', title: renamed ? `${label} · ${row.id}` : label }, label),
-          // 悬停时出现：改名、删除（整页都不再算这一家，标题右边能恢复）
-          h(
-            'span',
-            { className: 'dps-prov-acts' },
-            h(
-              'button',
-              {
-                type: 'button',
-                className: 'dps-prov-edit',
-                'data-dps-action': 'rename',
-                'aria-label': `${t('provider.rename')} ${label}`,
-                title: t('provider.rename'),
-                onClick: () => setEditing({ id: row.id, draft: typeof aliases[row.id] === 'string' ? aliases[row.id] : '' }),
-              },
-              h(Icon, { name: 'edit' }),
-            ),
-            props.onExclude
-              ? h(
-                  'button',
-                  {
-                    type: 'button',
-                    className: 'dps-prov-edit',
-                    'data-dps-action': 'exclude',
-                    'aria-label': `${t('provider.remove')} ${label}`,
-                    title: t('provider.remove'),
-                    onClick: () => props.onExclude(row.id, true),
-                  },
-                  h(Icon, { name: 'trash' }),
-                )
-              : null,
-          ),
         )
       }
       // 费用列里每一格的文字变了才重新量列宽
@@ -3079,7 +2915,7 @@ window.__ModuleLoader__.load({
         currentLocaleId(),
         ...data.rows.map((row) => {
           const cost = costs && costs.byProvider[row.id]
-          return [row.id, cost ? cost.mode : '', cost && cost.spend !== null ? formatMoney(cost.spend) : '', cost ? billingTag(cost.billing) : '', errors[row.id] || ''].join(',')
+          return [row.id, cost ? cost.mode : '', cost && cost.spend !== null ? formatMoney(cost.spend) : ''].join(',')
         }),
       ].join(';')
       const costColumn = useCostColumn(tableRef, costKey)
@@ -3095,15 +2931,31 @@ window.__ModuleLoader__.load({
             h('h2', null, t('section.provider')),
             h('span', { className: 'dps-panel-meta', 'data-dps-field': 'provider-total', 'data-value': data.total }, t('chart.total', { value: formatTokens(data.total) })),
           ),
-          excluded.length > 0 && props.onExclude
-            ? h('div', { className: 'dps-panel-tools' }, h(ExcludedMenu, { ids: excluded, aliases, onRestore: (id) => props.onExclude(id, false) }))
+          // 右上角进设置页：改名、计费方式、删除 / 恢复都在那里
+          props.onSettings
+            ? h(
+                'div',
+                { className: 'dps-panel-tools' },
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dps-ghost dps-ghost-icon',
+                    'data-dps-action': 'provider-settings',
+                    'aria-label': t('provider.settings'),
+                    title: t('provider.settings'),
+                    onClick: props.onSettings,
+                  },
+                  h(Icon, { name: 'sliders' }),
+                ),
+              )
             : null,
         ),
         data.rows.length === 0
           ? h('div', { className: 'dps-prov-empty' }, t('chart.empty'))
           : h(
               'div',
-              { ref: tableRef, className: 'dps-prov-table', role: 'table', style: costColumn, 'data-tags': hasTags ? 'true' : undefined },
+              { ref: tableRef, className: 'dps-prov-table', role: 'table', style: costColumn },
               h(
                 'div',
                 { className: 'dps-prov-row dps-prov-th', role: 'row' },
@@ -3112,7 +2964,6 @@ window.__ModuleLoader__.load({
                 h('span', { role: 'columnheader' }, t('provider.colShare')),
                 h('span', { role: 'columnheader' }, t('provider.colHit')),
                 h('span', { role: 'columnheader' }, t('provider.colCost')),
-                hasTags ? h('span', { role: 'columnheader', 'aria-hidden': true }) : null,
               ),
               data.rows.map((row) =>
                 h(
@@ -3131,30 +2982,191 @@ window.__ModuleLoader__.load({
                   h('span', { className: 'dps-prov-share', role: 'cell' }, formatPercent(row.share)),
                   h('span', { className: 'dps-prov-hit', role: 'cell' }, row.hitRate === null ? t('unit.none') : formatPercent(row.hitRate)),
                   costCell(row),
-                  hasTags ? tagCell(row) : null,
                   h(
                     'span',
                     { className: 'dps-prov-track', 'aria-hidden': true },
                     h('span', { className: 'dps-prov-fill', style: { width: `${row.share}%`, minWidth: row.tokens > 0 ? '3px' : '0px' } }),
                   ),
-                  billingOpen === row.id
-                    ? h(BillingEditor, {
-                        key: `billing-${row.id}`,
-                        provider: row.id,
-                        label: providerLabel(row.id, aliases),
-                        billing: (costs && costs.byProvider[row.id] && costs.byProvider[row.id].billing) || billingOf(row.id, props.billingSettings),
-                        listValue: costs && costs.byProvider[row.id] ? costs.byProvider[row.id].value : 0,
-                        planMonth: props.planMonths ? ownValue(props.planMonths, row.id) : null,
-                        onClose: () => setBillingOpen(null),
-                        onSave: (entry) => {
-                          setBillingOpen(null)
-                          if (props.onBilling) props.onBilling(row.id, entry)
-                        },
-                      })
-                    : null,
                 ),
               ),
             ),
+      )
+    }
+
+    /**
+     * 供应商设置页（供应商卡右上角进来）：改显示名、选计费方式、删除 / 恢复，都在这里；卡片本身只读。
+     * 列出所有用过的供应商（按累计用量排序），每行：原始 id、显示名、累计用量、计费方式、删除。
+     * 计费方式写成「标签 + 说明」（×0.13 打折、包月 + 这一期已用 / 月费、不计入、未设置），点一下展开原来的计费编辑器。
+     * 删掉的放在最下面「已删除」里，点「恢复」回来。显示名回车 / 失焦保存，Esc 放弃。
+     */
+    function ProviderSettings(props) {
+      const aliases = props.aliases || {}
+      const errors = props.billingErrors || {}
+      const excluded = props.excluded || NO_IDS
+      const rows = (props.providers || []).filter((row) => !excluded.includes(row.id))
+      const [billingOpen, setBillingOpen] = useState(null)
+      // 正在改的显示名：{ id, draft }；ref 防止回车后失焦再存一次
+      const [editing, setEditing] = useState(null)
+      const editingRef = useRef(null)
+      editingRef.current = editing
+      const commit = () => {
+        const current = editingRef.current
+        if (!current) return
+        editingRef.current = null
+        setEditing(null)
+        const before = typeof aliases[current.id] === 'string' ? aliases[current.id].trim() : ''
+        const after = current.draft.trim()
+        if (after !== before && props.onRename) props.onRename(current.id, after)
+      }
+      const billOf = (id) => {
+        const cost = props.costs ? props.costs.byProvider[id] || null : null
+        return cost ? cost.billing : billingOf(id, props.billingSettings)
+      }
+      const billingCell = (id) => {
+        const bill = billOf(id)
+        const failed = errors[id]
+        const month = bill.mode === 'plan' && props.planMonths ? ownValue(props.planMonths, id) : null
+        const tag = failed ? t('billing.tagUnsaved') : billingTag(bill)
+        const text =
+          bill.mode === 'unset'
+            ? t('billing.unset')
+            : bill.mode === 'plan'
+              ? month
+                ? planMonthText(month)
+                : `${t('billing.monthly')} ${formatMoney(toNumber(bill.monthly))}`
+              : t(`billing.${bill.mode}`)
+        return h(
+          'span',
+          { className: 'dps-set-billcell', role: 'cell' },
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dps-set-bill',
+              'data-dps-action': 'billing',
+              'data-mode': bill.mode,
+              'data-error': failed ? 'true' : undefined,
+              'aria-expanded': billingOpen === id ? 'true' : 'false',
+              title: failed ? t('billing.saveFailed', { reason: failed }) : undefined,
+              onClick: () => setBillingOpen(billingOpen === id ? null : id),
+            },
+            tag ? h('span', { className: 'dps-cost-tag', 'data-dps-field': 'billing-tag', 'data-error': failed ? 'true' : undefined }, tag) : null,
+            h('span', { className: 'dps-set-billtext', 'data-dps-field': 'billing-text' }, text),
+          ),
+        )
+      }
+      const nameInput = (id) =>
+        h('input', {
+          className: 'dps-date dps-set-input',
+          'data-dps-field': 'provider-name-input',
+          value: editing && editing.id === id ? editing.draft : typeof aliases[id] === 'string' ? aliases[id] : '',
+          placeholder: providerLabel(id),
+          maxLength: 40,
+          'aria-label': `${t('provider.rename')} ${id}`,
+          onFocus: () => setEditing({ id, draft: typeof aliases[id] === 'string' ? aliases[id] : '' }),
+          onChange: (event) => setEditing({ id, draft: event.target.value }),
+          onKeyDown: (event) => {
+            if (event.key === 'Enter') commit()
+            else if (event.key === 'Escape') {
+              editingRef.current = null
+              setEditing(null)
+            }
+          },
+          onBlur: commit,
+        })
+      return h(
+        'section',
+        { className: 'dps-panel dps-set', 'data-dps-card': 'provider-settings' },
+        h(
+          'header',
+          { className: 'dps-panel-head' },
+          h(
+            'div',
+            { className: 'dps-panel-title' },
+            h(
+              'button',
+              { type: 'button', className: 'dps-ghost dps-ghost-icon', 'data-dps-action': 'settings-back', 'aria-label': t('action.back'), title: t('action.back'), onClick: props.onBack },
+              h(Icon, { name: 'back' }),
+            ),
+            h('h2', null, t('provider.settings')),
+          ),
+        ),
+        h(
+          'div',
+          { className: 'dps-set-table', role: 'table' },
+          h(
+            'div',
+            { className: 'dps-set-row dps-prov-th', role: 'row' },
+            h('span', { role: 'columnheader' }, t('settings.colId')),
+            h('span', { role: 'columnheader' }, t('settings.colName')),
+            h('span', { role: 'columnheader' }, t('settings.colUsage')),
+            h('span', { role: 'columnheader' }, t('settings.colBilling')),
+            h('span', { role: 'columnheader', 'aria-hidden': true }),
+          ),
+          rows.length === 0 ? h('div', { className: 'dps-prov-empty' }, t('chart.empty')) : null,
+          rows.map((row) =>
+            h(
+              'div',
+              { key: row.id, className: 'dps-set-row', role: 'row', 'data-provider': row.id },
+              h('span', { className: 'dps-set-id', role: 'cell', title: row.id }, row.id),
+              h('span', { className: 'dps-set-namecell', role: 'cell' }, nameInput(row.id)),
+              h('span', { className: 'dps-set-usage', role: 'cell', 'data-value': row.tokens }, formatTokens(row.tokens)),
+              billingCell(row.id),
+              h(
+                'span',
+                { className: 'dps-set-act', role: 'cell' },
+                props.onExclude
+                  ? h(
+                      'button',
+                      {
+                        type: 'button',
+                        className: 'dps-prov-edit',
+                        'data-dps-action': 'exclude',
+                        'aria-label': `${t('provider.remove')} ${providerLabel(row.id, aliases)}`,
+                        title: t('provider.remove'),
+                        onClick: () => {
+                          if (billingOpen === row.id) setBillingOpen(null)
+                          props.onExclude(row.id, true)
+                        },
+                      },
+                      h(Icon, { name: 'trash' }),
+                    )
+                  : null,
+              ),
+              billingOpen === row.id
+                ? h(BillingEditor, {
+                    key: `billing-${row.id}`,
+                    provider: row.id,
+                    label: providerLabel(row.id, aliases),
+                    billing: billOf(row.id),
+                    listValue: props.costs && props.costs.byProvider[row.id] ? props.costs.byProvider[row.id].value : 0,
+                    planMonth: props.planMonths ? ownValue(props.planMonths, row.id) : null,
+                    onClose: () => setBillingOpen(null),
+                    onSave: (entry) => {
+                      setBillingOpen(null)
+                      if (props.onBilling) props.onBilling(row.id, entry)
+                    },
+                  })
+                : null,
+            ),
+          ),
+          excluded.length > 0 ? h('div', { className: 'dps-set-subhead', role: 'row' }, h('span', { role: 'cell' }, t('settings.removed'))) : null,
+          excluded.map((id) =>
+            h(
+              'div',
+              { key: `removed-${id}`, className: 'dps-set-row', role: 'row', 'data-provider': id, 'data-excluded': 'true' },
+              h('span', { className: 'dps-set-id', role: 'cell', title: id }, id),
+              h('span', { className: 'dps-set-namecell', role: 'cell' }, providerLabel(id, aliases)),
+              h('span', { role: 'cell' }),
+              h('span', { role: 'cell' }),
+              h(
+                'span',
+                { className: 'dps-set-act', role: 'cell' },
+                h('button', { type: 'button', className: 'dps-set-restore', 'data-dps-restore': id, onClick: () => props.onExclude(id, false) }, t('provider.restore')),
+              ),
+            ),
+          ),
+        ),
       )
     }
 
@@ -3446,6 +3458,7 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
 .dps-grid{grid-template-columns:minmax(0,1fr)}
 }
 @container dps (max-width:720px){
+.dps-set .dps-set-row{column-gap:10px}
 .dps-grid[data-row="lists"]{grid-template-columns:minmax(0,1fr)}
 .dps-num{font-size:24px}
 .dps-kpi[data-hero="true"] .dps-num{font-size:30px}
@@ -3574,18 +3587,36 @@ body[data-ds-dark-theme] .dps-date{color-scheme:dark}
 .dps-prov-th span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dps-prov-th span:nth-child(n+2),.dps-prov-value,.dps-prov-share,.dps-prov-hit,.dps-prov-costcell,.dps-prov-cost{text-align:right}
 .dps-prov-cost{appearance:none;border:0;background:transparent;padding:0;font:inherit;font-size:13px;color:var(--dps-ink);font-variant-numeric:tabular-nums;white-space:nowrap}
-button.dps-prov-cost{cursor:pointer;border-bottom:1px dashed transparent}
-button.dps-prov-cost:hover{border-bottom-color:var(--dps-muted)}
-.dps-prov-cost[data-mode="unset"]{color:var(--dps-accent);font-weight:600}
-.dps-prov-cost[data-mode="free"]{color:var(--dps-muted)}
+.dps-prov-cost[data-mode="free"],.dps-prov-cost[data-mode="unset"]{color:var(--dps-muted)}
 .dps-proj .dps-prov-row{grid-template-columns:minmax(0,1fr) 60px 44px 62px var(--dps-cost-w,68px)}
 .dps-bill{grid-column:1 / -1;display:flex;flex-direction:column;gap:10px;margin-top:2px;padding:12px;border:1px solid var(--dps-line);border-radius:10px;background:var(--dps-hover)}
 .dps-bill .dps-seg{align-self:flex-start}
 .dps-bill-fields{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px}
 .dps-bill-input{width:104px}
-.dps-prov-table[data-tags="true"] .dps-prov-row{grid-template-columns:minmax(0,1fr) 56px 42px 52px var(--dps-cost-w,50px) var(--dps-tag-w,34px);column-gap:7px}
-.dps-prov-tagcell{display:flex;align-items:center;min-width:0;margin-left:-2px}
-.dps-cost-tag{display:inline-block;padding:0 4px;border-radius:4px;background:color-mix(in srgb,var(--dps-accent) 90%,var(--dps-ink));color:var(--dps-card);font-size:10.5px;font-weight:600;line-height:16px;white-space:nowrap;cursor:pointer}
+.dps-cost-tag{display:inline-block;padding:0 4px;border-radius:4px;background:color-mix(in srgb,var(--dps-accent) 90%,var(--dps-ink));color:var(--dps-card);font-size:10.5px;font-weight:600;line-height:16px;white-space:nowrap}
+.dps-ghost-icon{padding:0 7px}
+.dps-set{width:100%;max-width:880px;margin:0 auto;align-self:center}
+.dps-set .dps-panel-title{gap:6px}
+.dps-set .dps-panel-title h2{margin-left:2px}
+.dps-set-table{display:flex;flex-direction:column;gap:6px}
+.dps-set-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr) 78px minmax(0,1.6fr) 52px;align-items:center;column-gap:14px;row-gap:8px;min-height:34px;font-size:13px}
+.dps-set .dps-prov-th{min-height:0;margin-bottom:0}
+.dps-set .dps-prov-th span{text-align:left}
+.dps-set .dps-prov-th span:nth-child(3){text-align:right}
+.dps-set-id{min-width:0;color:var(--dps-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dps-set-namecell{display:flex;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dps-set-input{width:100%;min-width:0;height:30px}
+.dps-set-usage{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.dps-set-billcell{display:flex;min-width:0}
+.dps-set-bill{appearance:none;display:inline-flex;align-items:center;gap:6px;max-width:100%;min-width:0;min-height:30px;padding:5px 10px;text-align:left;border:1px solid var(--dps-line);border-radius:8px;background:transparent;color:var(--dps-ink);font:inherit;font-size:12.5px;cursor:pointer;transition:background-color .15s ease}
+.dps-set-bill:hover,.dps-set-bill[aria-expanded="true"]{background:var(--dps-hover)}
+.dps-set-bill[data-mode="unset"],.dps-set-bill[data-mode="free"]{color:var(--dps-muted)}
+.dps-set-billtext{min-width:0;font-variant-numeric:tabular-nums}
+.dps-set-act{display:flex;justify-content:flex-end}
+.dps-set-subhead{margin-top:10px;padding-top:12px;border-top:1px solid var(--dps-line);font-size:11.5px;color:var(--dps-faint)}
+.dps-set-row[data-excluded="true"] .dps-set-namecell{color:var(--dps-muted)}
+.dps-set-restore{appearance:none;border:0;background:transparent;padding:4px 0;font:inherit;font-size:12.5px;color:var(--dps-accent);cursor:pointer;white-space:nowrap}
+.dps-set-restore:hover{text-decoration:underline}
 body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(--dps-accent)}
 .dps-cost-tag[data-error="true"]{background:var(--dsw-alias-state-error-primary)}
 .dps-bill-foot{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
@@ -3593,8 +3624,6 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
 .dps-bill .dps-btn{height:28px;padding:0 12px}
 .dps-prov-namecell{position:relative;display:flex;align-items:center;min-width:0}
 .dps-prov-name{min-width:0;color:var(--dps-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dps-prov-acts{position:absolute;right:0;top:50%;transform:translateY(-50%);display:flex;gap:2px;box-shadow:-8px 0 8px var(--dps-card);border-radius:6px;background:var(--dps-card);opacity:0;transition:opacity .15s ease}
-.dps-prov-row:hover .dps-prov-acts,.dps-prov-acts:focus-within{opacity:1}
 .dps-prov-edit{appearance:none;display:grid;place-items:center;width:20px;height:20px;padding:0;border:0;border-radius:6px;background:var(--dps-card);color:var(--dps-muted);cursor:pointer;transition:background-color .15s ease}
 .dps-prov-edit svg{width:13px;height:13px}
 .dps-prov-edit:hover{background:color-mix(in srgb,var(--dps-ink) 7%,var(--dps-card));color:var(--dps-ink)}
@@ -4525,6 +4554,27 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
         },
         [reload, mounted],
       )
+      // 供应商设置页：整页换成设置页，进去时滚到顶，回来时把供应商卡滚进视野
+      const [settingsOpen, setSettingsOpen] = useState(false)
+      const rootRef = useRef(null)
+      const settingsWas = useRef(false)
+      const openSettings = useCallback(() => setSettingsOpen(true), [])
+      const closeSettings = useCallback(() => setSettingsOpen(false), [])
+      useEffect(() => {
+        const root = rootRef.current
+        if (root && settingsOpen && typeof root.scrollIntoView === 'function') root.scrollIntoView({ block: 'start' })
+        if (root && !settingsOpen && settingsWas.current && typeof root.querySelector === 'function') {
+          const card = root.querySelector('[data-dps-card="provider"]')
+          if (card && typeof card.scrollIntoView === 'function') card.scrollIntoView({ block: 'nearest' })
+        }
+        settingsWas.current = settingsOpen
+      }, [settingsOpen])
+      // 设置页列出所有用过的供应商（累计用量排序）；计费编辑器里的「按官方价算」也按累计算
+      const allProviders = useMemo(() => deriveProviders(snapshot && snapshot.totals ? snapshot.totals.byProvider : null, null).rows, [snapshot])
+      const allCosts = useMemo(
+        () => (settingsOpen ? computeCosts(daily, '', todayKey, billingSettings, todayKey, priceOptions) : null),
+        [settingsOpen, daily, billingSettings, todayKey, priceOptions],
+      )
       // 导出文件名带上范围：自定义写起止日期，本月写年月
       const exportName =
         range === 'custom'
@@ -4623,9 +4673,34 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
         if (mounted.current) setUpdating(false)
       }
 
+      if (settingsOpen) {
+        return h(
+          'div',
+          { className: 'dps-root', ref: rootRef },
+          h(StyleTag, null),
+          h(
+            'div',
+            { className: 'dps-page' },
+            h(ProviderSettings, {
+              providers: allProviders,
+              aliases,
+              onRename: saveAlias,
+              excluded,
+              onExclude: saveExcluded,
+              costs: allCosts,
+              billingSettings,
+              billingErrors,
+              planMonths,
+              onBilling: saveBilling,
+              onBack: closeSettings,
+            }),
+          ),
+        )
+      }
+
       return h(
         'div',
-        { className: 'dps-root' },
+        { className: 'dps-root', ref: rootRef },
         h(StyleTag, null),
         h(
           'div',
@@ -4663,14 +4738,10 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
               summary: rangeSummary,
               scope: range,
               aliases,
-              onRename: saveAlias,
               excluded,
-              onExclude: saveExcluded,
               costs,
               billingSettings,
-              billingErrors,
-              planMonths,
-              onBilling: saveBilling,
+              onSettings: openSettings,
             }),
           ),
         ),
