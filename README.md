@@ -17,7 +17,7 @@ all folded from this machine's own session logs.</p>
 
 <p><b>English</b> · <a href="README.zh.md">简体中文</a></p>
 
-<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/preview-2026-11-10.png" alt="The profile page in the DSH sidebar" width="900">
+<img src="https://cdn.jsdelivr.net/gh/Lovenndme/dsh-profile-stats@main/docs/preview-2026-11-10b.png" alt="The profile page in the DSH sidebar" width="900">
 
 </div>
 
@@ -70,7 +70,7 @@ with many sessions; the result is cached, so later opens only read sessions that
 | **Spend** | Spend in the selected range — see [How spend is worked out](#how-spend-is-worked-out) |
 | **Longest task** | The longest span from a turn's start to its end, over all history |
 | **Active streak** | Consecutive days with usage up to today, with your best beside it |
-| **Cache hit today** | Today's hit rate across all providers: cache read ÷ (uncached input + cache read + cache write) |
+| **Cache hit today** | Today's hit rate across all providers, to two decimals: cache read ÷ (uncached input + cache read + cache write) |
 
 ### Token activity
 
@@ -112,9 +112,8 @@ the lighter segment of each bar. The top eight projects get a row and the rest a
 
 ### Provider split
 
-Tokens, share, that provider's own cache hit rate and spend per billing route (the provider id in the logs).
+Tokens, share, that provider's own cache hit rate and spend per billing route (the provider id in the logs), for the header range.
 
-- **Today** shows today only and lets go when you change the header range;
 - **Rename** with the pencil beside a name: the display name stays on your machine, and hovering shows the
   original id;
 - **Billing method**: click the spend cell — see the next section.

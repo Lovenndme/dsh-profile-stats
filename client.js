@@ -124,7 +124,6 @@ window.__ModuleLoader__.load({
       'provider.deepseek-modlens': 'DeepSeek ModLens',
       'provider.unknown': 'Unknown',
       'provider.other': 'Other',
-      'provider.today': 'Today',
       'provider.colName': 'Provider',
       'provider.colAmount': 'Tokens',
       'provider.colShare': 'Share',
@@ -239,7 +238,6 @@ window.__ModuleLoader__.load({
       'provider.deepseek-modlens': 'DeepSeek ModLens',
       'provider.unknown': '未知来源',
       'provider.other': '其他',
-      'provider.today': '今日',
       'provider.colName': '供应商',
       'provider.colAmount': '用量',
       'provider.colShare': '占比',
@@ -433,13 +431,14 @@ window.__ModuleLoader__.load({
      * 百分比（0–100）→ 文案。极小的非零值写成「<0.1%」而不是「0.0%」（否则看起来像没有），
      * 不足 100 的值不会被四舍五入成「100.0%」。
      */
-    function formatPercent(value) {
+    function formatPercent(value, digits = 1) {
       const number = toNumber(value)
       if (number <= 0) return '0%'
-      if (number < 0.05) return '<0.1%'
+      const step = Math.pow(10, -digits)
+      if (number < step / 2) return `<${step.toFixed(digits)}%`
       if (number >= 100) return '100%'
-      if (number >= 99.95) return '>99.9%'
-      return `${number.toFixed(1)}%`
+      if (number >= 100 - step / 2) return `>${(100 - step).toFixed(digits)}%`
+      return `${number.toFixed(digits)}%`
     }
 
     /** 纵轴步长取整齐值：1 / 2 / 2.5 / 5 × 10ⁿ，token 是整数所以步长至少为 1。 */
@@ -2869,14 +2868,13 @@ window.__ModuleLoader__.load({
     }
 
     function ProviderCard(props) {
-      // 默认跟随页面顶部的时间范围；「今日」按钮按下时只看今天（切换顶部范围会自动弹起）。
-      const todayOnly = Boolean(props.todayOnly)
-      const summary = (todayOnly ? props.today : props.summary) || emptySummary()
-      const costs = (todayOnly ? props.todayCosts : props.costs) || null
+      // 跟随页面顶部的时间范围（只由顶部按钮控制）
+      const summary = props.summary || emptySummary()
+      const costs = props.costs || null
       const data = useMemo(() => deriveProviders(summary.byProvider, summary.providerUsage), [summary])
       const aliases = props.aliases || {}
       const errors = props.billingErrors || {}
-      // 正在设置计费方式的那一行；那一行不在表里了（切到「今日」后没有用量）就收起，免得切回来时自己又打开
+      // 正在设置计费方式的那一行；那一行不在表里了（换了范围后没有用量）就收起，免得切回来时自己又打开
       const [billingOpen, setBillingOpen] = useState(null)
       const shownIds = new Set(data.rows.map((row) => row.id))
       useEffect(() => {
@@ -3018,7 +3016,7 @@ window.__ModuleLoader__.load({
       const costColumn = useCostColumn(tableRef, costKey)
       return h(
         'section',
-        { className: 'dps-panel dps-prov', 'data-dps-card': 'provider', 'data-scope': todayOnly ? 'today' : props.scope || 'all' },
+        { className: 'dps-panel dps-prov', 'data-dps-card': 'provider', 'data-scope': props.scope || 'all' },
         h(
           'header',
           { className: 'dps-panel-head' },
@@ -3027,24 +3025,6 @@ window.__ModuleLoader__.load({
             { className: 'dps-panel-title' },
             h('h2', null, t('section.provider')),
             h('span', { className: 'dps-panel-meta', 'data-dps-field': 'provider-total', 'data-value': data.total }, t('chart.total', { value: formatTokens(data.total) })),
-          ),
-          h(
-            'div',
-            { className: 'dps-panel-tools' },
-            // 顶部范围已经是本日时，卡片跟随范围看的就是今天：按钮没有用处，不显示
-            props.scope === 'day'
-              ? null
-              : h(
-                  'button',
-                  {
-                    type: 'button',
-                    className: 'dps-ghost dps-toggle',
-                    'data-dps-control': 'provider-today',
-                    'aria-pressed': todayOnly ? 'true' : 'false',
-                    onClick: () => props.onTodayOnly(!todayOnly),
-                  },
-                  t('provider.today'),
-                ),
           ),
         ),
         data.rows.length === 0
@@ -3547,7 +3527,6 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
 .dps-prov-value{font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
 .dps-prov-share{color:var(--dps-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .dps-prov-hit{color:var(--dps-ink);font-variant-numeric:tabular-nums;white-space:nowrap}
-.dps-toggle[aria-pressed="true"]{color:var(--dps-ink);border-color:color-mix(in srgb,var(--dps-accent) 55%,var(--dps-line));background:color-mix(in srgb,var(--dps-accent) 9%,transparent);font-weight:600}
 .dps-prov-track{grid-column:1 / -1;display:block;height:6px;border-radius:999px;background:var(--dps-track);overflow:hidden}
 .dps-prov-fill{display:block;height:100%;border-radius:inherit;background:var(--dps-accent);transition:width .45s cubic-bezier(.3,.7,.2,1)}
 .dps-prov-empty{flex:1 1 auto;display:grid;place-items:center;min-height:72px;font-size:12.5px;color:var(--dps-faint)}
@@ -4165,7 +4144,8 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
       if (costs && costs.unpricedTokens > 0) costHints.push(t('cost.hintUnpriced'))
       const tokenValue = (value) => [tokenParts(Math.round(value))]
       const dayValue = (value) => [{ value: String(Math.max(0, Math.round(toNumber(value)))), unit: t('unit.day') }]
-      const percentValue = (value) => [{ value: formatPercent(value).replace('%', ''), unit: '%' }]
+      // 今日缓存命中率写到小数点后两位（主人要求：九十几时一位小数看不出差别）
+      const percentValue = (value) => [{ value: formatPercent(value, 2).replace('%', ''), unit: '%' }]
       const rangeName = range === 'custom' ? rangeText(props.rangeWin, props.todayKey) : t(`range.${range}`)
       const rangeLabel = range === 'all' ? t('stat.tokens') : t('stat.rangeTokens', { range: rangeName })
       const costLabel = range === 'all' ? t('stat.totalCost') : t('stat.cost', { range: rangeName })
@@ -4295,16 +4275,9 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
       // 顶部时间范围：本日、本周、本月、累计、自定义（custom 记自定义的起止日期）；默认累计
       const [range, setRange] = useState('all')
       const [custom, setCustom] = useState(null)
-      // 供应商卡片的「今日」按钮；换顶部范围时弹起，卡片回到跟随范围
-      const [providerToday, setProviderToday] = useState(false)
-      const changeRange = useCallback((next) => {
-        setRange(next)
-        setProviderToday(false)
-      }, [])
       const applyCustom = useCallback((startKey, endKey) => {
         setCustom({ startKey, endKey })
         setRange('custom')
-        setProviderToday(false)
       }, [])
       // 供应商的本机显示名：快照里的 + 这次会话里刚改的（保存成功前先显示，失败就撤回）
       const [aliasEdits, setAliasEdits] = useState({})
@@ -4396,7 +4369,6 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
         () => computeCosts(daily, rangeWin.startKey, rangeWin.endKey, billingSettings, todayKey, priceOptions),
         [daily, rangeWin.startKey, rangeWin.endKey, billingSettings, todayKey, priceOptions],
       )
-      const todayCosts = useMemo(() => computeCosts(daily, todayKey, todayKey, billingSettings, todayKey, priceOptions), [daily, billingSettings, todayKey, priceOptions])
       // 包月：这一个订阅月（开始日期的几号续费；没填按自然月）里用量换算成的钱，不跟顶部范围走
       const planMonths = useMemo(() => {
         const months = {}
@@ -4566,7 +4538,7 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
             rangeWin,
             firstKey,
             todayKey,
-            onRange: changeRange,
+            onRange: setRange,
             onCustom: applyCustom,
             onExport: handleExport,
           }),
@@ -4586,14 +4558,10 @@ body[data-ds-dark-theme] .dps-cost-tag:not([data-error="true"]){background:var(-
             h(ProjectCard, { summary: rangeSummary, paths: projectPaths, costs }),
             h(ProviderCard, {
               summary: rangeSummary,
-              today: todaySummary,
               scope: range,
-              todayOnly: providerToday,
-              onTodayOnly: setProviderToday,
               aliases,
               onRename: saveAlias,
               costs,
-              todayCosts,
               billingSettings,
               billingErrors,
               planMonths,

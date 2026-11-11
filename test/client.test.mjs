@@ -115,6 +115,15 @@ test('formatPercent：极小值写 <0.1%，不足 100 不会被凑成 100%', () 
   assert.equal(formatPercent(99.99), '>99.9%')
   assert.equal(formatPercent(100), '100%')
   assert.equal(formatPercent(250), '100%')
+  // 两位小数（今日缓存命中率）：边界跟着位数走
+  assert.equal(formatPercent(93.94321, 2), '93.94%')
+  assert.equal(formatPercent(93.9, 2), '93.90%')
+  assert.equal(formatPercent(0.004, 2), '<0.01%')
+  assert.equal(formatPercent(0.005, 2), '0.01%')
+  assert.equal(formatPercent(99.994, 2), '99.99%')
+  assert.equal(formatPercent(99.995, 2), '>99.99%')
+  assert.equal(formatPercent(100, 2), '100%')
+  assert.equal(formatPercent(0, 2), '0%')
 })
 
 test('niceStep / niceScale：整数刻度、整齐步长', () => {
