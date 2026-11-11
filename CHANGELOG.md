@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.4.19 — 2026-11-11
+
+- docs: fuller README — why, a section-by-section tour, how spend is worked out, FAQ, local files
+- docs: bring the short descriptions and range notes up to date
+- docs(market): describe the current page — new ranges, spend, projects, independent model chart
+- docs: recapture the README image (token stats ring card)
+
+
 ## 2.4.18 — 2026-11-10
 
 - feat: token stats card — a ring chart of where tokens went: system prompt, tool definitions, user messages, injected context, skills, tool calls, reasoning, answers
