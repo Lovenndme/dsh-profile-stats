@@ -199,7 +199,7 @@ window.__ModuleLoader__.load({
       'cost.hintPeak': '有高峰 / 空闲时段的模型（DeepSeek）按官方价折算，高峰时段（北京时间工作日 9–12、14–18 点）的占比',
       'provider.colCost': '费用',
       'billing.official': '官方价',
-      'billing.multiplier': '打折',
+      'billing.multiplier': '倍率',
       'billing.plan': '包月',
       'billing.free': '不计入',
       'billing.factor': '倍数',
@@ -901,7 +901,7 @@ window.__ModuleLoader__.load({
       return { currency: 'USD', miss: input, hit: or(cacheRead), write: or(cacheWrite), output, peak: false, timed: false }
     }
 
-    /** 计费方式：官方价、打折（官方价 × 倍数）、包月、不计入。 */
+    /** 计费方式：官方价、倍率（官方价 × 倍数）、包月、不计入。 */
     const BILLING_MODES = ['official', 'multiplier', 'plan', 'free']
 
     /** 某个供应商的计费方式：本机设置的优先（不认识的写法当没设置）；没设置时官方直连按官方价，其余是「未设置」。 */
@@ -919,11 +919,11 @@ window.__ModuleLoader__.load({
      * 一段日期内的费用（人民币）。slots 是宿主按小时记的 [小时序号, 供应商, 模型, 项目键, 未缓存输入, 缓存读, 缓存写, 输出]。
      * options：{ table（价格表：模型 → [输入, 输出, 缓存读, 缓存写] 美元 / 百万），usdCny（美元兑人民币） }
      *   value     按官方价折算（所有人都有；美元价按汇率换算）。只有计费方式是「官方价」的供应商（直连 DeepSeek）分峰谷，
-     *             其余（打折、包月、不计入、未设置）一律按不分峰谷的统一价（高峰时段价，中转站的「官方价」就是它）
+     *             其余（倍率、包月、不计入、未设置）一律按不分峰谷的统一价（高峰时段价，中转站的「官方价」就是它）
      *   peakValue / peakBase  分峰谷计价的那部分里，高峰时段的部分 / 全部——高峰占比只看这些
-     *   spend     按各家计费方式：官方 = value，打折 = value × 倍数，包月 = value（用量换算成钱；月费只用来对比，见 planCycleStart），
+     *   spend     按各家计费方式：官方 = value，倍率 = value × 倍数，包月 = value（用量换算成钱；月费只用来对比，见 planCycleStart），
      *             不计入 = 0，未设置 = 不知道（不算进 spend，列在 unset 里）
-     *   unpricedTokens  花费要按官方价算、却没有已知官方价的用量（官方 / 打折 / 包月）：这部分没算进 spend。
+     *   unpricedTokens  花费要按官方价算、却没有已知官方价的用量（官方 / 倍率 / 包月）：这部分没算进 spend。
      *             不计入的用量不需要官方价，不算在里面
      *   byProject 各项目的花费；用量全部来自未设置 / 不计入的供应商的项目不出现（页面写「—」，不是 ¥0）
      */
@@ -967,7 +967,7 @@ window.__ModuleLoader__.load({
               if (rate.peak) result.peakValue += value
             }
           }
-          // 这一格的花费要不要用官方价：官方、打折、包月要；未设置的格子显示的也是官方价
+          // 这一格的花费要不要用官方价：官方、倍率、包月要；未设置的格子显示的也是官方价
           const needsList = bill.mode === 'official' || bill.mode === 'multiplier' || bill.mode === 'plan' || bill.mode === 'unset'
           if (value === null && needsList) {
             row.unpricedTokens += tokens
@@ -2839,7 +2839,7 @@ window.__ModuleLoader__.load({
       })
     }
 
-    /** 设置页里计费方式前面的小标签：打折写倍数（×0.12），包月写「包月」；官方价不写。 */
+    /** 设置页里计费方式前面的小标签：倍率写倍数（×0.12），包月写「包月」；官方价不写。 */
     function billingTag(bill) {
       if (!bill) return ''
       if (bill.mode === 'multiplier') return `×${Number(bill.factor)}`
