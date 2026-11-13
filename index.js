@@ -1281,6 +1281,8 @@ function aggregate(sessions, now, knownIds) {
   let longestTurnSession = ''
   let firstDay = ''
   let lastDay = ''
+  /** 日志已经不在磁盘上、只靠缓存留着的会话数（删会话之后累计数字不往回掉，靠的就是这些）。 */
+  let retiredSessions = 0
 
   /**
    * 每天一份 { tokens, calls, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens,
@@ -1346,6 +1348,7 @@ function aggregate(sessions, now, knownIds) {
   const parentPresent = (parent) => Boolean(parent) && folded.has(parent) && (!knownIds || knownIds.has(parent))
 
   for (const fold of sessions) {
+    if (fold.retired === true) retiredSessions += 1
     const place = projectOf(fold.cwd)
     const project = { key: place.key, subagent: Boolean(fold.subagent) }
     if (place.key && !projects[place.key]) projects[place.key] = place.path
@@ -1436,6 +1439,8 @@ function aggregate(sessions, now, knownIds) {
       /** 把继承前缀也加进来的「日志原始合计」，用于核对两种口径的差。 */
       tokensWithInherited: totals.tokens + totals.inheritedTokens,
       sessions: sessions.length,
+      /** 其中日志已经不在磁盘上、只有缓存记着的会话数。 */
+      retiredSessions,
       activeDays: dailyList.length,
       firstDay,
       lastDay,
@@ -1501,6 +1506,8 @@ function validFold(raw) {
   if (!FOLD_NUMBERS.every((name) => finite(raw[name]))) return null
   if (!FOLD_STRINGS.every((name) => typeof raw[name] === 'string')) return null
   const fold = { ...raw, subagent: raw.subagent === true, live: raw.live === true }
+  // 退役标记只在真的有的时候写上：老缓存里没有这个字段，往返读写要能原样对上。
+  if (raw.retired === true) fold.retired = true
   const maps = [
     [FOLD_NUMBER_MAPS, finite],
     [FOLD_NESTED_MAPS, (value) => mapOf(value, finite)],
@@ -1665,12 +1672,23 @@ export function createController(ctx) {
   const syncExcluded = () => {
     const list = readAliases().excluded
     const key = excludedKey(list)
+    const skip = new Set(list)
     if (state.cache.excluded !== key) {
-      state.cache = { version: CACHE_VERSION, generatedAt: 0, excluded: key, sessions: {}, complete: false }
+      // 日志已经不在磁盘上的折叠结果（retired）没法重折：只要它的用量不落在这次新排除的供应商上就原样留下，
+      // 否则改一次「不统计名单」会把已经删掉的会话的历史数字一起抹掉。
+      // 已知限制：旧名单本来就不算的用量补不回来（那些日志已经读不到了）。
+      const kept = {}
+      for (const [id, fold] of Object.entries(state.cache.sessions)) {
+        if (!fold || fold.retired !== true) continue
+        const hits = (map) => Object.keys(map || {}).some((provider) => skip.has(provider))
+        if (!hits(fold.perProvider) && !hits(fold.inheritedPerProvider)) kept[id] = fold
+      }
+      state.cache = { version: CACHE_VERSION, generatedAt: 0, excluded: key, sessions: kept, complete: false }
       state.generatedAt = 0
+      state.knownIds = new Set(Object.keys(kept))
       state.dirty = true
     }
-    return new Set(list)
+    return skip
   }
   syncExcluded()
 
@@ -1714,24 +1732,33 @@ export function createController(ctx) {
         }
         state.emptySince = 0
         const ids = new Set(records.map(idOf))
-        // 会话被删掉/归档到别处时，旧 fold 会污染总数，这里同步剔除；它的读取失败记录也一起清掉。
-        for (const id of Object.keys(state.cache.sessions)) {
-          if (!ids.has(id)) {
-            delete state.cache.sessions[id]
-            state.dirty = true
-          }
+        // 会话被删掉/归档到别处以后，日志已经不在磁盘上，重折不出来：折叠结果留着、只打一个 retired 标记。
+        // 旧实现直接 delete，删一次会话就让累计总量、花费、活跃天数往回掉——历史花费不会因为删日志而消失，
+        // 所以这里改成「退役保留」：数字不动，只是这些会话不再跟着列表走。
+        // 会话重新出现在列表里时，下面的 pending 会把它整份重折一次，标记自动清掉。
+        for (const [id, fold] of Object.entries(state.cache.sessions)) {
+          if (ids.has(id) || !fold || fold.retired === true) continue
+          fold.retired = true
+          state.dirty = true
         }
         for (const id of Object.keys(state.errors)) if (!ids.has(id)) delete state.errors[id]
-        if (ids.size !== state.knownIds.size || [...ids].some((id) => !state.knownIds.has(id))) state.dirty = true
-        state.knownIds = ids
+        // 「继承前缀的原件还在不在」看缓存里的会话 + 这一轮列出来的会话：
+        // 退役保留的老会话也要算在，否则删掉原件后副本的前缀会被补回、和原件重复计一次；
+        // 新会话是这一轮才折出来的，必须在列出来时就记上，否则同一轮里副本会把它当成「原件已不在」而补回前缀。
+        const known = new Set([...Object.keys(state.cache.sessions), ...ids])
+        if (known.size !== state.knownIds.size || [...known].some((id) => !state.knownIds.has(id))) state.dirty = true
+        state.knownIds = known
 
         const pending = []
         for (const record of records) {
           const sessionId = idOf(record)
           const cached = state.cache.sessions[sessionId]
-          // 需要读日志的：活着的会话（可能还在追加）、从没折过的会话，以及上次折的时候还活着、现在结束了的会话
-          // （最后一次扫描之后到结束之间写下的那段还没读过）。已经结束且结束后读过的会话，日志不会再变。
-          if (record.live || !cached || !cached.complete || cached.live) pending.push({ id: sessionId, live: Boolean(record.live) })
+          // 需要读日志的：活着的会话（可能还在追加）、从没折过的会话、上次折的时候还活着、现在结束了的会话
+          // （最后一次扫描之后到结束之间写下的那段还没读过），以及退役过（retired）又回到列表里的会话
+          // （打标记之后可能又追加过事件，整份重读一次最稳）。已经结束且结束后读过的会话，日志不会再变。
+          if (record.live || !cached || !cached.complete || cached.live || cached.retired === true) {
+            pending.push({ id: sessionId, live: Boolean(record.live) })
+          }
         }
         pending.sort((left, right) => Number(right.live) - Number(left.live))
 
@@ -1757,6 +1784,8 @@ export function createController(ctx) {
               const _t1 = Date.now()
               const fold = foldSnapshot(snapshot, excluded)
               fold.live = target.live
+              // 会话重新出现在列表里（曾经被删掉）：foldSnapshot 折出来的是新对象，退役标记自然就没了。
+              delete fold.retired
               state.cache.sessions[target.id] = fold
               state.dirty = true
               stats.read += 1
