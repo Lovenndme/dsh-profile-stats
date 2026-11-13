@@ -193,6 +193,19 @@ the page to see it; no restart needed.
 </details>
 
 <details>
+<summary><b>Do the numbers shrink when I delete a session?</b></summary>
+
+No. A deleted (or archived-away) session keeps its usage in the totals: the fold is kept in the cache with a
+`retired` mark, because the log it came from is gone and cannot be re-read. The session then stops being
+updated and no longer counts as a session on the page's "sessions" figure as a live one — it just stays in the
+history. Sessions that come back are read again in full and lose the mark.
+
+The known limits: a session that was already deleted before this version was installed is not in the cache
+anymore and cannot be recovered; and removing a provider from the whole page still drops that provider's usage,
+including from retired sessions.
+</details>
+
+<details>
 <summary><b>Why do the numbers keep moving a little?</b></summary>
 
 Sessions that are still running keep adding usage; two scans a few minutes apart usually differ by less than

@@ -53,6 +53,11 @@ Host half (`index.js`):
 - `POST /api/dsh-profile-stats/billing` — `{ provider, billing }` sets a provider's billing method; `null` returns it to the default
 - Reads sessions through `ctx.sessionQuery` (`listSessions`, `readSession`), folds each session and caches
   the fold; only sessions that are still running or were never folded get re-read.
+- A session that disappears from `listSessions` (deleted, or archived elsewhere) keeps its fold in the cache
+  with `retired: true` instead of being dropped: its log is gone from disk, so the fold cannot be rebuilt, and
+  dropping it would make the totals, the spend and the active days walk backwards. A retired fold still counts
+  in every number; a session that shows up again is folded fresh and loses the mark. Changing the excluded
+  provider list keeps retired folds unless one used a newly excluded provider.
 - Freshness does not depend on the page being open: the host checks every minute and rescans silently once
   the snapshot is older than 5 minutes; reading the snapshot rescans silently when it is older than 60 seconds
   (the old snapshot is answered first and the page picks up the new numbers on its next poll). The page only
@@ -75,7 +80,7 @@ Snapshot fields:
 top:     ok, generatedAt, scanning, firstScan, progress {done, total}, identity, failedSessions,
          aliases {providers {id: name}}, projects {key: path}, billing {providers {id: {mode, ...}}}
 totals:  tokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, calls,
-         sessions, activeDays, firstDay, lastDay,
+         sessions, retiredSessions, activeDays, firstDay, lastDay,
          peakDay {date, tokens}, peakStepTokens, peakSessionTokens, longestTurnMs,
          longestStreak, currentStreak, usageMismatchCalls, byProvider {}, byModel {}
 daily[]: date, tokens, calls, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens,
