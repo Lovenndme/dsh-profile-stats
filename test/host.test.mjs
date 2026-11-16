@@ -401,6 +401,9 @@ test('createController：缓存写不进去也照常出数（缓存只是加速�
 })
 
 test('createController：继承前缀的会话在扫描后按「原件是否还在」正确归类', async (t) => {
+  // 记下这一轮之前的 DSH_HOME：本用例需要第二个「干净的家目录」，收尾时统一还原到它，
+  // 这样无论 t.after 的执行顺序如何，结束时都不会留下一个指向已删除目录的环境变量。
+  const outerHome = process.env.DSH_HOME
   const prefixEvents = [
     assistantEvent({ seq: 0, time: at(11, 1), input: 200, output: 100, total: 300, provider: 'alpha', model: 'deepseek-v4-1-flash' }),
   ]
@@ -426,9 +429,15 @@ test('createController：继承前缀的会话在扫描后按「原件是否还�
   // 换一个空缓存的新家目录：模拟这台机器上从来没有过原件（它不是「刚被删掉、折叠结果还在」）。
   const freshHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dps-orphan-'))
   process.env.DSH_HOME = freshHome
-  t.after(() => fs.rmSync(freshHome, { recursive: true, force: true }))
+  t.after(() => {
+    // 还原到用例开始前的值（boot() 自己的清理也会还原到同一个值），再删目录。
+    if (outerHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = outerHome
+    fs.rmSync(freshHome, { recursive: true, force: true })
+  })
   const orphanHost = createFakeHost({ sessions: [sessions[1]] })
   const orphan = createController(orphanHost.ctx)
+  t.after(() => orphanHost.dispose())
   await orphan.scan('orphan')
   const orphanTotals = orphan.snapshotBody().totals
   assert.equal(orphanTotals.tokens, 800)

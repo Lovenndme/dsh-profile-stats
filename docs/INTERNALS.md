@@ -167,6 +167,11 @@ $DSH_HOME/dsh-profile-stats/update.json     # last in-panel update result
 $DSH_HOME/dsh-profile-stats/timing.log      # scan timings; rotated to timing.log.1 past 256 KB
 ```
 
+Deleting `cache.json` is the reset button: the page goes back to a first scan and only the sessions still on
+disk are counted again. Deleting a session in the app does *not* reset anything — its fold is kept as
+`retired` so the history it contributed to stays (see "Do the numbers shrink when I delete a session?" in the
+README).
+
 ## Limitations
 
 - Local machine only: usage from other devices or other tools never enters these logs.
