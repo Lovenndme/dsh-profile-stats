@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.4.21 — 2026-11-16
+
+- docs: say what retiring a fold actually means, and how to reset
+- fix(host): keep a deleted session's usage in the totals (#3)
+
+
 ## 2.4.20 — 2026-11-11
 
 - fix: tiny pie slices stay visible
