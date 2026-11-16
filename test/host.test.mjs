@@ -134,7 +134,7 @@ test('createController：第二次扫描只重读活着的会话，已落盘的�
   assert.equal(controller.snapshotBody().totals.tokens, 450)
 })
 
-test('createController：会话被删掉后从缓存里剔除，总量同步下降', async (t) => {
+test('createController：会话被删掉后折叠结果留着，总量不往回掉', async (t) => {
   const { host, controller } = await boot(t)
   await controller.scan('first')
   assert.equal(controller.snapshotBody().totals.tokens, 350)
@@ -142,11 +142,45 @@ test('createController：会话被删掉后从缓存里剔除，总量同步下�
   host.setSessions(makeSessions().slice(1))
   await controller.scan('second')
 
-  assert.deepEqual(Object.keys(controller.state.cache.sessions), ['s2'])
+  // 日志已经不在磁盘上，重折不出来：折叠结果留着，只打一个 retired 标记，继续计入总量。
+  // （旧实现直接 delete，删一次会话就让累计总量、花费、活跃天数往回掉。）
+  assert.deepEqual(Object.keys(controller.state.cache.sessions).sort(), ['s1', 's2'])
+  assert.equal(controller.state.cache.sessions.s1.retired, true, '退役记录要能读回缓存')
   const body = controller.snapshotBody()
-  assert.equal(body.totals.tokens, 200)
-  assert.equal(body.daily.length, 1)
-  assert.equal(body.totals.sessions, 1)
+  assert.equal(body.totals.tokens, 350, '删掉会话不等于那笔花费没发生过')
+  assert.equal(body.totals.sessions, 2)
+  assert.equal(body.totals.retiredSessions, 1)
+  assert.equal(body.daily.length, 2, '那天还在，热力图不会自己消失')
+
+  // 会话又出现在列表里：整份重折一次，退役标记清掉，数字不重复。
+  host.setSessions(makeSessions())
+  await controller.scan('third')
+  assert.equal(controller.state.cache.sessions.s1.retired, undefined)
+  assert.equal(controller.snapshotBody().totals.tokens, 350)
+  assert.equal(controller.snapshotBody().totals.retiredSessions, 0)
+})
+
+test('createController：改「不统计名单」时，退役记录不落在新排除的供应商上就留着', async (t) => {
+  const { host, controller } = await boot(t)
+  await controller.scan('first')
+  host.setSessions(makeSessions().slice(1))
+  await controller.scan('second')
+  assert.equal(controller.snapshotBody().totals.tokens, 350)
+
+  // 清空缓存重扫会把退役记录一起清掉，除非它和新名单无关：s1 用的是 alpha，排除 bravo 不该动它。
+  const dir = path.join(process.env.DSH_HOME, 'dsh-profile-stats')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, 'aliases.json'), JSON.stringify({ providers: {}, excluded: ['bravo'] }))
+
+  await controller.scan('excluded')
+  assert.equal(controller.state.cache.sessions.s1.retired, true, 'alpha 的退役记录留着')
+  assert.equal(controller.snapshotBody().totals.tokens, 150, 's2 用的是 bravo，被排掉了；s1 的 150 还在')
+
+  // 排除的正好是退役记录用过的供应商：这条没法重折（日志没了），只能丢。
+  fs.writeFileSync(path.join(dir, 'aliases.json'), JSON.stringify({ providers: {}, excluded: ['alpha', 'bravo'] }))
+  await controller.scan('excluded-alpha')
+  assert.equal(controller.state.cache.sessions.s1, undefined)
+  assert.equal(controller.snapshotBody().totals.tokens, 0, '两家都被排掉')
 })
 
 test('createController：会话列表突然空了先不清缓存，持续一分钟还是空的才当真', async (t) => {
@@ -167,9 +201,11 @@ test('createController：会话列表突然空了先不清缓存，持续一分�
   assert.equal(Object.keys(controller.state.cache.sessions).length, 2)
   t.mock.timers.tick(2000)
   await controller.scan('really-empty')
-  assert.equal(Object.keys(controller.state.cache.sessions).length, 0)
+  // 名单真的空了才动手：这些会话的日志已经没了，折叠结果退役保留，数字不往回掉。
+  assert.equal(Object.keys(controller.state.cache.sessions).length, 2)
   t.mock.timers.tick(3000)
-  assert.equal(controller.snapshotBody().totals.tokens, 0)
+  assert.equal(controller.snapshotBody().totals.tokens, 350)
+  assert.equal(controller.snapshotBody().totals.retiredSessions, 2)
 })
 
 test('createController：扫描时还活着的会话结束后再读一次，补上最后一次扫描之后写下的那段', async (t) => {
@@ -386,7 +422,11 @@ test('createController：继承前缀的会话在扫描后按「原件是否还�
   assert.equal(totals.inheritedTokens, 300, '原件还在语料里 → 前缀只记账')
   assert.equal(totals.tokens, 800, '300（原件本体）+ 500（副本本体）')
 
-  // 原件被删掉之后再扫：前缀必须补回总量，否则少算 300。
+  // 原件不在语料里时，副本的前缀就是唯一记录，必须补回总量，否则少算 300。
+  // 换一个空缓存的新家目录：模拟这台机器上从来没有过原件（它不是「刚被删掉、折叠结果还在」）。
+  const freshHome = fs.mkdtempSync(path.join(os.tmpdir(), 'dps-orphan-'))
+  process.env.DSH_HOME = freshHome
+  t.after(() => fs.rmSync(freshHome, { recursive: true, force: true }))
   const orphanHost = createFakeHost({ sessions: [sessions[1]] })
   const orphan = createController(orphanHost.ctx)
   await orphan.scan('orphan')
